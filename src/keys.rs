@@ -157,7 +157,7 @@ pub const CHEATSHEET: [(&str, &str, &[View]); 44] = [
     // Below the fold for the reason the two rows above `:format` are above it:
     // a short window's rows go to what nothing else in Varde teaches, and this
     // one is taught by every editor that has the gesture.
-    ("C-d gm", "same word again", &[View::Edit]),
+    ("C-d D-d gm", "same word again", &[View::Edit]),
     ("j k V c", "select comment", &[View::Review]),
     // A surface that is read rather than typed in has no column cursor for the
     // view to follow, so the only way to the tail of a long line is a gesture
@@ -1503,15 +1503,16 @@ fn jump_alias(event: KeyEvent) -> Option<Vec<Event>> {
 /// editor's own buffer only — Review's diff and a walked Site claim every key
 /// they are handed, and neither is a surface anything is typed into.
 ///
-/// `gm` is the modifier-free route the contract requires and is answered in
-/// `update`, beside `gd`, since a chord needs the buffer that holds the
-/// waiting `g`. No modifier but Ctrl is inspected, so one that names no
-/// gesture of its own is folded into the key it triggers.
+/// Command is its alias, which is how VS Code spells it on a Mac. `gm` is the
+/// modifier-free route the contract requires and is answered in `update`,
+/// beside `gd`, since a chord needs the buffer that holds the waiting `g`. No
+/// modifier but Ctrl and Command is inspected, so one that names no gesture of
+/// its own is folded into the key it triggers.
 fn occurrence_alias(state: &State, event: KeyEvent) -> Option<Vec<Event>> {
     (state.focus == Pane::Editor
         && state.diff.is_none()
         && state.walking.is_none()
-        && event.modifiers.contains(KeyModifiers::CTRL)
+        && ctrl_or_command(event)
         && event.code == KeyCode::Char('d'))
     .then(|| vec![Event::EditorNextOccurrence])
 }
@@ -1792,12 +1793,12 @@ fn pane_key(state: &State, event: KeyEvent) -> Vec<Event> {
     }
 }
 
-/// Whether a key carries the modifier copy, paste and write answer to. Ctrl
-/// and Command are aliases on these three keys and on no others: Command is
-/// the gesture the reader already has for them, and Ctrl is the one that
-/// survives a terminal that never reports Command at all (R31.11). Neither is
-/// the only route — the register's `y` and `p` and the `:w` line need no
-/// modifier.
+/// Whether a key carries the modifier copy, paste, write and the next
+/// occurrence answer to. Ctrl and Command are aliases on these four keys and on
+/// no others: Command is the gesture the reader already has for them, and Ctrl
+/// is the one that survives a terminal that never reports Command at all
+/// (R31.11). Neither is the only route — the register's `y` and `p`, the `:w`
+/// line and `gm` need no modifier.
 fn ctrl_or_command(event: KeyEvent) -> bool {
     event
         .modifiers
@@ -3111,6 +3112,13 @@ mod tests {
         );
     }
 
+    #[test]
+    fn cmd_d_takes_the_next_occurrence_as_ctrl_d_does() {
+        let editor = focused(Pane::Editor);
+        assert_eq!(press(&editor, ctrl('d')), vec![Event::EditorNextOccurrence]);
+        assert_eq!(press(&editor, cmd('d')), press(&editor, ctrl('d')));
+    }
+
     // Command is Ctrl's alias on the write key as on copy and paste, and the
     // comment box keeps its own Ctrl+S: it files the comment, never the file.
     #[test]
@@ -3755,7 +3763,7 @@ mod tests {
     /// nobody noticed. Every entry is held to still doing something in every
     /// view it names, so the list cannot quietly outlive the binding it
     /// excuses.
-    const UNLISTED: [(&str, &str, &[View]); 26] = [
+    const UNLISTED: [(&str, &str, &[View]); 27] = [
         (
             "Ctrl",
             "the router still answers a bare Ctrl press with a tap, but no \
@@ -3844,6 +3852,12 @@ mod tests {
             &[View::Edit],
         ),
         (
+            "D-d",
+            "a walked Site claims the key before the next occurrence can, so \
+             Command on it is the `d` it always was, which is listed",
+            &[View::Story],
+        ),
+        (
             "C-q",
             "quits Varde, from wherever you are",
             &[View::Edit, View::Review, View::Story],
@@ -3861,15 +3875,16 @@ mod tests {
     /// One spelling per *gesture*, not per key event: the sweep drives all
     /// sixty-four modifier combinations of every code, and a modifier the router
     /// never inspects names no gesture of its own. `Super+x` types the `x` it
-    /// always typed, so it is spelled `x` — except on the three keys where the
-    /// router does inspect it, `D-c`, `D-v` and `D-s`, which are Command's own
-    /// spellings of copy, paste and write and are folded onto no other row for the
-    /// reason `M-Bksp` is not folded onto `Bksp`. Ctrl outranks Alt for the same
-    /// reason — the Ctrl bindings ask `contains(CTRL)` and never look at Alt, so
-    /// `C-M-q` is `C-q` carrying a modifier the binding ignores. Shift is folded
-    /// the way the router folds it, on the way in, so `S-a` is the `A` that
-    /// reached the buffer. [`folded`] is that dropping written out, and the test
-    /// beside it is what keeps a group from hiding a difference.
+    /// always typed, so it is spelled `x` — except on the four keys where the
+    /// router does inspect it, `D-c`, `D-v`, `D-s` and `D-d`, which are Command's
+    /// own spellings of copy, paste, write and the next occurrence and are folded
+    /// onto no other row for the reason `M-Bksp` is not folded onto `Bksp`. Ctrl
+    /// outranks Alt for the same reason — the Ctrl bindings ask `contains(CTRL)`
+    /// and never look at Alt, so `C-M-q` is `C-q` carrying a modifier the
+    /// binding ignores. Shift is folded the way the router folds it, on the way
+    /// in, so `S-a` is the `A` that reached the buffer. [`folded`] is that
+    /// dropping written out, and the test beside it is what keeps a group from
+    /// hiding a difference.
     ///
     /// Exhaustive over the key codes, which is what the panic it replaces was
     /// approximating: a candidate whose spelling nobody chose would be held to a
@@ -3896,7 +3911,7 @@ mod tests {
             // with, because a space cannot be a token of a row.
             KeyCode::Char(' ') => "␣".to_string(),
             KeyCode::Char(c) if ctrl => format!("C-{c}"),
-            KeyCode::Char(c @ ('c' | 'v' | 's')) if command => format!("D-{c}"),
+            KeyCode::Char(c @ ('c' | 'v' | 's' | 'd')) if command => format!("D-{c}"),
             KeyCode::Char(c) if alt => format!("M-{c}"),
             KeyCode::Char(c) => c.to_string(),
             // A gesture of its own since `backspace_word` inspects Alt on it:
@@ -3995,10 +4010,12 @@ mod tests {
         };
         event.modifiers &= match event.code {
             KeyCode::Char(_) if event.modifiers.contains(KeyModifiers::CTRL) => KeyModifiers::CTRL,
-            // Command is a gesture of its own on these three and nowhere else,
+            // Command is a gesture of its own on these four and nowhere else,
             // which is the claim `label` makes about them and this is where it
             // is checked.
-            KeyCode::Char('c' | 'v' | 's') if event.modifiers.contains(KeyModifiers::SUPER) => {
+            KeyCode::Char('c' | 'v' | 's' | 'd')
+                if event.modifiers.contains(KeyModifiers::SUPER) =>
+            {
                 KeyModifiers::SUPER
             }
             KeyCode::Char(_) => KeyModifiers::ALT,

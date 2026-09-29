@@ -4133,6 +4133,43 @@ fn open_with_wide_lines(world: &mut VardeWorld, path: String, lines: usize, widt
     open_buffer(world, &path, &contents.join("\n"));
 }
 
+/// A file taller than the editor with one word on two lines of it, and filler
+/// that never holds that word everywhere else — so where an occurrence is
+/// found is decided by the scenario rather than by the filler.
+#[given(
+    expr = "{string} is open in the editor with {int} lines, {string} on lines {int} and {int}"
+)]
+fn open_with_word_on_two_lines(
+    world: &mut VardeWorld,
+    path: String,
+    lines: usize,
+    word: String,
+    first: usize,
+    second: usize,
+) {
+    let contents: Vec<String> = (1..=lines)
+        .map(|line| {
+            if line == first || line == second {
+                word.clone()
+            } else {
+                format!("filler {line}")
+            }
+        })
+        .collect();
+    open_buffer(world, &path, &contents.join("\n"));
+}
+
+#[then(expr = "line {int} is on screen in the editor")]
+fn line_on_screen(world: &mut VardeWorld, line: usize) {
+    let fits = varde::fits_in(&world.state, &world.panes()).1;
+    let first = world.state.editor_scroll + 1;
+    assert!(
+        (first..first + fits).contains(&line),
+        "the editor shows lines {first} to {}",
+        first + fits - 1
+    );
+}
+
 #[given(expr = "{string} is open in the editor holding a {int}-character line above a short one")]
 fn open_with_long_line(world: &mut VardeWorld, path: String, width: usize) {
     let contents = format!("{}\nend", "x".repeat(width));

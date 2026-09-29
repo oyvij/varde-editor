@@ -45,6 +45,26 @@ Feature: Editing every occurrence of a word at once
       | 3    | 1      |
       | 1    | 1      |
 
+  Scenario: An occurrence below the visible rows is scrolled into view
+    Given the screen is 26 rows by 100 columns
+    And "src/tree.js" is open in the editor with 60 lines, "one" on lines 1 and 50
+    And I press "W" in the editor
+    When I press "Ctrl+d" in the editor
+    Then the other occurrences picked are:
+      | line | column |
+      | 50   | 1      |
+    And line 50 is on screen in the editor
+
+  Scenario: An occurrence found by continuing from the top is scrolled into view
+    Given the screen is 26 rows by 100 columns
+    And "src/tree.js" is open in the editor with 60 lines, "one" on lines 1 and 60
+    And I press "GW" in the editor
+    When I press "Ctrl+d" in the editor
+    Then the other occurrences picked are:
+      | line | column |
+      | 1    | 1      |
+    And line 1 is on screen in the editor
+
   Scenario: Once every occurrence is taken there is nothing left to take
     Given "src/tree.js" is open in the editor holding:
       """

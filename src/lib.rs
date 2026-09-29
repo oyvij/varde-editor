@@ -2041,6 +2041,12 @@ pub struct State {
     /// and these are insertion points of no width, exactly as the primary
     /// cursor is.
     pub occurrences: Vec<Place>,
+    /// The occurrence the event being settled took, which the editor's clamp
+    /// shows after the cursor and then forgets. Only the event that took it
+    /// knows it was taken — typing moves every occurrence without taking one,
+    /// and following the newest then would pull the cursor off the screen on
+    /// every keystroke — and the clamp is the one writer of the offset.
+    pub revealing: Option<Place>,
     /// Where the pointer is while the jump modifier is held, in the editor's
     /// own coordinates. The place, not the span: what it underlines is read off
     /// the buffer through [`link`], so an edit under the pointer cannot leave a
@@ -2567,6 +2573,7 @@ impl Default for State {
             pending_prompt: None,
             selection: None,
             occurrences: Vec::new(),
+            revealing: None,
             link: None,
             tree_selection: None,
             tree_scroll: 0,
@@ -2892,7 +2899,16 @@ fn settle(mut next: State, mut effects: Vec<Effect>, wheeled: bool) -> (State, V
             }
         }
         let (line, lines) = editor_focus(&next, &rows);
-        next.editor_scroll = layout::viewport(next.editor_scroll, line, lines, editor_fits);
+        let following = layout::viewport(next.editor_scroll, line, lines, editor_fits);
+        // After the cursor, so the occurrence just taken is the one on screen;
+        // the next event a person causes pulls the view back over the cursor.
+        next.editor_scroll = match next.revealing.take() {
+            Some(taken) => {
+                let row = story::row_of(&next, taken.line as u32).saturating_sub(1);
+                layout::viewport(following, row, lines, editor_fits)
+            }
+            None => following,
+        };
         next.editor_hscroll = match sideways(&next, &rows) {
             Sideways::Cursor { column, width } => {
                 layout::viewport(next.editor_hscroll, column, width, editor_columns)
@@ -5516,6 +5532,7 @@ fn take_next_occurrence(next: &mut State) {
         .or_else(|| all.iter().find(|place| !taken.contains(place)));
     if let Some(found) = untaken {
         next.occurrences.push(*found);
+        next.revealing = Some(*found);
     }
 }
 
