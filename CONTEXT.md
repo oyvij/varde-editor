@@ -53,8 +53,8 @@ _Avoid_: selected file, tree highlight
 
 **Corner**:
 The one pane-sized slot beneath the file tree, at the tree's width, taking its columns from the
-shell. It names its occupant — the Risk list, the Buffers pane, the Cursor history, the Frames or
-the Breakpoint list — or nothing at all, so "both on screen at once" is not a state it can hold and
+shell. It names its occupant — the Risk list, the Buffers pane, the Cursor history, the Frames, the
+Breakpoint list or the Diagnostic list — or nothing at all, so "both on screen at once" is not a state it can hold and
 asking for one while another shows is a replacement. Every occupant is the same rectangle: which
 pane is in the Corner changes what a click means, never where the Corner is.
 _Avoid_: the risk pane's slot, bottom-left pane, second sidebar
@@ -200,6 +200,23 @@ not — so every place a file was changed is visible while editing it. It answer
 disk, and a file the commit has no copy of carries none. The quietest of the three marks the gutter's
 one column can hold: a diagnostic and the voice's place both take it first.
 _Avoid_: gutter indicator, diff decoration, modified marker, git gutter
+
+**Diagnostic**:
+One Language server's report of something at a range in a file, with a Severity: Error, Warning,
+Information or Hint. Kept per file and per server, since a push replaces only its own server's last
+report, and held for files nobody has open as much as for Buffers.
+_Avoid_: error, problem, lint, issue (each names one Severity or one source, not the thing)
+
+**Diagnostic list**:
+The Corner occupant listing every Diagnostic in the project, one Severity at a time, grouped under a
+heading per file. It opens on the most severe Severity that has any, because that is what needs
+fixing first.
+_Avoid_: problems panel, error list, diagnostics pane
+
+**Severity label**:
+One of the four names on the Diagnostic list's top border — Errors, Warnings, Info, Hints — each with
+its count, lit for the Severity showing and clicked or lettered to show another.
+_Avoid_: tab, filter
 
 **Cheatsheet**:
 The read-only reminder of the keys that work in the current view — motions, chords, the gestures
