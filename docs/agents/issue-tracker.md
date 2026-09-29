@@ -45,6 +45,15 @@ their feature shipped. `docs/example-map.md` still names those paths for the rea
 shipped features; they exist only in git history — `git log --all -- <path>` finds the commit to
 `git show`. Never recreate `.scratch/`: new work goes to GitHub.
 
+## Burning the queue unattended
+
+`scripts/burn.sh` works through every open `ready-for-agent` issue with no one watching: one fresh
+`claude -p /implement` session per issue, each squashed into one commit on the `burn` branch on top
+of the last, pushed and gathered in one draft PR. A red issue is dropped from the branch and moved to
+`ready-for-human`; sub-issues of the debugger spec (#45) are skipped, since they belong on
+`debugger`. `--dry-run` prints the order. Merge the PR whole, or land a prefix with
+`git push origin <sha>:main`.
+
 ## Closing a ticket
 
 When the work is merged and the suite is green:
