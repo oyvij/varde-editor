@@ -1761,10 +1761,15 @@ fn reminder_hidden(world: &mut VardeWorld) {
     world.state.cheatsheet = false;
 }
 
-#[given(expr = "the project {string} records the key reminder as hidden")]
+#[given(expr = "the key reminder is shown")]
+fn reminder_up(world: &mut VardeWorld) {
+    world.state.cheatsheet = true;
+}
+
+#[given(expr = "the project {string} records the key reminder as shown")]
 fn state_records_reminder(world: &mut VardeWorld, path: String) {
     assert_eq!(path, ".varde/state.json");
-    world.startup.state_json = Some("{\"cheatsheet\": false}".to_string());
+    world.startup.state_json = Some("{\"cheatsheet\": true}".to_string());
 }
 
 #[then(expr = "the key reminder is shown")]
@@ -1777,22 +1782,14 @@ fn reminder_not_shown(world: &mut VardeWorld) {
     assert!(!world.state.cheatsheet);
 }
 
-#[then(expr = "the remembered key reminder is {string}")]
-fn reminder_remembered(world: &mut VardeWorld, state: String) {
+#[then(expr = "the saved project state does not mention the key reminder")]
+fn reminder_not_remembered(world: &mut VardeWorld) {
     let saved = world
         .startup
         .state_json
         .as_deref()
         .expect("state was saved");
-    let shown = match state.as_str() {
-        "hidden" => "false",
-        "shown" => "true",
-        other => panic!("unknown reminder state {other}"),
-    };
-    assert!(
-        saved.contains(&format!("\"cheatsheet\":{shown}")),
-        "state was: {saved}"
-    );
+    assert!(!saved.contains("\"cheatsheet\""), "state was: {saved}");
 }
 
 #[when(expr = "I dim the editor from the command line")]

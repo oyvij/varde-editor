@@ -1811,9 +1811,7 @@ fn initial_state(
             Some("Tall") => crate::layout::AiPane::Tall,
             _ => crate::layout::AiPane::Beside,
         },
-        // A corner nobody opened stays closed: unlike the key reminder, no pane
-        // that can sit there is the box that says which keys there are, so an
-        // absent key reads as hidden.
+        // A corner nobody opened stays closed: an absent key reads as hidden.
         //
         // The legacy key second, and only when the new one says nothing: state
         // written before the corner held more than the Risk list names the pane
@@ -1830,12 +1828,8 @@ fn initial_state(
                 _ => crate::layout::Corner::Hidden,
             },
         },
-        // Up unless it was taken down: state recorded before `:help` existed
-        // has no such key, and reading its absence as hidden would lose the
-        // one box that says which keys there are.
-        cheatsheet: saved_flag(input.state_json.as_deref(), "cheatsheet").unwrap_or(true),
-        // On unless it was turned off, the reminder's rule: state recorded
-        // before `:dim` existed has no such key.
+        // On unless it was turned off: state recorded before `:dim` existed
+        // has no such key.
         editor_field: saved_flag(input.state_json.as_deref(), "editor_field").unwrap_or(true),
         // What you turned it to here last time wins; `editor.minimap` is only
         // where a project with no history starts, the same shape `ai_command`

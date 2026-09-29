@@ -610,7 +610,7 @@ pub enum Event {
     SubmitReview,
     ConfirmSubmit,
     /// `:help`, and the palette's Keys entry: puts the key box up or takes it
-    /// down. Remembered, so a dismissed reminder stays dismissed.
+    /// down. Never saved: every launch starts with it down.
     ToggleCheatsheet,
     ToggleField,
     /// `:minimap` — puts the mirror of the file up or takes it down, and gives
@@ -1917,10 +1917,10 @@ pub struct State {
     pub ai_command: String,
     pub editor_theme: String,
     /// Whether the editor pane paints a darker field behind the code. On by
-    /// default and remembered per project, like the key reminder: it is a
-    /// reading preference, and a terminal's transparency is the reason it is a
-    /// preference at all — an explicitly painted cell is opaque, so the field
-    /// buys contrast at the price of seeing through the window.
+    /// default and remembered per project: it is a reading preference, and a
+    /// terminal's transparency is the reason it is a preference at all — an
+    /// explicitly painted cell is opaque, so the field buys contrast at the
+    /// price of seeing through the window.
     pub editor_field: bool,
     /// Whether the minimap is showing. A reading preference like the field
     /// above, remembered per project, and the config's `editor.minimap` is
@@ -1928,7 +1928,8 @@ pub struct State {
     /// file and not in another.
     pub minimap: bool,
     /// Whether the key reminder is up. A terminal cell holds one character, so
-    /// the box hides the code under it — `:help` is how it gets out of the way.
+    /// the box hides the code under it. Down at every launch and never saved:
+    /// `:help` and the palette are how it comes up.
     pub cheatsheet: bool,
     pub system_clipboard: bool,
     /// Open when search is showing; `None` when the modal is closed.
@@ -2531,7 +2532,7 @@ impl Default for State {
             editor_theme: "dark".to_string(),
             editor_field: true,
             minimap: true,
-            cheatsheet: true,
+            cheatsheet: false,
             system_clipboard: true,
             search: None,
             find: None,
@@ -7395,16 +7396,14 @@ fn on_quit_force(state: &State, mut next: State, event: Event, wheeled: bool) ->
         // known checkout means no directory this may build in, so it says so
         // rather than running something: a command that silently does nothing is
         // a bug.
-        // Saved on the spot rather than at exit, for the same reason the tree
-        // divider is: a session that ends by closing the terminal saves
-        // nothing, and a reminder that comes back after that has not been
-        // dismissed at all.
         Event::ToggleCheatsheet => {
             next.cheatsheet = !state.cheatsheet;
-            vec![Effect::SaveState(state_json(&next))]
+            vec![]
         }
 
-        // Saved on the spot, for the reason the reminder above is.
+        // Saved on the spot rather than at exit, for the same reason the tree
+        // divider is: a session that ends by closing the terminal saves
+        // nothing, and a field turned off before that has not been turned off.
         Event::ToggleField => {
             next.editor_field = !state.editor_field;
             vec![Effect::SaveState(state_json(&next))]
@@ -9384,7 +9383,6 @@ pub(crate) fn state_json(state: &State) -> String {
         "output_width": state.output_width,
         "ai_pane": format!("{:?}", state.ai_pane),
         "corner": format!("{:?}", debug::resting_corner(state)),
-        "cheatsheet": state.cheatsheet,
         "editor_field": state.editor_field,
         "minimap": state.minimap,
         "buffers": buffers,

@@ -291,9 +291,9 @@ split:
 `state.json` is what Varde remembers about *you* in this project between sessions: the last view
 (Edit, Review or Story); the AI command you last started; which tree folders were expanded; the tree
 divider's position and the AI pane's width and shape (beside the editor or tall); which pane is in
-the Corner beneath the tree; whether the key reminder is up, whether the editor is dimmed, and
-whether the minimap is on; the open buffers and which one was current. It is machine-written JSON
-and there is nothing in it to edit by hand.
+the Corner beneath the tree; whether the editor is dimmed and whether the minimap is on; the open
+buffers and which one was current. It is machine-written JSON and there is nothing in it to edit by
+hand.
 
 ## The Bare workspace
 
