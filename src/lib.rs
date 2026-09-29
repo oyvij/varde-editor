@@ -10811,6 +10811,50 @@ mod tests {
         assert_eq!(bottom.modal, Modal::Tools { row: last });
     }
 
+    /// The ends of the Launch and branch lists, which the wheel reaches as
+    /// easily as the keys do: a notch past either end stays on it.
+    #[test]
+    fn the_launch_and_branch_selections_stop_at_both_ends() {
+        let mut state = State {
+            modal: Modal::Launches { row: 0 },
+            ..State::default()
+        };
+        for name in ["app", "tests"] {
+            state.launches.insert(
+                name.to_string(),
+                startup::Launch {
+                    adapter: "rust".to_string(),
+                    request: "launch".to_string(),
+                    args: serde_json::Map::new(),
+                    reattach: false,
+                },
+            );
+        }
+        let up = update(&state, Event::MoveLaunchRow(Direction::Up)).0;
+        assert_eq!(up.modal, Modal::Launches { row: 0 });
+        state.modal = Modal::Launches { row: 1 };
+        let down = update(&state, Event::MoveLaunchRow(Direction::Down)).0;
+        assert_eq!(down.modal, Modal::Launches { row: 1 });
+
+        let branches = |row| Modal::Branches {
+            refs: ["main", "feature"]
+                .map(|name| story::BranchRef {
+                    name: name.to_string(),
+                    remote: false,
+                    when: 0,
+                })
+                .to_vec(),
+            filter: String::new(),
+            row,
+        };
+        state.modal = branches(0);
+        let up = update(&state, Event::MoveBranchRow(Direction::Up)).0;
+        assert_eq!(up.modal, branches(0));
+        state.modal = branches(1);
+        let down = update(&state, Event::MoveBranchRow(Direction::Down)).0;
+        assert_eq!(down.modal, branches(1));
+    }
+
     /// A re-check asks `PATH` again and says which row it asked about: the
     /// answer is read against a command, and the list may be gone by the time
     /// it lands. No scenario asserts the effect — a scenario can only see what

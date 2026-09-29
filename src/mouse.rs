@@ -283,6 +283,31 @@ pub fn on_mouse(state: &State, panes: &Layout, pointer: &mut Pointer, input: Inp
         }
         return Outcome::of(events);
     }
+    // A list box has the keyboard, so it has the wheel too, wherever the
+    // pointer is: a notch is Up or Down, and a pane scrolling behind the box
+    // is the code moving while the list the reader is choosing from stays put.
+    // Sideways is a notch too, and moves nothing in a column.
+    let notch = match input.kind {
+        Kind::ScrollUp => Some(Direction::Up),
+        Kind::ScrollDown => Some(Direction::Down),
+        Kind::ScrollLeft => Some(Direction::Left),
+        Kind::ScrollRight => Some(Direction::Right),
+        _ => None,
+    };
+    if let Some(direction) = notch {
+        let moved: Option<fn(Direction) -> Event> = match state.modal {
+            Modal::Tools { .. } => Some(Event::MoveToolRow),
+            Modal::Launches { .. } => Some(Event::MoveLaunchRow),
+            Modal::Branches { .. } => Some(Event::MoveBranchRow),
+            _ => None,
+        };
+        if let Some(moved) = moved {
+            return Outcome::of(match direction {
+                Direction::Up | Direction::Down => vec![moved(direction)],
+                Direction::Left | Direction::Right => vec![],
+            });
+        }
+    }
     // The results box covers every pane, so a press in one is a press on
     // something nobody can see: a click in the tree behind it opened whatever
     // file was under the box, and a drag picked text out of a pane the box was
@@ -1924,6 +1949,75 @@ mod tests {
             matches!(wheeled.first(), Some(Event::Scroll { .. })),
             "the wheel never reached the box: {wheeled:?}"
         );
+    }
+
+    /// A list box takes the wheel the way it takes Up and Down, over the box
+    /// or over the panes behind it, so nothing behind it scrolls while it is
+    /// open. Sideways is a notch that moves nothing in a column.
+    #[test]
+    fn the_wheel_moves_the_row_of_an_open_list_box() {
+        let wheel = |state: &State, kind: Kind, column: u16, row: u16| {
+            on_mouse(
+                state,
+                &panes(120, 26, 30, None, 0, 0, Shapes::default()),
+                &mut Pointer::default(),
+                Input {
+                    kind,
+                    column,
+                    row,
+                    modifiers: KeyModifiers::NONE,
+                },
+            )
+            .events
+        };
+        let branches = Modal::Branches {
+            refs: Vec::new(),
+            filter: String::new(),
+            row: 0,
+        };
+        for (modal, down, up) in [
+            (
+                Modal::Tools { row: 0 },
+                Event::MoveToolRow(Direction::Down),
+                Event::MoveToolRow(Direction::Up),
+            ),
+            (
+                Modal::Launches { row: 0 },
+                Event::MoveLaunchRow(Direction::Down),
+                Event::MoveLaunchRow(Direction::Up),
+            ),
+            (
+                branches,
+                Event::MoveBranchRow(Direction::Down),
+                Event::MoveBranchRow(Direction::Up),
+            ),
+        ] {
+            let open = State {
+                modal: modal.clone(),
+                ..workspace()
+            };
+            // The middle of the screen, where the box is centred; the tree and
+            // the editor, which are behind it or beside it.
+            for (column, row) in [(60, 13), (5, 1), (80, 5)] {
+                assert_eq!(
+                    wheel(&open, Kind::ScrollDown, column, row),
+                    vec![down.clone()],
+                    "{modal:?} at {column},{row}"
+                );
+                assert_eq!(
+                    wheel(&open, Kind::ScrollUp, column, row),
+                    vec![up.clone()],
+                    "{modal:?} at {column},{row}"
+                );
+                assert_eq!(wheel(&open, Kind::ScrollLeft, column, row), vec![]);
+                assert_eq!(wheel(&open, Kind::ScrollRight, column, row), vec![]);
+            }
+        }
+        // With nothing open the wheel is the pane's, as it always was.
+        assert!(matches!(
+            wheel(&workspace(), Kind::ScrollDown, 5, 1).first(),
+            Some(Event::Scroll { .. })
+        ));
     }
 
     /// A press inside the box is the box's, and the row it lands on is read the

@@ -495,12 +495,18 @@ fn draw_modal(frame: &mut Frame, state: &State, chrome: &Chrome) {
             let height = frame.area().height;
             overlay(frame, "TOOLS", tool_lines(state, *row, height))
         }
-        Modal::Launches { row } => overlay(frame, "LAUNCH", launch_lines(state, *row)),
-        Modal::Branches { refs, filter, row } => overlay(
-            frame,
-            "BRANCHES",
-            branch_lines(&story::branches(refs, filter), filter, *row),
-        ),
+        Modal::Launches { row } => {
+            let height = frame.area().height;
+            overlay(frame, "LAUNCH", launch_lines(state, *row, height))
+        }
+        Modal::Branches { refs, filter, row } => {
+            let height = frame.area().height;
+            overlay(
+                frame,
+                "BRANCHES",
+                branch_lines(&story::branches(refs, filter), filter, *row, height),
+            )
+        }
         // The one thing a restart answers, said out loud: a shell profile is
         // not this process's environment, and Varde cannot reach one from
         // inside itself. So the box says what will happen — Varde leaves, and
@@ -4751,14 +4757,9 @@ fn tool_lines(state: &State, selected: usize, height: u16) -> Vec<Line<'static>>
             Span::styled(gap, Style::default().fg(Color::DarkGray)),
         ]));
     }
-    // Every template row is listed, so the list outgrows a terminal. The box
-    // is as tall as the screen at most, and what it keeps is the part the
-    // selection is in: a row the install key acts on that nobody can see is
-    // a keypress on something unread. Borders, the blank and the footer take
-    // four rows.
-    let room = (height as usize).saturating_sub(4).max(1);
-    let start = (at + 1).saturating_sub(room);
-    let mut lines: Vec<Line<'static>> = lines.into_iter().skip(start).take(room).collect();
+    // Every template row is listed, so the list outgrows a terminal. Borders,
+    // the blank and the footer take four rows.
+    let mut lines = window_on(lines, at, height, 4);
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         keys::TOOL_LIST_KEYS
@@ -4772,7 +4773,7 @@ fn tool_lines(state: &State, selected: usize, height: u16) -> Vec<Line<'static>>
 
 /// The launch list: one row per Launch configuration, the branch picker's
 /// shape, and a list with none says where one is written.
-fn launch_lines(state: &State, selected: usize) -> Vec<Line<'static>> {
+fn launch_lines(state: &State, selected: usize, height: u16) -> Vec<Line<'static>> {
     let mut lines: Vec<Line> = varde::debug::launches(state)
         .iter()
         .enumerate()
@@ -4789,6 +4790,8 @@ fn launch_lines(state: &State, selected: usize) -> Vec<Line<'static>> {
             "  No Launch configurations: name one as [launch.<name>] in a config file.",
         ));
     }
+    // Borders, the blank and the footer.
+    let mut lines = window_on(lines, selected, height, 4);
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         keys::LAUNCH_LIST_KEYS
@@ -4803,7 +4806,12 @@ fn launch_lines(state: &State, selected: usize) -> Vec<Line<'static>> {
 /// The branch picker: one row per branch, newest first, with the row Enter acts
 /// on marked where every list in Varde marks it, over the footer naming the two
 /// keys the list answers.
-fn branch_lines(names: &[String], filter: &str, selected: usize) -> Vec<Line<'static>> {
+fn branch_lines(
+    names: &[String],
+    filter: &str,
+    selected: usize,
+    height: u16,
+) -> Vec<Line<'static>> {
     let mut lines: Vec<Line> = names
         .iter()
         .enumerate()
@@ -4823,6 +4831,8 @@ fn branch_lines(names: &[String], filter: &str, selected: usize) -> Vec<Line<'st
             false => format!("  No branch matches {filter:?}."),
         }));
     }
+    // Borders, the blank, the filter and the footer.
+    let mut lines = window_on(lines, selected, height, 5);
     lines.push(Line::from(""));
     // What was typed, always drawn: a filter narrows silently otherwise, and
     // the blank line is where a reviewer learns the list is typed into at all.
@@ -4841,6 +4851,15 @@ fn branch_lines(names: &[String], filter: &str, selected: usize) -> Vec<Line<'st
         Style::default().fg(Color::DarkGray),
     )));
     lines
+}
+
+/// A row a key acts on that nobody can see is a keypress on something unread,
+/// so a list taller than the screen keeps the part `at` is in. `chrome` is the
+/// rows the box spends on its borders and its footer.
+fn window_on(lines: Vec<Line<'static>>, at: usize, height: u16, chrome: u16) -> Vec<Line<'static>> {
+    let room = height.saturating_sub(chrome).max(1) as usize;
+    let start = (at + 1).saturating_sub(room);
+    lines.into_iter().skip(start).take(room).collect()
 }
 
 /// A list whose rows offer a key or carry none — a heading, a gap, the cancel
@@ -4937,11 +4956,11 @@ fn overlay(frame: &mut Frame, title: &str, lines: Vec<Line<'static>>) {
 mod tests {
     use super::{
         action_icon, authorship_clause, branch_lines, buffer_title, cheatsheet_rows, code_lines,
-        colour, diff_rows, editor_block, faint, guided, highlight, icon_colour, layout, paint_drag,
-        pane_actions_title, preview_line, right_title, risk_lines, risk_title, shift, source_lines,
-        status_line, story_title, title_room, tree_lines, truncate, with_breakpoint, with_caret,
-        Block, Borders, Color, Kind, Line, Modifier, Place, Selection, Span, State, Style, Tone,
-        UnicodeWidthStr, DIRTY, DOTS, WARNING,
+        colour, diff_rows, editor_block, faint, guided, highlight, icon_colour, launch_lines,
+        layout, paint_drag, pane_actions_title, preview_line, right_title, risk_lines, risk_title,
+        shift, source_lines, status_line, story_title, title_room, tree_lines, truncate,
+        with_breakpoint, with_caret, Block, Borders, Color, Kind, Line, Modifier, Place, Selection,
+        Span, State, Style, Tone, UnicodeWidthStr, DIRTY, DOTS, WARNING,
     };
     use varde::risk::{Figure, Figures, Function, Metrics};
 
@@ -5002,15 +5021,66 @@ mod tests {
                 })
                 .collect::<Vec<String>>()
         };
-        assert!(text(branch_lines(&[], "", 0))
+        assert!(text(branch_lines(&[], "", 0, 26))
             .contains(&"  This repository has no branches.".to_string()));
-        let filtered = text(branch_lines(&[], "zzz", 0));
+        let filtered = text(branch_lines(&[], "zzz", 0, 26));
         assert!(filtered.contains(&"  No branch matches \"zzz\".".to_string()));
         // And what was typed is on screen either way, so a list that narrowed
         // silently is not mistaken for the whole of it.
         assert!(filtered.contains(&"   filter: zzz".to_string()));
-        assert!(text(branch_lines(&["main".to_string()], "", 0))
+        assert!(text(branch_lines(&["main".to_string()], "", 0, 26))
             .contains(&"   type to filter".to_string()));
+    }
+
+    /// A list longer than the screen keeps the selected row in the box, and
+    /// the box no taller than the screen: the wheel walks it off the bottom
+    /// otherwise, and the row Enter acts on is one nobody can see.
+    #[test]
+    fn a_long_branch_list_follows_its_selection() {
+        let names: Vec<String> = (0..40).map(|at| format!("branch-{at}")).collect();
+        let lines: Vec<String> = branch_lines(&names, "", 30, 20)
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect()
+            })
+            .collect();
+        // Two borders, then the list, the blank, the filter hint and the keys.
+        assert_eq!(lines.len() + 2, 20);
+        assert_eq!(lines.first().map(String::as_str), Some("  branch-16"));
+        assert_eq!(lines[14], "> branch-30");
+    }
+
+    /// The Launch list follows its selection for the same reason.
+    #[test]
+    fn a_long_launch_list_follows_its_selection() {
+        let mut state = State::default();
+        for at in 10..50 {
+            state.launches.insert(
+                format!("launch-{at}"),
+                varde::startup::Launch {
+                    adapter: "rust".to_string(),
+                    request: "launch".to_string(),
+                    args: serde_json::Map::new(),
+                    reattach: false,
+                },
+            );
+        }
+        let lines: Vec<String> = launch_lines(&state, 30, 20)
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect()
+            })
+            .collect();
+        // Two borders, then the list, the blank and the keys.
+        assert_eq!(lines.len() + 2, 20);
+        assert_eq!(lines.first().map(String::as_str), Some("  launch-25"));
+        assert_eq!(lines[15], "> launch-40");
     }
     use varde::tree::{IconKind, Row};
     use varde::{DiffLine, Event};
