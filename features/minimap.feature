@@ -89,7 +89,7 @@ Feature: The minimap
     Then the editor is showing preview
     And the minimap is hidden
 
-  # Remembered, like the darker field and the key reminder: a reading preference
+  # Remembered, like the darker field: a reading preference
   # is a property of the project you read in, not of the session.
   Scenario: Turning the mirror off is remembered
     Given "src/main.rs" is open in the editor with 20 lines

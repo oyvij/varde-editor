@@ -32,6 +32,24 @@ Feature: Finding inside the buffer
     When I type "other" into the in-file search
     Then the cursor is at line 3 column 4
 
+  Scenario: A character typed after moving left goes into the middle of the query
+    Given I press "/" in the editor
+    And I type "oer" into the in-file search
+    And I press the key "Left"
+    And I press the key "Left"
+    When I type "th" into the in-file search
+    Then the in-file search query is "other"
+    And the cursor is at line 3 column 4
+
+  Scenario: Backspace in the middle of the query takes the character before the caret
+    Given I press "/" in the editor
+    And I type "othxer" into the in-file search
+    And I press the key "Left"
+    And I press the key "Left"
+    When I press the key "Backspace"
+    Then the in-file search query is "other"
+    And the cursor is at line 3 column 4
+
   Scenario: The cursor arrives before the query is finished
     Given I press "/" in the editor
     When I type "ot" into the in-file search

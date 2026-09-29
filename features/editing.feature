@@ -235,6 +235,30 @@ Feature: Editing a file
       three
       """
 
+  Scenario: Ctrl+S writes the buffer from normal mode
+    Given I press "x" in the editor
+    When I press the key "Ctrl+s"
+    Then "src/tree.js" was written with:
+      """
+      ne
+      two
+      three
+      """
+    And the editor mode is normal
+
+  Scenario: Ctrl+S writes the buffer without leaving insert mode
+    Given the editor mode is insert
+    And I type "zero " in the editor
+    When I press the key "Ctrl+s"
+    Then "src/tree.js" was written with:
+      """
+      zero one
+      two
+      three
+      """
+    And the editor mode is insert
+    And the cursor is at line 1 column 6
+
   Scenario: Reloading discards the draft
     Given I press "x" in the editor
     When I reload the buffer

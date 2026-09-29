@@ -610,7 +610,7 @@ pub enum Event {
     SubmitReview,
     ConfirmSubmit,
     /// `:help`, and the palette's Keys entry: puts the key box up or takes it
-    /// down. Remembered, so a dismissed reminder stays dismissed.
+    /// down. Never saved: every launch starts with it down.
     ToggleCheatsheet,
     ToggleField,
     /// `:minimap` — puts the mirror of the file up or takes it down, and gives
@@ -797,10 +797,11 @@ pub enum Event {
     CloseSearch,
     /// `/` — an in-file search, on the editor's own command line.
     OpenFind,
-    /// The in-file query changed. One event per character, because the cursor
-    /// moves as you type: unlike a `:` command, this is not a draft the edge can
-    /// collect on its own.
-    FindQuery(String),
+    /// Home and End in a search query: Left is its start, Right its end. The
+    /// rest of what a query answers is the editor's own events, since a query
+    /// is a [`Buffer`]; these two are not, because the editor spends Home and
+    /// End as `0` and `$`, and in a query those are letters.
+    QueryEnd(Direction),
     /// Escape — abandons the search and goes back where it started.
     CloseFind,
     /// Enter — leaves the match as the selection.
@@ -1292,9 +1293,11 @@ pub enum Event {
 /// One line of a unified diff. `new_line` is the line number in the file as it
 /// now is — what a comment anchors to, because that is the code to change.
 /// The search modal's contents: what was asked and what came back.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Search {
-    pub query: String,
+    /// A [`Buffer`], so the caret can go back into it: a typo mid-query was
+    /// otherwise fixed by deleting everything typed after it.
+    pub query: Buffer,
     /// The folder the search is confined to, relative to the root. `None` is
     /// the whole project. A field on the search rather than an argument to the
     /// scan: the query is re-run on every keystroke, and a scope the caller has
@@ -1307,6 +1310,18 @@ pub struct Search {
     /// renderer works out, for the reason every other scroll in Varde is:
     /// clamped in one place, and read by whoever draws it.
     pub scroll: usize,
+}
+
+impl Default for Search {
+    fn default() -> Self {
+        Self {
+            query: Buffer::text_box(""),
+            scope: None,
+            results: Results::default(),
+            selected: 0,
+            scroll: 0,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1902,10 +1917,10 @@ pub struct State {
     pub ai_command: String,
     pub editor_theme: String,
     /// Whether the editor pane paints a darker field behind the code. On by
-    /// default and remembered per project, like the key reminder: it is a
-    /// reading preference, and a terminal's transparency is the reason it is a
-    /// preference at all — an explicitly painted cell is opaque, so the field
-    /// buys contrast at the price of seeing through the window.
+    /// default and remembered per project: it is a reading preference, and a
+    /// terminal's transparency is the reason it is a preference at all — an
+    /// explicitly painted cell is opaque, so the field buys contrast at the
+    /// price of seeing through the window.
     pub editor_field: bool,
     /// Whether the minimap is showing. A reading preference like the field
     /// above, remembered per project, and the config's `editor.minimap` is
@@ -1913,7 +1928,8 @@ pub struct State {
     /// file and not in another.
     pub minimap: bool,
     /// Whether the key reminder is up. A terminal cell holds one character, so
-    /// the box hides the code under it — `:help` is how it gets out of the way.
+    /// the box hides the code under it. Down at every launch and never saved:
+    /// `:help` and the palette are how it comes up.
     pub cheatsheet: bool,
     pub system_clipboard: bool,
     /// Open when search is showing; `None` when the modal is closed.
@@ -1926,7 +1942,7 @@ pub struct State {
     /// collects, because the cursor moves to the closest match on every
     /// keystroke — and it outlives the line, because `n` and `N` step through
     /// its matches in normal mode and every one of them stays highlighted.
-    pub find_query: String,
+    pub find_query: Buffer,
     pub diff: Option<Vec<DiffLine>>,
     pub diff_file: Option<String>,
     /// The blob oid of what `diff_file` holds, told by `Event::ShowDiff` — a
@@ -2041,6 +2057,12 @@ pub struct State {
     /// and these are insertion points of no width, exactly as the primary
     /// cursor is.
     pub occurrences: Vec<Place>,
+    /// The occurrence the event being settled took, which the editor's clamp
+    /// shows after the cursor and then forgets. Only the event that took it
+    /// knows it was taken — typing moves every occurrence without taking one,
+    /// and following the newest then would pull the cursor off the screen on
+    /// every keystroke — and the clamp is the one writer of the offset.
+    pub revealing: Option<Place>,
     /// Where the pointer is while the jump modifier is held, in the editor's
     /// own coordinates. The place, not the span: what it underlines is read off
     /// the buffer through [`link`], so an edit under the pointer cannot leave a
@@ -2510,11 +2532,11 @@ impl Default for State {
             editor_theme: "dark".to_string(),
             editor_field: true,
             minimap: true,
-            cheatsheet: true,
+            cheatsheet: false,
             system_clipboard: true,
             search: None,
             find: None,
-            find_query: String::new(),
+            find_query: Buffer::text_box(""),
             diff: None,
             diff_file: None,
             diff_revision: None,
@@ -2567,6 +2589,7 @@ impl Default for State {
             pending_prompt: None,
             selection: None,
             occurrences: Vec::new(),
+            revealing: None,
             link: None,
             tree_selection: None,
             tree_scroll: 0,
@@ -2892,7 +2915,16 @@ fn settle(mut next: State, mut effects: Vec<Effect>, wheeled: bool) -> (State, V
             }
         }
         let (line, lines) = editor_focus(&next, &rows);
-        next.editor_scroll = layout::viewport(next.editor_scroll, line, lines, editor_fits);
+        let following = layout::viewport(next.editor_scroll, line, lines, editor_fits);
+        // After the cursor, so the occurrence just taken is the one on screen;
+        // the next event a person causes pulls the view back over the cursor.
+        next.editor_scroll = match next.revealing.take() {
+            Some(taken) => {
+                let row = story::row_of(&next, taken.line as u32).saturating_sub(1);
+                layout::viewport(following, row, lines, editor_fits)
+            }
+            None => following,
+        };
         next.editor_hscroll = match sideways(&next, &rows) {
             Sideways::Cursor { column, width } => {
                 layout::viewport(next.editor_hscroll, column, width, editor_columns)
@@ -3193,10 +3225,7 @@ fn on_snippet(mut next: State, event: Event, wheeled: bool) -> Answered {
         Event::EditorDeleteWord => snippet.delete_word_back(),
         Event::EditorUndo => snippet.undo(),
         Event::EditorArrow(direction) => snippet.arrow(direction),
-        Event::EditorWord(direction) => snippet.word_motion(match direction {
-            Direction::Right => editor::Word::Start,
-            _ => editor::Word::Back,
-        }),
+        Event::EditorWord(direction) => snippet.word_motion(editor::Word::toward(direction)),
         Event::EditorEscape => snippet.escape(),
         // One edit, not a run of keys, for the reason the comment box's paste
         // is one: a newline in pasted code is text and not a gesture.
@@ -3229,11 +3258,7 @@ fn on_comment_body(mut next: State, event: Event, wheeled: bool) -> Answered {
         Event::EditorDeleteWord => body.delete_word_back(),
         Event::EditorUndo => body.undo(),
         Event::EditorArrow(direction) => body.arrow(direction),
-        Event::EditorWord(direction) => body.word_motion(if direction == Direction::Right {
-            editor::Word::Start
-        } else {
-            editor::Word::Back
-        }),
+        Event::EditorWord(direction) => body.word_motion(editor::Word::toward(direction)),
         // One edit, not a run of keys: this is the arm that stops the first
         // newline in a pasted stack trace from being read as the gesture that
         // files the comment.
@@ -3241,6 +3266,74 @@ fn on_comment_body(mut next: State, event: Event, wheeled: bool) -> Answered {
         other => return Err((next, other)),
     }
     Ok(settle(next, vec![], wheeled))
+}
+
+/// The open search's query, which is a [`Buffer`] for the reason the comment
+/// box's body is one: the editor's own gestures with the query as their
+/// destination. The project search's first, because its box claims the keys
+/// ahead of the `/` line (`keys::reserved`) and can open over it.
+///
+/// A key is pasted rather than typed: typing pairs brackets, and a search for
+/// `foo(` would look for `foo()`. Only a change to the text searches again, so
+/// moving the caret leaves the selected hit and the cursor where they are.
+fn on_query(mut next: State, event: Event, wheeled: bool) -> Answered {
+    let query = if let Some(search) = next.search.as_mut() {
+        &mut search.query
+    } else if next.find.is_some() {
+        &mut next.find_query
+    } else {
+        return Err((next, event));
+    };
+    let before = query.revision();
+    match event {
+        Event::EditorKey(key) => query.paste(&key.to_string()),
+        // The one character before the caret, and never its partner: the
+        // editor's backspace takes an empty pair whole, which only undoes
+        // help a query was never given.
+        Event::EditorBackspace if query.column > 1 => {
+            let before = Place {
+                line: 1,
+                column: query.column - 1,
+            };
+            query.delete_in(before, before);
+        }
+        Event::EditorBackspace => {}
+        Event::EditorDeleteWord => query.delete_word_back(),
+        Event::EditorArrow(direction) => query.arrow(direction),
+        Event::EditorWord(direction) => query.word_motion(editor::Word::toward(direction)),
+        Event::QueryEnd(direction) => query.go_to_place(Place {
+            line: 1,
+            column: if direction == Direction::Left {
+                1
+            } else {
+                usize::MAX
+            },
+        }),
+        other => return Err((next, other)),
+    }
+    if query.revision() == before {
+        return Ok(settle(next, vec![], wheeled));
+    }
+    let effects = match (next.search.as_mut(), next.find) {
+        (Some(search), _) => {
+            search.selected = 0;
+            // A new query is a new list, as it is for `SearchQuery`.
+            search.scroll = 0;
+            vec![Effect::RunSearch(search.query.shown().to_string())]
+        }
+        // Searching from the origin every time rather than from the cursor,
+        // so a longer query cannot walk you down the file one keystroke at a
+        // time. Nothing matching leaves the cursor alone: a query being
+        // typed is half-finished, not wrong.
+        (None, Some(origin)) => {
+            if let Some(at) = closest_match(&next, origin) {
+                go_to_match(&mut next, at);
+            }
+            vec![]
+        }
+        (None, None) => vec![],
+    };
+    Ok(settle(next, effects, wheeled))
 }
 
 /// route_trigger, route_key, route_submit_review, in the order their arms had.
@@ -3305,6 +3398,10 @@ fn route_trigger(state: &State, next: State, event: Event, wheeled: bool) -> Ans
         Err(declined) => declined,
     };
     let declined = match on_comment_body(declined.0, declined.1, wheeled) {
+        Ok(answer) => return Ok(answer),
+        Err(declined) => declined,
+    };
+    let declined = match on_query(declined.0, declined.1, wheeled) {
         Ok(answer) => return Ok(answer),
         Err(declined) => declined,
     };
@@ -4978,7 +5075,7 @@ fn on_search_word_under_cursor(
                 return Ok((next, vec![]));
             };
             next.find = Some(at);
-            next.find_query.clear();
+            next.find_query = Buffer::text_box("");
             vec![]
         }
 
@@ -4987,31 +5084,16 @@ fn on_search_word_under_cursor(
     Ok(settle(next, effects, wheeled))
 }
 
-/// AcceptFind, CloseFind, FindQuery
+/// AcceptFind, CloseFind
 fn on_find_query(state: &State, mut next: State, event: Event, wheeled: bool) -> Answered {
     let effects = match event {
-        Event::FindQuery(query) => {
-            let Some(origin) = state.find else {
-                return Ok((next, vec![]));
-            };
-            next.find_query = query;
-            // Searching from the origin every time rather than from the cursor,
-            // so a longer query cannot walk you down the file one keystroke at a
-            // time. Nothing matching leaves the cursor alone: a query being
-            // typed is half-finished, not wrong.
-            if let Some(at) = closest_match(&next, origin) {
-                go_to_match(&mut next, at);
-            }
-            vec![]
-        }
-
         // Abandoning the search takes the highlights with it: they are what the
         // query is showing, and the query is gone.
         Event::CloseFind => {
             let Some(origin) = next.find.take() else {
                 return Ok((next, vec![]));
             };
-            next.find_query.clear();
+            next.find_query = Buffer::text_box("");
             go_to_match(&mut next, origin);
             vec![]
         }
@@ -5074,7 +5156,7 @@ fn on_search_query(state: &State, mut next: State, event: Event, wheeled: bool) 
     let effects = match event {
         Event::SearchQuery(query) => {
             let search = next.search.get_or_insert_with(Search::default);
-            search.query = query.clone();
+            search.query = Buffer::text_box(&query);
             search.selected = 0;
             // A new query is a new list: the clamp only ever scrolls the
             // selection into view by the least it can, so without this the box
@@ -5137,7 +5219,7 @@ fn on_search_query(state: &State, mut next: State, event: Event, wheeled: bool) 
                 anchor: at,
                 cursor: Place {
                     line: at.line,
-                    column: at.column + search.query.chars().count().saturating_sub(1),
+                    column: at.column + search.query.shown().chars().count().saturating_sub(1),
                 },
             });
             next.search = None;
@@ -5169,7 +5251,7 @@ fn on_search_query(state: &State, mut next: State, event: Event, wheeled: bool) 
 fn on_complete_search(state: &State, mut next: State, event: Event, wheeled: bool) -> Answered {
     let effects = match event {
         Event::CompleteSearch => match state.search.as_ref() {
-            Some(search) => match search::completion(&search.query, &search.results) {
+            Some(search) => match search::completion(search.query.shown(), &search.results) {
                 Some(word) => return Ok(update(&next, Event::SearchQuery(word))),
                 None => vec![],
             },
@@ -5376,11 +5458,7 @@ fn on_editor_arrow_2(state: &State, mut next: State, event: Event, wheeled: bool
             next.selection = None;
             next.occurrences.clear();
             if let Some(buffer) = current(&mut next) {
-                buffer.word_motion(if direction == Direction::Right {
-                    editor::Word::Start
-                } else {
-                    editor::Word::Back
-                });
+                buffer.word_motion(editor::Word::toward(direction));
             }
             vec![]
         }
@@ -5516,6 +5594,7 @@ fn take_next_occurrence(next: &mut State) {
         .or_else(|| all.iter().find(|place| !taken.contains(place)));
     if let Some(found) = untaken {
         next.occurrences.push(*found);
+        next.revealing = Some(*found);
     }
 }
 
@@ -6329,7 +6408,7 @@ fn on_editor_escape(state: &State, mut next: State, event: Event, wheeled: bool)
             // Escape is how everything on screen is dismissed, and an accepted
             // query is on screen: its matches stay lit until something clears
             // them, and `/` was the only thing that did.
-            next.find_query.clear();
+            next.find_query = Buffer::text_box("");
             next.gutter = None;
             next.hover = None;
             next.diff_anchor = None;
@@ -7317,16 +7396,14 @@ fn on_quit_force(state: &State, mut next: State, event: Event, wheeled: bool) ->
         // known checkout means no directory this may build in, so it says so
         // rather than running something: a command that silently does nothing is
         // a bug.
-        // Saved on the spot rather than at exit, for the same reason the tree
-        // divider is: a session that ends by closing the terminal saves
-        // nothing, and a reminder that comes back after that has not been
-        // dismissed at all.
         Event::ToggleCheatsheet => {
             next.cheatsheet = !state.cheatsheet;
-            vec![Effect::SaveState(state_json(&next))]
+            vec![]
         }
 
-        // Saved on the spot, for the reason the reminder above is.
+        // Saved on the spot rather than at exit, for the same reason the tree
+        // divider is: a session that ends by closing the terminal saves
+        // nothing, and a field turned off before that has not been turned off.
         Event::ToggleField => {
             next.editor_field = !state.editor_field;
             vec![Effect::SaveState(state_json(&next))]
@@ -9306,7 +9383,6 @@ pub(crate) fn state_json(state: &State) -> String {
         "output_width": state.output_width,
         "ai_pane": format!("{:?}", state.ai_pane),
         "corner": format!("{:?}", debug::resting_corner(state)),
-        "cheatsheet": state.cheatsheet,
         "editor_field": state.editor_field,
         "minimap": state.minimap,
         "buffers": buffers,
@@ -10138,7 +10214,7 @@ pub fn word_occurrences(state: &State, lines: impl RangeBounds<usize>) -> Vec<Pl
 /// Only in `lines` — rows, while previewing — for the reason [`Buffer::lines_within`]
 /// gives: `n` and `N` ask for the whole file, the renderer for its window.
 pub fn matches(state: &State, lines: impl RangeBounds<usize>) -> Vec<Place> {
-    if state.find_query.is_empty() {
+    if state.find_query.shown().is_empty() {
         return Vec::new();
     }
     if previewing(state) {
@@ -10147,7 +10223,7 @@ pub fn matches(state: &State, lines: impl RangeBounds<usize>) -> Vec<Place> {
             .enumerate()
             .filter(|(index, _)| lines.contains(&(index + 1)))
             .flat_map(|(index, row)| {
-                search::occurrences(&state.find_query, &row.text())
+                search::occurrences(state.find_query.shown(), &row.text())
                     .into_iter()
                     .map(move |column| Place {
                         line: index + 1,
@@ -10166,7 +10242,7 @@ pub fn matches(state: &State, lines: impl RangeBounds<usize>) -> Vec<Place> {
     buffer
         .lines_within(lines)
         .flat_map(|(number, line)| {
-            search::occurrences(&state.find_query, line)
+            search::occurrences(state.find_query.shown(), line)
                 .into_iter()
                 .map(move |column| Place {
                     line: number,
@@ -10280,7 +10356,7 @@ fn go_to_match(next: &mut State, at: Place) {
 /// being retyped. Matching is literal, so a match is exactly as long as the
 /// query — there is no second copy of where it ended to keep true.
 fn land_on(next: &mut State, at: Place) {
-    let length = next.find_query.chars().count();
+    let length = next.find_query.shown().chars().count();
     let end = Place {
         line: at.line,
         column: at.column + length - 1,
@@ -10733,6 +10809,50 @@ mod tests {
         state.modal = Modal::Tools { row: last };
         let bottom = update(&state, Event::MoveToolRow(Direction::Down)).0;
         assert_eq!(bottom.modal, Modal::Tools { row: last });
+    }
+
+    /// The ends of the Launch and branch lists, which the wheel reaches as
+    /// easily as the keys do: a notch past either end stays on it.
+    #[test]
+    fn the_launch_and_branch_selections_stop_at_both_ends() {
+        let mut state = State {
+            modal: Modal::Launches { row: 0 },
+            ..State::default()
+        };
+        for name in ["app", "tests"] {
+            state.launches.insert(
+                name.to_string(),
+                startup::Launch {
+                    adapter: "rust".to_string(),
+                    request: "launch".to_string(),
+                    args: serde_json::Map::new(),
+                    reattach: false,
+                },
+            );
+        }
+        let up = update(&state, Event::MoveLaunchRow(Direction::Up)).0;
+        assert_eq!(up.modal, Modal::Launches { row: 0 });
+        state.modal = Modal::Launches { row: 1 };
+        let down = update(&state, Event::MoveLaunchRow(Direction::Down)).0;
+        assert_eq!(down.modal, Modal::Launches { row: 1 });
+
+        let branches = |row| Modal::Branches {
+            refs: ["main", "feature"]
+                .map(|name| story::BranchRef {
+                    name: name.to_string(),
+                    remote: false,
+                    when: 0,
+                })
+                .to_vec(),
+            filter: String::new(),
+            row,
+        };
+        state.modal = branches(0);
+        let up = update(&state, Event::MoveBranchRow(Direction::Up)).0;
+        assert_eq!(up.modal, branches(0));
+        state.modal = branches(1);
+        let down = update(&state, Event::MoveBranchRow(Direction::Down)).0;
+        assert_eq!(down.modal, branches(1));
     }
 
     /// A re-check asks `PATH` again and says which row it asked about: the
@@ -12867,10 +12987,10 @@ mod tests {
     #[test]
     fn matches_searches_rendered_rows_while_previewing() {
         let mut state = previewing_readme("## Install\n");
-        state.find_query = "Install".to_string();
+        state.find_query = Buffer::text_box("Install");
         assert_eq!(matches(&state, ..), vec![Place { line: 1, column: 1 }]);
 
-        state.find_query = "##".to_string();
+        state.find_query = Buffer::text_box("##");
         assert!(matches(&state, ..).is_empty(), "a consumed marker matched");
     }
 
@@ -12882,7 +13002,7 @@ mod tests {
         let mut state = previewing_readme("## Install\n");
         let path = state.current_buffer.clone().unwrap();
         state.buffers.get_mut(&path).unwrap().previewing = false;
-        state.find_query = "##".to_string();
+        state.find_query = Buffer::text_box("##");
         assert_eq!(matches(&state, ..), vec![Place { line: 1, column: 1 }]);
     }
 
@@ -12892,7 +13012,7 @@ mod tests {
     #[test]
     fn stepping_matches_in_a_preview_moves_the_row() {
         let mut state = previewing_readme("Install\n\nInstall\n");
-        state.find_query = "Install".to_string();
+        state.find_query = Buffer::text_box("Install");
         let path = state.current_buffer.clone().unwrap();
         state.buffers.get_mut(&path).unwrap().row = 1;
         let after = update(&state, Event::StepMatch(Direction::Right)).0;
@@ -12900,6 +13020,41 @@ mod tests {
         assert_eq!(
             buffer.row, 3,
             "the second paragraph's row, past the blank separator"
+        );
+    }
+
+    /// The caret goes anywhere in a query, and a key lands where it is. Only a
+    /// change to the text searches again: moving through the query is not a
+    /// new question, and must not throw away the hit somebody had picked.
+    #[test]
+    fn a_search_query_is_edited_at_its_caret() {
+        let searching = State {
+            search: Some(Search {
+                query: Buffer::text_box("pdate"),
+                selected: 2,
+                ..Search::default()
+            }),
+            ..State::default()
+        };
+        let (home, effects) = update(&searching, Event::QueryEnd(Direction::Left));
+        assert!(effects.is_empty(), "moving the caret searched again");
+        assert_eq!(home.search.as_ref().unwrap().selected, 2);
+        let (typed, effects) = update(&home, Event::EditorKey('u'));
+        assert_eq!(effects, vec![Effect::RunSearch("update".to_string())]);
+        let (end, _) = update(&typed, Event::QueryEnd(Direction::Right));
+        let (bracket, _) = update(&end, Event::EditorKey('('));
+        assert_eq!(
+            bracket.search.as_ref().unwrap().query.shown(),
+            "update(",
+            "a query is not code, so a bracket is not paired"
+        );
+        let (closed, _) = update(&bracket, Event::EditorKey(')'));
+        let (between, _) = update(&closed, Event::EditorArrow(Direction::Left));
+        let (erased, _) = update(&between, Event::EditorBackspace);
+        assert_eq!(
+            erased.search.unwrap().query.shown(),
+            "update)",
+            "Backspace takes the one character before the caret"
         );
     }
 
@@ -12915,7 +13070,9 @@ mod tests {
         // match of its own, so the closest one found is the second "Install".
         state.buffers.get_mut(&path).unwrap().row = 2;
         let opened = update(&state, Event::OpenFind).0;
-        let typed = update(&opened, Event::FindQuery("Install".to_string())).0;
+        let typed = "Install".chars().fold(opened, |typing, key| {
+            update(&typing, Event::EditorKey(key)).0
+        });
         assert_eq!(
             current_buffer(&typed).expect("a buffer").row,
             3,
@@ -13426,7 +13583,7 @@ mod tests {
             screen_width: 100,
             screen_height: 16,
             search: Some(Search {
-                query: "update".to_string(),
+                query: Buffer::text_box("update"),
                 results: Results {
                     hits: "abcde"
                         .chars()

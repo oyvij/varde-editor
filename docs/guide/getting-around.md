@@ -131,8 +131,8 @@ because every editor teaches it — the arrows, `hjkl`, `Home`/`End`, `Alt+←/�
 `Backspace`, and a count typed before a motion.
 
 A terminal cell holds one character, so the box hides the code under it. `:help` or palette `h`
-takes it down and puts it back, and the choice is remembered per project. On a 26-row terminal only
-the first sixteen rows fit; the rows that survive are the ones nothing else in Varde teaches.
+puts it up and takes it down. It starts hidden at every launch, and the choice is not remembered.
+On a 26-row terminal only the first sixteen rows fit; the rows that survive are the ones nothing else in Varde teaches.
 
 ## The file tree
 

@@ -269,7 +269,7 @@ Feature: Syntax highlighting
     because a terminal cell painted with a background is opaque: the field is also
     what stops a transparent window showing the desktop through the code, and
     someone who chose that transparency wants it back. `:dim` toggles it, and the
-    choice is remembered per project the way the key reminder is.
+    choice is remembered per project, like the last view and the tree divider.
 
     Scenario: The field is on to begin with
       Then the editor field is shown
