@@ -11,7 +11,8 @@
 #
 # Environment: BURN_BRANCH (burn), BURN_TIMEOUT per issue (90m), BURN_PERMISSION_MODE (auto),
 # BURN_EXCLUDE_PARENTS — specs whose sub-issues belong on another branch (45, the debugger),
-# BURN_MAX_FAILURES in a row before giving up (3).
+# BURN_MAX_FAILURES in a row before giving up (3), BURN_RETRIES of an issue whose session's tools
+# were down (3), BURN_RETRY_WAIT between those (15m).
 set -euo pipefail
 
 BRANCH=${BURN_BRANCH:-burn}
@@ -19,6 +20,8 @@ TIMEOUT=${BURN_TIMEOUT:-90m}
 PERMISSION_MODE=${BURN_PERMISSION_MODE:-auto}
 EXCLUDE_PARENTS=${BURN_EXCLUDE_PARENTS:-45}
 MAX_FAILURES=${BURN_MAX_FAILURES:-3}
+RETRIES=${BURN_RETRIES:-3}
+RETRY_WAIT=${BURN_RETRY_WAIT:-15m}
 
 DRY_RUN=0
 ONLY=()
@@ -142,6 +145,7 @@ reject() {
 }
 
 failures=0
+blocked_runs=0
 landed=()
 while :; do
   n=$(next_issue)
@@ -154,7 +158,8 @@ while :; do
   status=0
   timeout "$TIMEOUT" claude -p "/mattpocock-skills:implement GitHub issue #$n on $REPO — read it with \`gh issue view $n --comments\`.
 Implement this issue only. You are running unattended: nobody will answer a question, so make the reasonable call and note it in the commit message.
-Commit to the current branch, bumping the version as AGENTS.md says. Do not push, switch branches, open a PR, or edit, comment on or close any issue — the loop that started you does that." \
+Commit to the current branch, bumping the version as AGENTS.md says. Do not push, switch branches, open a PR, or edit, comment on or close any issue — the loop that started you does that.
+If you cannot work at all because your tools are failing — commands refused, erroring or getting no verdict, as opposed to the issue being hard — change nothing and end your final message with a line reading exactly BURN-BLOCKED." \
     --permission-mode "$PERMISSION_MODE" --output-format stream-json --verbose </dev/null 2>"$LOGS/burn-$n.err" |
     tee "$LOGS/burn-$n.jsonl" | jq --unbuffered -rR --arg chat "$CHAT" --arg tool "$TOOL" --arg off "$OFF" "$PRETTY" |
     sed -u "s/^/$DIM#$n$OFF /" | tee -a "$LOGS/burn.log" ||
@@ -168,6 +173,25 @@ Commit to the current branch, bumping the version as AGENTS.md says. Do not push
     log "#$n: claude exited $status without committing; stopping (see $LOGS/burn-$n.err). The issue keeps its label."
     break
   fi
+  # A session can also end cleanly having done nothing because its tools were down — a permission
+  # check with no verdict looks like that. That says nothing about the issue: wait and run it again.
+  blocked=$(jq -rR 'fromjson? | select(.type=="result")
+    | select(.is_error or any(.result | tostring | split("\n")[]; gsub("[\\s`*]"; "") == "BURN-BLOCKED"))
+    | "yes"' "$LOGS/burn-$n.jsonl")
+  if ((commits == 0)) && [[ -n $blocked ]]; then
+    git reset -q --hard "$prev"
+    git clean -qfd
+    blocked_runs=$((blocked_runs + 1))
+    if ((blocked_runs > RETRIES)); then
+      log "#$n: the session's tools are still down after $RETRIES retries; stopping. The issue keeps its label."
+      break
+    fi
+    log "#$n: the session's tools were down; retrying in $RETRY_WAIT ($blocked_runs/$RETRIES)"
+    unset "done_here[$n]"
+    sleep "$RETRY_WAIT"
+    continue
+  fi
+  blocked_runs=0
 
   git reset -q --hard HEAD # whatever the session left uncommitted is not part of its work
   git clean -qfd
