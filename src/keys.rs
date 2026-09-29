@@ -680,8 +680,8 @@ fn claimed_everywhere(state: &State, event: KeyEvent) -> Option<Vec<Event>> {
     }
     // While search is showing it claims the keys: every printable one belongs
     // to the query, so the actions take a modifier.
-    let search = state.search.as_ref()?;
-    Some(searching(&search.query, event))
+    state.search.as_ref()?;
+    Some(searching(event))
 }
 
 fn modal_key(state: &State, drafts: &mut Drafts, event: KeyEvent) -> Vec<Event> {
@@ -1199,10 +1199,13 @@ fn arrow(code: KeyCode) -> Option<Direction> {
     })
 }
 
-fn searching(query: &str, event: KeyEvent) -> Vec<Event> {
-    // The arrows step between hits. A modifier makes an arrow a different
-    // binding, and search has none.
-    if let Some(direction) = arrow(event.code) {
+fn searching(event: KeyEvent) -> Vec<Event> {
+    if let Some(events) = query_key(event) {
+        return events;
+    }
+    // Up and down step between hits; sideways is the query's caret. A modifier
+    // makes an arrow a different binding, and search has none.
+    if let Some(direction @ (Direction::Up | Direction::Down)) = arrow(event.code) {
         if event
             .modifiers
             .intersects(KeyModifiers::SHIFT | KeyModifiers::ALT)
@@ -1231,33 +1234,44 @@ fn searching(query: &str, event: KeyEvent) -> Vec<Event> {
             vec![Event::MoveHitFile(Direction::Up)]
         }
         KeyCode::Tab => vec![Event::CompleteSearch],
-        KeyCode::Backspace => {
-            let mut shorter = query.to_string();
-            shorter.pop();
-            vec![Event::SearchQuery(shorter)]
-        }
-        _ => match typed(event) {
-            Some(c) => vec![Event::SearchQuery(format!("{query}{c}"))],
-            None => vec![],
-        },
+        _ => vec![],
     }
 }
 
 /// `/` in the editor. The query is state rather than a draft because the cursor
 /// moves to the closest match on every keystroke.
-fn finding(query: &str, event: KeyEvent) -> Vec<Event> {
+fn finding(event: KeyEvent) -> Vec<Event> {
+    if let Some(events) = query_key(event) {
+        return events;
+    }
     match event.code {
         KeyCode::Esc => vec![Event::CloseFind],
         KeyCode::Enter => vec![Event::AcceptFind],
-        KeyCode::Backspace => {
-            let mut shorter = query.to_string();
-            shorter.pop();
-            vec![Event::FindQuery(shorter)]
-        }
-        _ => match typed(event) {
-            Some(c) => vec![Event::FindQuery(format!("{query}{c}"))],
-            None => vec![],
-        },
+        _ => vec![],
+    }
+}
+
+/// A key that edits a search query or moves its caret — the `/` line's and the
+/// project search's alike, since both are a [`crate::editor::Buffer`] the core
+/// hands these to. The word motions come in both spellings for the reason
+/// [`comment_body`] takes both: `^[b` and `^[f` are what Option+arrow sends
+/// on macOS.
+fn query_key(event: KeyEvent) -> Option<Vec<Event>> {
+    let alt = event.modifiers.contains(KeyModifiers::ALT);
+    let ctrl = event.modifiers.contains(KeyModifiers::CTRL);
+    let word = |direction| Some(vec![Event::EditorWord(direction)]);
+    match event.code {
+        KeyCode::Char('b') if alt && !ctrl => word(Direction::Left),
+        KeyCode::Char('f') if alt && !ctrl => word(Direction::Right),
+        KeyCode::Left if alt => word(Direction::Left),
+        KeyCode::Right if alt => word(Direction::Right),
+        KeyCode::Left => Some(vec![Event::EditorArrow(Direction::Left)]),
+        KeyCode::Right => Some(vec![Event::EditorArrow(Direction::Right)]),
+        KeyCode::Home => Some(vec![Event::QueryEnd(Direction::Left)]),
+        KeyCode::End => Some(vec![Event::QueryEnd(Direction::Right)]),
+        KeyCode::Backspace if alt => Some(vec![Event::EditorDeleteWord]),
+        KeyCode::Backspace => Some(vec![Event::EditorBackspace]),
+        _ => typed(event).map(|c| vec![Event::EditorKey(c)]),
     }
 }
 
@@ -1648,7 +1662,7 @@ fn focus_alias(event: KeyEvent, alt: bool) -> Option<Vec<Event>> {
 /// motion.
 fn collecting(state: &State, drafts: &mut Drafts, event: KeyEvent) -> Option<Vec<Event>> {
     if state.find.is_some() {
-        return Some(finding(&state.find_query, event));
+        return Some(finding(event));
     }
     if drafts.command.is_some() {
         return Some(command_line(drafts, event));
@@ -2986,16 +3000,12 @@ mod tests {
     fn the_in_file_search_claims_the_editors_keys_only_while_it_is_open() {
         let finding = State {
             find: Some(Place { line: 1, column: 1 }),
-            find_query: "upd".to_string(),
             ..State::default()
         };
-        assert_eq!(
-            press(&finding, plain('b')),
-            vec![Event::FindQuery("updb".to_string())]
-        );
+        assert_eq!(press(&finding, plain('b')), vec![Event::EditorKey('b')]);
         assert_eq!(
             press(&finding, KeyEvent::new(KeyCode::Backspace)),
-            vec![Event::FindQuery("up".to_string())]
+            vec![Event::EditorBackspace]
         );
         assert_eq!(
             press(&finding, KeyEvent::new(KeyCode::Esc)),
@@ -3009,6 +3019,46 @@ mod tests {
         assert_eq!(
             press(&focused(Pane::Editor), plain('b')),
             vec![Event::EditorKey('b')]
+        );
+    }
+
+    /// Both queries are a buffer with a caret, so the keys that move through
+    /// text in the comment body move through a query too — Option+arrow in the
+    /// shape macOS sends it included. Up and down stay the results box's.
+    #[test]
+    fn a_search_query_answers_the_keys_that_move_through_text() {
+        let finding = State {
+            find: Some(Place { line: 1, column: 1 }),
+            ..State::default()
+        };
+        let searching = State {
+            search: Some(crate::Search::default()),
+            ..State::default()
+        };
+        let key = |code| KeyEvent::new(code);
+        for state in [&finding, &searching] {
+            for (event, expected) in [
+                (key(KeyCode::Left), Event::EditorArrow(Direction::Left)),
+                (key(KeyCode::Right), Event::EditorArrow(Direction::Right)),
+                (key(KeyCode::Home), Event::QueryEnd(Direction::Left)),
+                (key(KeyCode::End), Event::QueryEnd(Direction::Right)),
+                (alt('b'), Event::EditorWord(Direction::Left)),
+                (alt('f'), Event::EditorWord(Direction::Right)),
+                (
+                    key(KeyCode::Left).modifiers(KeyModifiers::ALT),
+                    Event::EditorWord(Direction::Left),
+                ),
+                (
+                    key(KeyCode::Backspace).modifiers(KeyModifiers::ALT),
+                    Event::EditorDeleteWord,
+                ),
+            ] {
+                assert_eq!(press(state, event), vec![expected], "{event:?}");
+            }
+        }
+        assert_eq!(
+            press(&searching, key(KeyCode::Down)),
+            vec![Event::MoveHit(Direction::Down)]
         );
     }
 
@@ -3031,30 +3081,21 @@ mod tests {
             vec![Event::MoveHitFile(Direction::Up)]
         );
         // The letters themselves still belong to the query.
-        assert_eq!(
-            press(&state, plain('n')),
-            vec![Event::SearchQuery("n".to_string())]
-        );
+        assert_eq!(press(&state, plain('n')), vec![Event::EditorKey('n')]);
     }
 
     #[test]
     fn search_claims_every_printable_key_for_its_query() {
         let state = State {
-            search: Some(crate::Search {
-                query: "upd".to_string(),
-                ..crate::Search::default()
-            }),
+            search: Some(crate::Search::default()),
             focus: Pane::Terminal,
             ..State::default()
         };
         // Terminal focus does not win while search is showing.
-        assert_eq!(
-            press(&state, plain('a')),
-            vec![Event::SearchQuery("upda".to_string())]
-        );
+        assert_eq!(press(&state, plain('a')), vec![Event::EditorKey('a')]);
         assert_eq!(
             press(&state, KeyEvent::new(KeyCode::Backspace)),
-            vec![Event::SearchQuery("up".to_string())]
+            vec![Event::EditorBackspace]
         );
         assert_eq!(
             press(&state, KeyEvent::new(KeyCode::Esc)),
@@ -4847,7 +4888,7 @@ mod tests {
         };
         let showing = State {
             search: Some(crate::Search {
-                query: "upd".to_string(),
+                query: crate::editor::Buffer::text_box("upd"),
                 results: crate::search::Results {
                     // Two files, so stepping by file has somewhere to go: a key
                     // with nothing to act on is a statement about the results
@@ -4859,25 +4900,40 @@ mod tests {
             }),
             ..editing()
         };
-        // Typing is not a gesture: it is what every key the box does not claim
-        // already does.
+        // Editing the query is not a gesture: typing is what every key the box
+        // does not claim already does, and moving through what was typed is
+        // the cursor motion nobody needs reminding of.
         let gesture = |event| {
             let events = press(&showing, event);
-            !events.is_empty() && !events.iter().all(|e| matches!(e, Event::SearchQuery(_)))
+            !events.is_empty()
+                && !events.iter().all(|e| {
+                    matches!(
+                        e,
+                        Event::EditorKey(_)
+                            | Event::EditorBackspace
+                            | Event::EditorDeleteWord
+                            | Event::EditorArrow(_)
+                            | Event::EditorWord(_)
+                            | Event::QueryEnd(_)
+                    )
+                })
         };
         let named = |label: &str| {
             super::SEARCH_KEYS
                 .iter()
                 .any(|(keys, _)| keys.split_whitespace().any(|key| key == label))
         };
+        // Some key a label spells, not every one: `arr` is up and down through
+        // the hits, while left and right are the query's caret.
         for (keys, word) in super::SEARCH_KEYS {
             for key in keys.split_whitespace() {
-                let event = every_key()
+                let spelled: Vec<KeyEvent> = every_key()
                     .into_iter()
-                    .find(|event| label(*event) == key)
-                    .unwrap_or_else(|| panic!("no key spells {key}"));
+                    .filter(|event| label(*event) == key)
+                    .collect();
+                assert!(!spelled.is_empty(), "no key spells {key}");
                 assert!(
-                    gesture(event),
+                    spelled.into_iter().any(gesture),
                     "the helper row offers {key} for {word} and the box does nothing with it"
                 );
             }

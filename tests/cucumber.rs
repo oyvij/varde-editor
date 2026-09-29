@@ -2812,6 +2812,7 @@ fn press(world: &mut VardeWorld, key: String) {
 /// handed to the key router, which decides whether Varde claims it or the
 /// child receives it. `I press` above sends the event a key stands for; this
 /// sends the key.
+#[given(expr = "I press the key {string}")]
 #[when(expr = "I press the key {string}")]
 fn press_the_key(world: &mut VardeWorld, key: String) {
     route_key(world, &key, 0);
@@ -6716,7 +6717,17 @@ fn search(world: &VardeWorld) -> &varde::Search {
 
 #[then(expr = "the search query is {string}")]
 fn search_query_is(world: &mut VardeWorld, expected: String) {
-    assert_eq!(search(world).query, expected);
+    assert_eq!(search(world).query.shown(), expected);
+}
+
+/// Key by key through the router, as the box receives them: a whole query sent
+/// at once could not land in the middle of one already typed.
+#[given(expr = "I type {string} into the search")]
+#[when(expr = "I type {string} into the search")]
+fn type_into_search(world: &mut VardeWorld, query: String) {
+    for key in query.chars() {
+        route_key(world, &key.to_string(), 0);
+    }
 }
 
 #[then(expr = "there are no hits")]
@@ -6859,16 +6870,20 @@ fn there_are_no_matches(world: &mut VardeWorld) {
     assert!(varde::matches(&world.state, ..).is_empty());
 }
 
-/// One event per character, because that is what the editor sees: the cursor
-/// moves as the query grows, so a whole query sent at once would prove nothing.
+/// Key by key through the router, because that is what the editor sees: the
+/// cursor moves as the query grows, so a whole query sent at once would prove
+/// nothing — and a key lands wherever the query's caret is.
 #[given(expr = "I type {string} into the in-file search")]
 #[when(expr = "I type {string} into the in-file search")]
 fn type_into_find(world: &mut VardeWorld, query: String) {
-    let mut typed = String::new();
-    for character in query.chars() {
-        typed.push(character);
-        world.send(Event::FindQuery(typed.clone()));
+    for key in query.chars() {
+        route_key(world, &key.to_string(), 0);
     }
+}
+
+#[then(expr = "the in-file search query is {string}")]
+fn find_query_is(world: &mut VardeWorld, expected: String) {
+    assert_eq!(world.state.find_query.shown(), expected);
 }
 
 #[when(expr = "I press Escape during the in-file search")]

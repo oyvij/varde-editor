@@ -2120,7 +2120,9 @@ fn jumped(state: &mut State, ask: Ask, result: &Value) -> Told {
                 })
                 .collect();
             state.search = Some(Search {
-                query: crate::word_under_cursor(state).unwrap_or_default(),
+                query: crate::editor::Buffer::text_box(
+                    &crate::word_under_cursor(state).unwrap_or_default(),
+                ),
                 results: Results {
                     hits,
                     ..Results::default()
@@ -4109,7 +4111,10 @@ mod tests {
             &reply,
         ));
         assert!(effects.is_empty(), "something was opened: {effects:?}");
-        assert_eq!(state.search.expect("the search list").query, "helper");
+        assert_eq!(
+            state.search.expect("the search list").query.shown(),
+            "helper"
+        );
     }
 
     /// A reply naming places on both sides of the root keeps the ones inside

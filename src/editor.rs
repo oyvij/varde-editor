@@ -316,6 +316,19 @@ impl Buffer {
         }
     }
 
+    /// A one-line box being typed into — the `/` query and the project search
+    /// query. Inserting from the start, since there is no normal mode in a box
+    /// to leave, with the caret after whatever it was handed.
+    pub fn text_box(contents: &str) -> Self {
+        let mut typed = Self::open(contents, false, DEFAULT_TAB_WIDTH);
+        typed.mode = Mode::Insert;
+        typed.go_to_place(crate::Place {
+            line: 1,
+            column: usize::MAX,
+        });
+        typed
+    }
+
     pub fn shown(&self) -> &str {
         self.draft.as_deref().unwrap_or(&self.disk)
     }
@@ -1509,6 +1522,18 @@ pub enum Word {
     Start,
     End,
     Back,
+}
+
+impl Word {
+    /// The stop a sideways word gesture — Alt+arrow, or Option's `^[b` and
+    /// `^[f` — lands on: forwards to the next word's start, anything else
+    /// back to the start of the one behind.
+    pub fn toward(direction: crate::Direction) -> Self {
+        match direction {
+            crate::Direction::Right => Word::Start,
+            _ => Word::Back,
+        }
+    }
 }
 
 #[derive(PartialEq, Eq, Clone, Copy)]

@@ -2062,7 +2062,7 @@ fn source_lines(
     // Every match of what `/` looked for, not only the one the cursor is on, so
     // the count is visible without walking them. Under the selection, so the
     // match being stepped to still reads as picked.
-    let matched = state.find_query.chars().count();
+    let matched = state.find_query.shown().chars().count();
     for at in varde::matches(state, first..=last) {
         let Some(line) = row(at.line).map(|index| &mut lines[index]) else {
             continue;
@@ -2622,7 +2622,7 @@ fn preview_widget(
     // Every match of what `/` looked for, painted on the row it is in — the
     // same highlight Source draws, over rows rather than lines, since
     // `varde::matches` already answers in row coordinates while previewing.
-    let matched = state.find_query.chars().count();
+    let matched = state.find_query.shown().chars().count();
     for at in varde::matches(state, ..) {
         let Some(line) = lines.get_mut(at.line - 1) else {
             continue;
@@ -3792,13 +3792,27 @@ fn over_buffer_line(
 
 /// What the editor's bottom-left line is showing, prefix and all: a `:` command
 /// being typed, or a `/` search of this file. One line, two prefixes — which is
-/// what keeps finding here looking different from finding everywhere.
+/// what keeps finding here looking different from finding everywhere. The caret
+/// is part of it, since the `/` query's can be anywhere in it.
 fn command_line(state: &State, command: Option<&str>) -> Option<String> {
     match (command, state.find) {
-        (Some(draft), _) => Some(format!(":{draft}")),
-        (None, Some(_)) => Some(format!("/{}", state.find_query)),
+        (Some(draft), _) => Some(format!(":{draft}█")),
+        (None, Some(_)) => {
+            let (before, after) = at_caret(&state.find_query);
+            Some(format!("/{before}█{after}"))
+        }
         (None, None) => None,
     }
+}
+
+/// A search query either side of its caret.
+fn at_caret(query: &varde::editor::Buffer) -> (String, String) {
+    let text = query.shown();
+    let at = text
+        .char_indices()
+        .nth(query.column - 1)
+        .map_or(text.len(), |(at, _)| at);
+    (text[..at].to_string(), text[at..].to_string())
 }
 
 /// The editor's frame. The `:` line lives on its bottom edge, not at the foot
@@ -3821,7 +3835,7 @@ fn editor_block(
         .title_bottom(Line::from(footer).right_aligned())
         .title_bottom(
             Line::from(Span::styled(
-                command.map(|line| format!(" {line}█ ")).unwrap_or_default(),
+                command.map(|line| format!(" {line} ")).unwrap_or_default(),
                 Style::default().fg(Color::Yellow),
             ))
             .left_aligned(),
@@ -4570,16 +4584,19 @@ fn search_screen(frame: &mut Frame, state: &State) {
             if files == 1 { "" } else { "s" }
         )
     };
-    let completion = varde::search::completion(&search.query, results)
-        .map(|word| word[search.query.len().min(word.len())..].to_string())
+    let query = search.query.shown();
+    let completion = varde::search::completion(query, results)
+        .map(|word| word[query.len().min(word.len())..].to_string())
         .unwrap_or_default();
+    let (before, after) = at_caret(&search.query);
 
     let mut lines = vec![
         Line::from(vec![
             Span::styled(" ? ", Style::default().fg(Color::Cyan)),
-            Span::raw(search.query.clone()),
-            Span::styled(completion, Style::default().fg(Color::DarkGray)),
+            Span::raw(before),
             Span::styled("█", Style::default().fg(Color::Cyan)),
+            Span::raw(after),
+            Span::styled(completion, Style::default().fg(Color::DarkGray)),
         ]),
         Line::from(Span::styled(
             format!("   {count}"),
@@ -4640,7 +4657,7 @@ fn search_screen(frame: &mut Frame, state: &State) {
     lines.extend(list.into_iter().skip(search.scroll));
     // After the list and not part of it: a row the clamp never counted is a row
     // that scrolls out of step with the rest.
-    if results.hits.is_empty() && !search.query.is_empty() {
+    if results.hits.is_empty() && !query.is_empty() {
         lines.push(Line::from(Span::styled(
             " no matches",
             Style::default().fg(Color::DarkGray),
@@ -4651,7 +4668,7 @@ fn search_screen(frame: &mut Frame, state: &State) {
         Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title("SEARCH")),
         area,
     );
-    frame.set_cursor_position((area.x + 4 + search.query.chars().count() as u16, area.y + 1));
+    frame.set_cursor_position((area.x + 3 + search.query.column as u16, area.y + 1));
 }
 
 /// A single line, coloured like the editor colours it. Highlighted out of
@@ -5048,7 +5065,7 @@ mod tests {
             1,
             varde::authorship::traced(Some(&committed), &text).into(),
         ));
-        state.find_query = "step".to_string();
+        state.find_query = varde::editor::Buffer::text_box("step");
         state.diagnostics.insert(
             path.clone(),
             [(
@@ -5159,7 +5176,7 @@ mod tests {
         let path = std::path::PathBuf::from("/w/main.rs");
         let mut state = State::default();
         state.current_buffer = Some(path.clone());
-        state.find_query = "x".to_string();
+        state.find_query = varde::editor::Buffer::text_box("x");
         state
             .buffers
             .insert(path.clone(), varde::editor::Buffer::open(&text, false, 4));

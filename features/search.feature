@@ -54,6 +54,19 @@ Feature: Searching file contents
       | src/main.rs | 1 |
       | src/main.rs | 2 |
 
+  Scenario: A character typed after moving left goes into the middle of the query
+    Given I open search
+    And I type "upte" into the search
+    And I press the key "Left"
+    And I press the key "Left"
+    When I type "da" into the search
+    Then the search query is "update"
+    And the hits are:
+      | README.md   | 1 |
+      | src/lib.rs  | 1 |
+      | src/main.rs | 1 |
+      | src/main.rs | 2 |
+
   Scenario: A search scoped to a folder ignores everything outside it
     Given I open search in "src"
     When I search for "update"
