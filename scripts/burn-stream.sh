@@ -40,12 +40,19 @@ command -v jq >/dev/null || { echo "burn needs jq to stream the sessions" >&2; e
 # One line per thing the agent says or runs. `fromjson?` skips a line that is not JSON rather than
 # ending jq, whose exit would take the session down with it through a broken pipe.
 PRETTY='fromjson? | select(.type=="assistant") | .message.content[]?
-  | if .type=="text" then "💬 " + (.text | gsub("\n"; " ") | .[0:200])
-    elif .type=="tool_use" then "🔧 " + .name + " "
-      + ((.input.command // .input.file_path // .input.description // .input.skill // "") | tostring | gsub("\n"; " ") | .[0:150])
+  | if .type=="text" then $chat + "💬 " + (.text | gsub("\n"; " ") | .[0:200]) + $off
+    elif .type=="tool_use" then $tool + "🔧 " + .name + " "
+      + ((.input.command // .input.file_path // .input.description // .input.skill // "") | tostring | gsub("\n"; " ") | .[0:150]) + $off
     else empty end'
 
-log() { mkdir -p "$LOGS"; printf '[%s] %s\n' "$(date +%H:%M:%S)" "$*" | tee -a "$LOGS/burn.log"; }
+# Chat green, tool calls dim yellow, the loop's own lines bold magenta; NO_COLOR=1 turns them off.
+if [[ -n ${NO_COLOR:-} ]]; then
+  CHAT='' TOOL='' LOOP='' DIM='' OFF=''
+else
+  CHAT=$'\e[32m' TOOL=$'\e[2;33m' LOOP=$'\e[1;35m' DIM=$'\e[2m' OFF=$'\e[0m'
+fi
+
+log() { mkdir -p "$LOGS"; printf '%s[%s] %s%s\n' "$LOOP" "$(date +%H:%M:%S)" "$*" "$OFF" | tee -a "$LOGS/burn.log"; }
 
 # --- the queue -------------------------------------------------------------------------------
 
@@ -149,7 +156,8 @@ while :; do
 Implement this issue only. You are running unattended: nobody will answer a question, so make the reasonable call and note it in the commit message.
 Commit to the current branch, bumping the version as AGENTS.md says. Do not push, switch branches, open a PR, or edit, comment on or close any issue — the loop that started you does that." \
     --permission-mode "$PERMISSION_MODE" --output-format stream-json --verbose </dev/null 2>"$LOGS/burn-$n.err" |
-    tee "$LOGS/burn-$n.jsonl" | jq --unbuffered -rR "$PRETTY" | sed -u "s/^/#$n /" | tee -a "$LOGS/burn.log" ||
+    tee "$LOGS/burn-$n.jsonl" | jq --unbuffered -rR --arg chat "$CHAT" --arg tool "$TOOL" --arg off "$OFF" "$PRETTY" |
+    sed -u "s/^/$DIM#$n$OFF /" | tee -a "$LOGS/burn.log" ||
     status=${PIPESTATUS[0]}
 
   commits=$(git rev-list --count "$prev..HEAD")
