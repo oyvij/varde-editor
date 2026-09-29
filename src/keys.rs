@@ -208,7 +208,9 @@ pub const CHEATSHEET: [(&str, &str, &[View]); 44] = [
     // contract, not because this is where anybody learns it.
     ("C-f", "project", &[View::Edit, View::Review, View::Story]),
     ("D", "diverged from disk", &[View::Edit]),
-    (":w :q :qa", "write quit close all", &[View::Edit]),
+    // The write key rides `:w`'s row rather than one of its own: Edit's rows
+    // are at the limit a 26-row window has, and it is the same write.
+    (":w C-s D-s :q :qa", "write quit close all", &[View::Edit]),
     // The gesture that opens the branch picker, which is what earns a row here
     // rather than the two keys the picker itself answers — those are
     // [`BRANCH_LIST_KEYS`], drawn in the box while it is up. Both spellings on
@@ -1754,6 +1756,17 @@ fn pane_key(state: &State, event: KeyEvent) -> Vec<Event> {
         {
             vec![Event::RunSnippet]
         }
+        // `:w` as a key, in either mode: the same event, so the command's
+        // refusals are the key's too. Edit view's Editor alone — the
+        // Evaluator's text is a Snippet, not the file `:w` writes, and Review
+        // and Story are read.
+        Pane::Editor
+            if state.view == View::Edit
+                && event.code == KeyCode::Char('s')
+                && ctrl_or_command(event) =>
+        {
+            vec![Event::WriteBuffer]
+        }
         Pane::Editor | Pane::Evaluator => editor_pane_key(event),
         Pane::Tree => tree_pane_key(event),
         // The corner's panes answer Enter — go to the code behind the figure,
@@ -1779,12 +1792,13 @@ fn pane_key(state: &State, event: KeyEvent) -> Vec<Event> {
     }
 }
 
-/// Whether a key carries the modifier copy and paste answer to. Ctrl and
-/// Command are aliases on these two keys and on no others: Command is the
-/// gesture the reader already has for them, and Ctrl is the one that survives
-/// a terminal that never reports Command at all (R31.11). Neither is the only
-/// route — the register's `y` and `p` need no modifier.
-fn copies_or_pastes(event: KeyEvent) -> bool {
+/// Whether a key carries the modifier copy, paste and write answer to. Ctrl
+/// and Command are aliases on these three keys and on no others: Command is
+/// the gesture the reader already has for them, and Ctrl is the one that
+/// survives a terminal that never reports Command at all (R31.11). Neither is
+/// the only route — the register's `y` and `p` and the `:w` line need no
+/// modifier.
+fn ctrl_or_command(event: KeyEvent) -> bool {
     event
         .modifiers
         .intersects(KeyModifiers::CTRL | KeyModifiers::SUPER)
@@ -1794,12 +1808,12 @@ fn editor_pane_key(event: KeyEvent) -> Vec<Event> {
     match event.code {
         // Not claimed globally: with a hosted pane focused Ctrl+C is the
         // child's interrupt, and reaches it as bytes.
-        KeyCode::Char('c') if copies_or_pastes(event) => vec![Event::Copy],
+        KeyCode::Char('c') if ctrl_or_command(event) => vec![Event::Copy],
         // Pasting is the other half of one gesture, so it is spelled the same
         // way: Command+V worked long before this line existed only because the
         // host terminal answers it itself and sends the text on as a paste,
         // which made the two halves look like two unrelated features.
-        KeyCode::Char('v') if copies_or_pastes(event) => vec![Event::PasteFromClipboard],
+        KeyCode::Char('v') if ctrl_or_command(event) => vec![Event::PasteFromClipboard],
         KeyCode::Esc => vec![Event::EditorEscape],
         KeyCode::Home => vec![Event::EditorKey('0')],
         KeyCode::End => vec![Event::EditorKey('$')],
@@ -3097,6 +3111,29 @@ mod tests {
         );
     }
 
+    // Command is Ctrl's alias on the write key as on copy and paste, and the
+    // comment box keeps its own Ctrl+S: it files the comment, never the file.
+    #[test]
+    fn ctrl_s_and_cmd_s_write_the_buffer_unless_the_comment_box_is_open() {
+        let editor = focused(Pane::Editor);
+        assert_eq!(press(&editor, ctrl('s')), vec![Event::WriteBuffer]);
+        assert_eq!(press(&editor, cmd('s')), press(&editor, ctrl('s')));
+        let commenting = State {
+            modal: crate::Modal::Comment,
+            ..editor
+        };
+        let mut drafts = Drafts {
+            comment_kind: "ISSUE".to_string(),
+            ..Drafts::default()
+        };
+        assert_eq!(
+            on_key_event(&commenting, &mut drafts, ctrl('s'), 0),
+            vec![Event::FileComment {
+                kind: "ISSUE".to_string()
+            }]
+        );
+    }
+
     /// The way out of a hosted pane on a terminal that reports neither a bare
     /// Ctrl press nor Alt. It is on no reserved list because it withholds
     /// nothing: the escape reaches the child, and the tap is counted beside it.
@@ -3824,9 +3861,9 @@ mod tests {
     /// One spelling per *gesture*, not per key event: the sweep drives all
     /// sixty-four modifier combinations of every code, and a modifier the router
     /// never inspects names no gesture of its own. `Super+x` types the `x` it
-    /// always typed, so it is spelled `x` — except on the two keys where the
-    /// router does inspect it, `D-c` and `D-v`, which are Command's own
-    /// spellings of copy and paste and are folded onto no other row for the
+    /// always typed, so it is spelled `x` — except on the three keys where the
+    /// router does inspect it, `D-c`, `D-v` and `D-s`, which are Command's own
+    /// spellings of copy, paste and write and are folded onto no other row for the
     /// reason `M-Bksp` is not folded onto `Bksp`. Ctrl outranks Alt for the same
     /// reason — the Ctrl bindings ask `contains(CTRL)` and never look at Alt, so
     /// `C-M-q` is `C-q` carrying a modifier the binding ignores. Shift is folded
@@ -3859,7 +3896,7 @@ mod tests {
             // with, because a space cannot be a token of a row.
             KeyCode::Char(' ') => "␣".to_string(),
             KeyCode::Char(c) if ctrl => format!("C-{c}"),
-            KeyCode::Char(c @ ('c' | 'v')) if command => format!("D-{c}"),
+            KeyCode::Char(c @ ('c' | 'v' | 's')) if command => format!("D-{c}"),
             KeyCode::Char(c) if alt => format!("M-{c}"),
             KeyCode::Char(c) => c.to_string(),
             // A gesture of its own since `backspace_word` inspects Alt on it:
@@ -3958,10 +3995,10 @@ mod tests {
         };
         event.modifiers &= match event.code {
             KeyCode::Char(_) if event.modifiers.contains(KeyModifiers::CTRL) => KeyModifiers::CTRL,
-            // Command is a gesture of its own on these two and nowhere else,
+            // Command is a gesture of its own on these three and nowhere else,
             // which is the claim `label` makes about them and this is where it
             // is checked.
-            KeyCode::Char('c' | 'v') if event.modifiers.contains(KeyModifiers::SUPER) => {
+            KeyCode::Char('c' | 'v' | 's') if event.modifiers.contains(KeyModifiers::SUPER) => {
                 KeyModifiers::SUPER
             }
             KeyCode::Char(_) => KeyModifiers::ALT,
