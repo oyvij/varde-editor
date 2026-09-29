@@ -202,8 +202,22 @@ one column can hold: a diagnostic and the voice's place both take it first.
 _Avoid_: gutter indicator, diff decoration, modified marker, git gutter
 
 **Cheatsheet**:
-The read-only reminder of the keys, tucked into the editor's top-right and hidden while inserting.
+The read-only reminder of the keys that work in the current view — motions, chords, the gestures
+pressed in a pane. It takes the AI pane's place when asked for, with the AI session still running
+behind it, and it scrolls and takes focus like any pane. It lists keys and never Commands.
 _Avoid_: help, legend, hints, key list
+
+**Command**:
+A word typed after `:` that does one thing wherever it is typed — `minimap`, `ai`, `story`. Not a
+key: a key means something in the pane it is pressed in, and a Command does not.
+_Avoid_: ex command, action, key
+
+**Command list**:
+The list under the `:` line of every Command that belongs to the current view — whether or
+not it would do anything right now — narrowed with each character typed. The arrow keys
+and Enter choose one, which fills the line; it runs only on the Enter after that, so the list finds
+a Command and never runs one. It lists Commands and never keys.
+_Avoid_: dropdown, completion, command palette (the palette is a different thing)
 
 **Minimap**:
 A far-off mirror of the whole file down the editor's right-hand edge, two lines to a row and four
@@ -329,6 +343,12 @@ workspace forgets everything between runs and seeds nothing, measures no Risk un
 told to remember — one that remembers is a project
 (`docs/adr/0016-a-bare-workspace-leaves-nothing-behind.md`).
 _Avoid_: bare-bone instance, temp instance, scratch workspace, editor mode
+
+**Single-file editor**:
+Varde opened on one file rather than a folder: the editor alone, full screen, with every editor
+capability and no other pane. It writes nothing but the file itself, remembers nothing between runs,
+and gives a Language server the file's own folder. Not a workspace — there is no tree to be one.
+_Avoid_: file mode, lite mode, bare file, scratch editor
 
 **Sidecar**:
 Where a Bare workspace's own state lives — under `~/.varde/paths/`, named for the folder and the
