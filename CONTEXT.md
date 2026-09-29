@@ -54,7 +54,7 @@ _Avoid_: selected file, tree highlight
 **Corner**:
 The one pane-sized slot beneath the file tree, at the tree's width, taking its columns from the
 shell. It names its occupant — the Risk list, the Buffers pane, the Cursor history, the Frames, the
-Breakpoint list or the Diagnostic list — or nothing at all, so "both on screen at once" is not a state it can hold and
+Breakpoint list, the Diagnostic list or the Conflict list — or nothing at all, so "both on screen at once" is not a state it can hold and
 asking for one while another shows is a replacement. Every occupant is the same rectangle: which
 pane is in the Corner changes what a click means, never where the Corner is.
 _Avoid_: the risk pane's slot, bottom-left pane, second sidebar
@@ -208,6 +208,18 @@ not — so every place a file was changed is visible while editing it. It answer
 disk, and a file the commit has no copy of carries none. The quietest of the three marks the gutter's
 one column can hold: a diagnostic and the voice's place both take it first.
 _Avoid_: gutter indicator, diff decoration, modified marker, git gutter
+
+**Conflict**:
+A region of a file's text that git's merge left undecided — a current side and an incoming side,
+and sometimes their common ancestor, between marker lines. Drawn as an overlay with its sides
+labelled, but only ever text: accepting a side is an edit to the buffer like any other, and nothing
+Varde does stages it.
+_Avoid_: merge conflict marker, hunk, clash
+
+**Conflict list**:
+The Corner occupant listing every file git reports as unmerged and, under each, the Conflicts still
+in its text. A file whose Conflicts are all gone stays listed until git stops reporting it.
+_Avoid_: merge editor, conflicts pane, unmerged files
 
 **Diagnostic**:
 One Language server's report of something at a range in a file, with a Severity: Error, Warning,
