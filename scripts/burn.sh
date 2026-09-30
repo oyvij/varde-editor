@@ -159,6 +159,7 @@ while :; do
   timeout "$TIMEOUT" claude -p "/mattpocock-skills:implement GitHub issue #$n on $REPO — read it with \`gh issue view $n --comments\`.
 Implement this issue only. You are running unattended: nobody will answer a question, so make the reasonable call and note it in the commit message.
 Commit to the current branch, bumping the version as AGENTS.md says. Do not push, switch branches, open a PR, or edit, comment on or close any issue — the loop that started you does that.
+Run every command, test suite and review in the foreground and wait for it there. This session is headless: it exits the moment you end your turn, so anything left running in the background — and any notification you would wait for — is lost, and uncommitted work is thrown away.
 If you cannot work at all because your tools are failing — commands refused, erroring or getting no verdict, as opposed to the issue being hard — change nothing and end your final message with a line reading exactly BURN-BLOCKED." \
     --permission-mode "$PERMISSION_MODE" --output-format stream-json --verbose </dev/null 2>"$LOGS/burn-$n.err" |
     tee "$LOGS/burn-$n.jsonl" | jq --unbuffered -rR --arg chat "$CHAT" --arg tool "$TOOL" --arg off "$OFF" "$PRETTY" |
@@ -166,6 +167,13 @@ If you cannot work at all because your tools are failing — commands refused, e
     status=${PIPESTATUS[0]}
 
   commits=$(git rev-list --count "$prev..HEAD")
+  # Every path below resets the worktree; what the session left uncommitted is kept first.
+  git add -A
+  if ! git diff --cached --quiet; then
+    git diff --cached --binary >"$LOGS/burn-$n.patch"
+    log "#$n: kept what the session left uncommitted as $LOGS/burn-$n.patch"
+  fi
+  git reset -q
   # A session that died without doing anything is a broken tool (a usage limit, an auth failure),
   # not a hard issue: stop rather than mark every remaining issue as one a human must take.
   if ((status != 0 && status != 124 && commits == 0)); then
