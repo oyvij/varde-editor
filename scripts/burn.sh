@@ -8,6 +8,7 @@
 #   scripts/burn.sh              run the whole queue
 #   scripts/burn.sh --dry-run    print the order it would take and stop
 #   scripts/burn.sh 107 111      run only these issues, in the queue's order
+#   scripts/burn.sh --stop       from any terminal: stop a running loop once its current issue ends
 #
 # Environment: BURN_BRANCH (burn), BURN_TIMEOUT per issue (90m), BURN_PERMISSION_MODE (auto),
 # BURN_EXCLUDE_PARENTS — specs whose sub-issues belong on another branch (45, the debugger),
@@ -24,18 +25,28 @@ RETRIES=${BURN_RETRIES:-3}
 RETRY_WAIT=${BURN_RETRY_WAIT:-15m}
 
 DRY_RUN=0
+STOP=0
 ONLY=()
 for arg in "$@"; do
   case $arg in
     --dry-run) DRY_RUN=1 ;;
+    --stop) STOP=1 ;;
     [0-9]*) ONLY+=("$arg") ;;
-    *) echo "usage: $0 [--dry-run] [issue...]" >&2; exit 2 ;;
+    *) echo "usage: $0 [--dry-run | --stop] [issue...]" >&2; exit 2 ;;
   esac
 done
 
 ROOT=$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")
 WT=$ROOT/.claude/worktrees/$BRANCH
 LOGS=$ROOT/.claude/worktrees/$BRANCH-logs
+# The running loop looks for this file before it starts each issue and before each retry wait.
+STOP_FILE=$LOGS/stop
+if ((STOP)); then
+  mkdir -p "$LOGS"
+  touch "$STOP_FILE"
+  echo "burn stops once its current issue ends (remove $STOP_FILE to cancel)"
+  exit 0
+fi
 REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner)
 
 command -v jq >/dev/null || { echo "burn needs jq to stream the sessions" >&2; exit 1; }
@@ -122,6 +133,7 @@ if [[ -n $(git status --porcelain) ]]; then
   exit 1
 fi
 git switch -C "$BRANCH" "$base"
+rm -f "$STOP_FILE" # a stop asked of an earlier run is not a stop asked of this one
 log "burning ${#queue[@]} issue(s) on $BRANCH from $base"
 
 ensure_pr() {
@@ -148,6 +160,11 @@ failures=0
 blocked_runs=0
 landed=()
 while :; do
+  if [[ -e $STOP_FILE ]]; then
+    rm "$STOP_FILE"
+    log "stopped on request (burn.sh --stop)"
+    break
+  fi
   n=$(next_issue)
   [[ -z $n ]] && break
   done_here[$n]=1
@@ -196,6 +213,7 @@ If you cannot work at all because your tools are failing — commands refused, e
     fi
     log "#$n: the session's tools were down; retrying in $RETRY_WAIT ($blocked_runs/$RETRIES)"
     unset "done_here[$n]"
+    [[ -e $STOP_FILE ]] && continue # the check at the top of the loop stops it without the wait
     sleep "$RETRY_WAIT"
     continue
   fi
