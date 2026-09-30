@@ -850,13 +850,14 @@ pub enum Event {
     /// [`Event::EditorKey`] because `d` and `b` are text in insert mode, which
     /// is exactly the mode `db` cannot be typed in.
     EditorDeleteWord,
-    /// `C-z` in a comment's body. Its own event rather than a spelling of
-    /// [`Event::EditorKey`] for the reason [`Event::EditorDeleteWord`] is one,
-    /// and one step further: the body is pinned to insert mode, so `u` is a
-    /// letter of the comment and there is no mode to leave first. The editor's
-    /// own `u` still goes through [`editor::Buffer::key`] — it has a normal
-    /// mode to be pressed in, so nothing there needs this.
+    /// `C-z` or `D-z`, in any buffer and either mode. Its own event rather
+    /// than a spelling of [`Event::EditorKey`] for the reason
+    /// [`Event::EditorDeleteWord`] is one: while inserting `u` is a letter.
+    /// The editor's own `u` still goes through [`editor::Buffer::key`].
     EditorUndo,
+    /// `C-S-z` or `D-S-z` — [`Event::EditorUndo`]'s other half, for its
+    /// reason. `U` is the modifier-free spelling, through the buffer's keys.
+    EditorRedo,
     EditorEscape,
     /// `:preview` — reads the open markdown file as the document it describes,
     /// or as the characters it holds. No key binding: the cheatsheet is the
@@ -3224,6 +3225,7 @@ fn on_snippet(mut next: State, event: Event, wheeled: bool) -> Answered {
         Event::EditorBackspace => snippet.backspace(),
         Event::EditorDeleteWord => snippet.delete_word_back(),
         Event::EditorUndo => snippet.undo(),
+        Event::EditorRedo => snippet.redo(),
         Event::EditorArrow(direction) => snippet.arrow(direction),
         Event::EditorWord(direction) => snippet.word_motion(editor::Word::toward(direction)),
         Event::EditorEscape => snippet.escape(),
@@ -3257,6 +3259,7 @@ fn on_comment_body(mut next: State, event: Event, wheeled: bool) -> Answered {
         Event::EditorBackspace => body.backspace(),
         Event::EditorDeleteWord => body.delete_word_back(),
         Event::EditorUndo => body.undo(),
+        Event::EditorRedo => body.redo(),
         Event::EditorArrow(direction) => body.arrow(direction),
         Event::EditorWord(direction) => body.word_motion(editor::Word::toward(direction)),
         // One edit, not a run of keys: this is the arm that stops the first
@@ -5814,7 +5817,11 @@ fn on_editor_key(state: &State, mut next: State, event: Event, wheeled: bool) ->
         // visual exists only to set up an edit; everything that only reads —
         // motions, `/`, `n`/`N`, yanking a selection — falls through past
         // this arm and keeps working.
-        Event::EditorKey('a' | 'o' | 'O' | 'I' | 'x' | 'r' | 'd' | 'D' | 'p' | 'P' | 'u' | 'V')
+        Event::EditorKey(
+            'a' | 'o' | 'O' | 'I' | 'x' | 'r' | 'd' | 'D' | 'p' | 'P' | 'u' | 'U' | 'V',
+        )
+        | Event::EditorUndo
+        | Event::EditorRedo
             if previewing(state) =>
         {
             next.refusal = Some(preview::Refusal::ReadOnlyPreview);
@@ -5825,6 +5832,21 @@ fn on_editor_key(state: &State, mut next: State, event: Event, wheeled: bool) ->
             // motion arm below is to `gl`.
             if let Some(buffer) = current(&mut next) {
                 buffer.clear_pending();
+            }
+            vec![]
+        }
+
+        // After the refusal above, and guarded as the backspace is: a diff and
+        // a walked Site are read-only about their contents.
+        Event::EditorUndo | Event::EditorRedo => {
+            if state.diff.is_none() && state.walking.is_none() {
+                if let Some(buffer) = current(&mut next) {
+                    if matches!(event, Event::EditorUndo) {
+                        buffer.undo();
+                    } else {
+                        buffer.redo();
+                    }
+                }
             }
             vec![]
         }

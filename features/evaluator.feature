@@ -173,6 +173,12 @@ Feature: The Evaluator
       When I type "ggdd"
       Then the Snippet is "first * 2"
 
+    Scenario: The Snippet undoes and redoes with the modifier keys
+      Given I type "ggdd"
+      And I press "Ctrl+z"
+      When I press "Ctrl+Shift+z"
+      Then the Snippet is "first * 2"
+
   Rule: The Evaluator output shows what was printed, then the value, and each run replaces it
 
     Background:

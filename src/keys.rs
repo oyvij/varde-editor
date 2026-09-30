@@ -126,7 +126,7 @@ pub const CHEATSHEET: [(&str, &str, &[View]); 44] = [
         &[View::Review, View::Story],
     ),
     ("* gr", "project", &[View::Edit]),
-    ("u", "undo", &[View::Edit]),
+    ("u U C-z C-S-z", "undo / redo", &[View::Edit]),
     // The second `K` is on the row the first is on: it is the same question
     // read further, and a key nobody can discover is a key nobody uses.
     ("K K", "what is this / read it", &[View::Edit]),
@@ -405,8 +405,12 @@ pub const BRANCH_FILTER_HINT: &str = "type to filter";
 /// rather than a cheatsheet row: the box exists only while it is up, and the
 /// gesture that opens it (`c`, or a gutter drag) is what the cheatsheet spends
 /// a row on.
-pub const COMMENT_BOX_KEYS: [(&str, &str); 3] =
-    [("C-s", "file"), ("Esc", "discard"), ("C-z", "undo")];
+pub const COMMENT_BOX_KEYS: [(&str, &str); 4] = [
+    ("C-s", "file"),
+    ("Esc", "discard"),
+    ("C-z", "undo"),
+    ("C-S-z", "redo"),
+];
 
 /// The keys the results box answers and the word it says for each — here for
 /// the reason [`TOOL_LIST_KEYS`] is here: the box exists only while a search
@@ -1320,10 +1324,9 @@ fn comment_body(drafts: &mut Drafts, event: KeyEvent) -> Vec<Event> {
     }
     // The box's second Ctrl key, and for the first one's reason: every letter in
     // the body is text, so `u` is a letter of the comment and undo cannot have
-    // the key the editor gives it. The body is always inserting, so unlike the
-    // editor there is no mode this has to ask about.
-    if event.modifiers.contains(KeyModifiers::CTRL) && event.code == KeyCode::Char('z') {
-        return vec![Event::EditorUndo];
+    // the key the editor gives it.
+    if let Some(undo) = undo_key(event) {
+        return vec![undo];
     }
     // What Option+arrow actually sends on macOS — `^[b` and `^[f` — for the
     // reason [`word_motion_alias`] gives: Varde cannot ask for Option to be
@@ -1819,7 +1822,23 @@ fn ctrl_or_command(event: KeyEvent) -> bool {
         .intersects(KeyModifiers::CTRL | KeyModifiers::SUPER)
 }
 
+/// Undo and redo as every editor outside vim spells them, in either mode:
+/// `u` and `U` are letters while inserting. Ctrl and Command are aliases here
+/// too. Redo is Shift on top, which arrives as `Z` once [`shifted`] has run —
+/// and as plain `C-z` from a terminal that folds Shift away, where `U` is the
+/// way to redo.
+fn undo_key(event: KeyEvent) -> Option<Event> {
+    match event.code {
+        KeyCode::Char('z') if ctrl_or_command(event) => Some(Event::EditorUndo),
+        KeyCode::Char('Z') if ctrl_or_command(event) => Some(Event::EditorRedo),
+        _ => None,
+    }
+}
+
 fn editor_pane_key(event: KeyEvent) -> Vec<Event> {
+    if let Some(undo) = undo_key(event) {
+        return vec![undo];
+    }
     match event.code {
         // Not claimed globally: with a hosted pane focused Ctrl+C is the
         // child's interrupt, and reaches it as bytes.
@@ -2135,6 +2154,20 @@ mod tests {
                 KeyCode::Tab
             ]
         );
+    }
+
+    #[test]
+    fn undo_and_redo_have_a_modifier_spelling_in_either_mode() {
+        let inserting = crate::update(&editing(), Event::EditorKey('i')).0;
+        let shift = |event: KeyEvent| event.modifiers(event.modifiers | KeyModifiers::SHIFT);
+        for state in [editing(), inserting.clone()] {
+            for undo in [ctrl('z'), cmd('z')] {
+                assert_eq!(press(&state, undo), vec![Event::EditorUndo]);
+                assert_eq!(press(&state, shift(undo)), vec![Event::EditorRedo]);
+            }
+        }
+        assert_eq!(press(&editing(), plain('U')), vec![Event::EditorKey('U')]);
+        assert_eq!(press(&inserting, plain('u')), vec![Event::EditorKey('u')]);
     }
 
     // A paste into the open buffer is one edit, not the keystrokes it is
@@ -3951,6 +3984,11 @@ mod tests {
             // The cheatsheet spells Space as the glyph its chords are written
             // with, because a space cannot be a token of a row.
             KeyCode::Char(' ') => "␣".to_string(),
+            // Command is Ctrl's alias on undo and redo, so both fold into the
+            // Ctrl gesture, and redo's Shift is spelled rather than read off
+            // the `Z` it became.
+            KeyCode::Char('z') if ctrl || command => "C-z".to_string(),
+            KeyCode::Char('Z') if ctrl || command => "C-S-z".to_string(),
             KeyCode::Char(c) if ctrl => format!("C-{c}"),
             KeyCode::Char(c @ ('c' | 'v' | 's' | 'd')) if command => format!("D-{c}"),
             KeyCode::Char(c) if alt => format!("M-{c}"),
@@ -4049,6 +4087,13 @@ mod tests {
             | KeyCode::KeypadBegin => KeyCode::CapsLock,
             code => code,
         };
+        // Command is Ctrl's alias on undo and redo, the claim `label` makes by
+        // spelling both `C-`.
+        if matches!(event.code, KeyCode::Char('z' | 'Z'))
+            && event.modifiers.contains(KeyModifiers::SUPER)
+        {
+            event.modifiers = (event.modifiers - KeyModifiers::SUPER) | KeyModifiers::CTRL;
+        }
         event.modifiers &= match event.code {
             KeyCode::Char(_) if event.modifiers.contains(KeyModifiers::CTRL) => KeyModifiers::CTRL,
             // Command is a gesture of its own on these four and nowhere else,

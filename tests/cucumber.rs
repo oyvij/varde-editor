@@ -2852,6 +2852,10 @@ fn named_key(key: &str) -> Option<terminput::KeyEvent> {
         "Ctrl+p" => plain(terminput::KeyCode::Char('p')).modifiers(terminput::KeyModifiers::CTRL),
         "Ctrl+s" => plain(terminput::KeyCode::Char('s')).modifiers(terminput::KeyModifiers::CTRL),
         "Ctrl+z" => plain(terminput::KeyCode::Char('z')).modifiers(terminput::KeyModifiers::CTRL),
+        // The base key and Shift as separate facts, the way the Kitty protocol
+        // reports it: the router applies the shift on the way in.
+        "Ctrl+Shift+z" => plain(terminput::KeyCode::Char('z'))
+            .modifiers(terminput::KeyModifiers::CTRL | terminput::KeyModifiers::SHIFT),
         "Escape" => plain(terminput::KeyCode::Esc),
         "Enter" => plain(terminput::KeyCode::Enter),
         "Backspace" => plain(terminput::KeyCode::Backspace),
@@ -5212,6 +5216,7 @@ fn give_tree_pane_focus(world: &mut VardeWorld) {
 
 // ---- F11 / F12: keyboard and row actions ----
 
+#[given(expr = "I type {string}")]
 #[when(expr = "I type {string}")]
 fn type_text(world: &mut VardeWorld, text: String) {
     // Bytes are what a hosted pane's child receives. The Snippet is Varde's
