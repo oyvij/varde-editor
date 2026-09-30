@@ -75,7 +75,7 @@ pub struct Drafts {
 /// surface does not. It lives
 /// here rather than in the renderer so a test can hold it to the bindings
 /// above; `ui` only draws it, filtered to the view on screen.
-pub const CHEATSHEET: [(&str, &str, &[View]); 45] = [
+pub const CHEATSHEET: [(&str, &str, &[View]); 47] = [
     ("i a o O x", "edit", &[View::Edit]),
     ("w b e", "word", &[View::Edit]),
     ("gg G", "file ends", &[View::Edit]),
@@ -239,6 +239,9 @@ pub const CHEATSHEET: [(&str, &str, &[View]); 45] = [
         "tools",
         &[View::Edit, View::Review, View::Story],
     ),
+    // Inside a Conflict: current, incoming, both. Low, because a merge is
+    // the rare afternoon and the rows above are every day's.
+    ("cc ci cb", "accept conflict side", &[View::Edit]),
     // The keys the Diagnostic list answers with the keyboard in it, from
     // whichever view it was opened over. Last, because the palette's `i` that
     // opens it is drawn in the palette itself, and a short window's rows go to
@@ -246,6 +249,12 @@ pub const CHEATSHEET: [(&str, &str, &[View]); 45] = [
     (
         "e w i h j k Enter",
         "diagnostic list: severity, row, go",
+        &[View::Edit, View::Review, View::Story],
+    ),
+    // The Conflict list's, last for the Diagnostic list's reason.
+    (
+        "j k Enter",
+        "conflict list: row, go",
         &[View::Edit, View::Review, View::Story],
     ),
 ];
@@ -1042,6 +1051,7 @@ fn child_owns_keys(state: &State, drafts: &Drafts) -> bool {
             | Pane::Breakpoints
             | Pane::Frames
             | Pane::Diagnostics
+            | Pane::Conflicts
             | Pane::Variables => false,
         }
 }
@@ -1803,6 +1813,7 @@ fn claims_colon(state: &State) -> bool {
         | Pane::Breakpoints
         | Pane::Frames
         | Pane::Diagnostics
+        | Pane::Conflicts
         | Pane::Variables => true,
         Pane::Ai | Pane::Terminal | Pane::Output => false,
     }
@@ -1840,10 +1851,22 @@ fn arrow_event(state: &State, event: KeyEvent, alt: bool, shift: bool) -> Option
         // list as well, in the Strip rather than the corner: the arrows reach
         // a tree the same way they reach a flat list, because what they move
         // is the selection either way.
-        (Pane::Breakpoints | Pane::Frames | Pane::Diagnostics | Pane::Variables, false) => {
-            list_arrow(direction)
-        }
-        (Pane::Breakpoints | Pane::Frames | Pane::Diagnostics | Pane::Variables, true) => vec![],
+        (
+            Pane::Breakpoints
+            | Pane::Frames
+            | Pane::Diagnostics
+            | Pane::Conflicts
+            | Pane::Variables,
+            false,
+        ) => list_arrow(direction),
+        (
+            Pane::Breakpoints
+            | Pane::Frames
+            | Pane::Diagnostics
+            | Pane::Conflicts
+            | Pane::Variables,
+            true,
+        ) => vec![],
         // A hosted pane's arrows went to its child; see below.
         (Pane::Ai | Pane::Terminal | Pane::Output, _) => vec![],
     })
@@ -1897,6 +1920,7 @@ fn pane_key(state: &State, event: KeyEvent) -> Vec<Event> {
         | Pane::Breakpoints
         | Pane::Frames
         | Pane::Diagnostics
+        | Pane::Conflicts
         | Pane::Variables => list_pane_key(event),
         // A hosted pane never arrives here: with nothing of Varde's own
         // collecting, `child_owns_keys` sent the key to `to_child`, and with

@@ -611,6 +611,7 @@ impl VardeWorld {
             | Pane::Breakpoints
             | Pane::Frames
             | Pane::Diagnostics
+            | Pane::Conflicts
             | Pane::Variables
             | Pane::Output
             | Pane::Terminal => self.screen.clone(),
@@ -2293,7 +2294,8 @@ fn pointer_at(
         | Pane::History
         | Pane::Breakpoints
         | Pane::Frames
-        | Pane::Diagnostics => (panes.corner, 0, 0),
+        | Pane::Diagnostics
+        | Pane::Conflicts => (panes.corner, 0, 0),
         Pane::Terminal | Pane::Variables => (panes.terminal, 0, 0),
         // The window itself, not the Snippet's own rectangle: the `+ 1` below
         // is the border every other pane's rectangle carries.
@@ -3782,6 +3784,7 @@ fn parse_pane(name: &str) -> Pane {
         "buffers" => Pane::Buffers,
         "history" => Pane::History,
         "diagnostics" => Pane::Diagnostics,
+        "conflicts" => Pane::Conflicts,
         other => panic!("unknown pane {other:?}"),
     }
 }
@@ -5966,7 +5969,8 @@ fn drag_past(world: &mut VardeWorld, side: String, pane: String) {
         | Pane::History
         | Pane::Breakpoints
         | Pane::Frames
-        | Pane::Diagnostics => world.panes().corner,
+        | Pane::Diagnostics
+        | Pane::Conflicts => world.panes().corner,
         Pane::Evaluator => world.panes().evaluator,
     };
     // Straight out from where the button went down, which is the gesture a
@@ -18021,4 +18025,202 @@ fn click_tree_count(world: &mut VardeWorld, severity: String) {
     }
     world.report(mouse::Kind::LeftDown, column, tree.y);
     world.report(mouse::Kind::LeftUp, column, tree.y);
+}
+
+// ---- Conflicts ----
+
+/// What the edge's git poll tells the core: the files as unmerged, and the
+/// Conflicts in each as it read them off the disk — the project's contents.
+#[given("git reports as unmerged:")]
+#[when("git reports as unmerged:")]
+fn git_reports_unmerged(world: &mut VardeWorld, step: &Step) {
+    let files: Vec<String> = step
+        .table()
+        .expect("table")
+        .rows
+        .iter()
+        .map(|row| row[0].trim().to_string())
+        .collect();
+    world.state.repo = Some(
+        files
+            .iter()
+            .map(|path| GitFile {
+                path: path.clone(),
+                status: GitStatus::Conflicted,
+            })
+            .collect(),
+    );
+    world.state.conflicts_on_disk = files
+        .iter()
+        .map(|file| {
+            let text = world
+                .project
+                .iter()
+                .find(|(name, _)| name == file)
+                .map(|(_, contents)| contents.clone())
+                .unwrap_or_default();
+            (abs(world, file), varde::conflict::find(text.split('\n')))
+        })
+        .collect();
+}
+
+/// A drawing as the Scenarios name it: the kind of thing drawn, never its copy.
+fn drawn_as(world: &VardeWorld, line: usize) -> &'static str {
+    use varde::conflict::Drawn;
+    match varde::conflict::drawn(&world.state, line) {
+        None => "text",
+        Some(Drawn::Current) => "current",
+        Some(Drawn::Ancestor) => "ancestor",
+        Some(Drawn::Incoming) => "incoming",
+        Some(Drawn::Bar(pieces)) if pieces.is_empty() => "separator",
+        Some(Drawn::Bar(pieces)) if pieces.iter().any(|(_, side)| side.is_some()) => "buttons",
+        Some(Drawn::Bar(_)) => "bar",
+    }
+}
+
+#[then("the editor draws the lines as:")]
+fn editor_draws_lines(world: &mut VardeWorld, step: &Step) {
+    for row in step.table().expect("table").rows.iter().skip(1) {
+        let line: usize = row[0].trim().parse().expect("a line");
+        assert_eq!(drawn_as(world, line), row[1].trim(), "line {line}");
+    }
+}
+
+#[then(expr = "the editor draws line {int} as {string}")]
+fn editor_draws_line(world: &mut VardeWorld, line: usize, drawn: String) {
+    assert_eq!(drawn_as(world, line), drawn);
+}
+
+#[then(expr = "the Conflict at line {int} is between {string} and {string}")]
+fn conflict_between(world: &mut VardeWorld, line: usize, current: String, incoming: String) {
+    let conflict = current_buffer(world)
+        .conflicts()
+        .iter()
+        .find(|conflict| conflict.start == line)
+        .expect("a Conflict there")
+        .clone();
+    assert_eq!((conflict.current, conflict.incoming), (current, incoming));
+}
+
+#[then(expr = "the buffer holds {string}")]
+fn buffer_holds_inline(world: &mut VardeWorld, text: String) {
+    assert_eq!(current_buffer(world).shown(), text.replace("\\n", "\n"));
+}
+
+/// On the button's first column, through the hit-test: the pieces are laid
+/// from where the text starts, and the bar is the first Conflict's.
+#[when(expr = "I click the {string} button on the Conflict's bar")]
+fn click_conflict_button(world: &mut VardeWorld, side: String) {
+    let side = match side.as_str() {
+        "current" => varde::conflict::Side::Current,
+        "incoming" => varde::conflict::Side::Incoming,
+        "both" => varde::conflict::Side::Both,
+        other => panic!("no such side: {other}"),
+    };
+    let line = current_buffer(world).conflicts()[0].start;
+    let Some(varde::conflict::Drawn::Bar(pieces)) = varde::conflict::drawn(&world.state, line)
+    else {
+        panic!("line {line} is not drawn as a bar");
+    };
+    let column = 1 + pieces
+        .iter()
+        .take_while(|(_, button)| *button != Some(side))
+        .map(|(piece, _)| piece.chars().count())
+        .sum::<usize>();
+    let (x, y) = pointer_at(&world.state, &world.panes(), Pane::Editor, (line, column));
+    world.report(mouse::Kind::LeftDown, x, y);
+    world.report(mouse::Kind::LeftUp, x, y);
+}
+
+#[given("the Conflict list is shown")]
+#[when("I show the Conflict list")]
+fn conflict_list_is_shown(world: &mut VardeWorld) {
+    if world.state.corner != layout::Corner::Conflicts {
+        world.send(Event::ToggleConflictList);
+    }
+    assert_eq!(world.state.focus, Pane::Conflicts);
+}
+
+#[then("the Corner holds the Conflict list")]
+fn corner_holds_conflict_list(world: &mut VardeWorld) {
+    assert_eq!(world.state.corner, layout::Corner::Conflicts);
+}
+
+/// With a header row: a file row has no line.
+#[then("the Conflict list rows are:")]
+fn conflict_list_rows(world: &mut VardeWorld, step: &Step) {
+    let expected: Vec<(String, Option<usize>)> = step
+        .table()
+        .expect("table")
+        .rows
+        .iter()
+        .skip(1)
+        .map(|row| {
+            let line = match row[1].trim() {
+                "" => None,
+                line => Some(line.parse().expect("a line")),
+            };
+            (row[0].trim().to_string(), line)
+        })
+        .collect();
+    let listed: Vec<(String, Option<usize>)> = varde::conflict::listed(&world.state)
+        .into_iter()
+        .map(|(path, conflict)| {
+            (
+                varde::relative(&world.state, &path),
+                conflict.map(|conflict| conflict.start),
+            )
+        })
+        .collect();
+    assert_eq!(listed, expected);
+}
+
+/// The index of the row naming a file's Conflict at a line, or the file's own.
+fn conflict_row(world: &VardeWorld, file: &str, line: Option<usize>) -> usize {
+    let path = abs(world, file);
+    varde::conflict::listed(&world.state)
+        .iter()
+        .position(|(at, conflict)| *at == path && conflict.map(|conflict| conflict.start) == line)
+        .unwrap_or_else(|| panic!("no row for {file} {line:?}"))
+}
+
+/// Moved to with the keyboard, the way a reader gets there.
+fn select_conflict_row(world: &mut VardeWorld, index: usize) {
+    world.state.focus = Pane::Conflicts;
+    while world.state.conflicts_selection > index {
+        world.send(Event::Key('k'));
+    }
+    while world.state.conflicts_selection < index {
+        world.send(Event::Key('j'));
+    }
+}
+
+#[given(expr = "the Conflict list selection is on {string} line {int}")]
+fn conflict_selection_on(world: &mut VardeWorld, file: String, line: usize) {
+    let index = conflict_row(world, &file, Some(line));
+    select_conflict_row(world, index);
+}
+
+#[given(expr = "the Conflict list selection is on the row for {string}")]
+fn conflict_selection_on_file(world: &mut VardeWorld, file: String) {
+    let index = conflict_row(world, &file, None);
+    select_conflict_row(world, index);
+}
+
+#[then(expr = "the Conflict list selection is on {string} line {int}")]
+fn conflict_selection_should_be_on(world: &mut VardeWorld, file: String, line: usize) {
+    assert_eq!(
+        world.state.conflicts_selection,
+        conflict_row(world, &file, Some(line))
+    );
+}
+
+/// Through the hit-test, a press and a release on the row's text.
+#[when(expr = "I click the Conflict list row for {string} line {int}")]
+fn click_conflict_row(world: &mut VardeWorld, file: String, line: usize) {
+    let index = conflict_row(world, &file, Some(line));
+    let corner = world.panes().corner;
+    let row = corner.y + 1 + (index - world.state.conflicts_scroll) as u16;
+    world.report(mouse::Kind::LeftDown, corner.x + 2, row);
+    world.report(mouse::Kind::LeftUp, corner.x + 2, row);
 }

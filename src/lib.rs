@@ -15,6 +15,7 @@
 //! touches the terminal, the pty, the filesystem or git.
 
 pub mod authorship;
+pub mod conflict;
 pub mod debug;
 pub mod editor;
 pub mod filter;
@@ -126,6 +127,9 @@ pub enum Pane {
     /// The Diagnostic list, in the same corner: a row names a place a
     /// Language server said something about.
     Diagnostics,
+    /// The Conflict list, in the same corner: a row names a Conflict still in
+    /// an unmerged file.
+    Conflicts,
     /// The Evaluator's Snippet, in the floating window over the editor. Its
     /// own variant rather than a mode of the editor's: the editor goes on
     /// showing its file behind it, so a click lands in one or the other and
@@ -259,6 +263,7 @@ pub const PALETTE: [(&str, &[(char, &str)]); 5] = [
             ('b', "Breakpoints"),
             // `i` because it is the one letter in the word still free.
             ('i', "Diagnostics"),
+            ('m', "Merge conflicts"),
             ('a', "AI"),
             ('l', "  Tall"),
         ],
@@ -682,6 +687,11 @@ pub enum Event {
     ClickFrameRow(usize),
     /// A click on a row of the Diagnostic list — the Risk list's shape.
     ClickDiagnosticRow(usize),
+    /// A click on a row of the Conflict list — the Risk list's shape.
+    ClickConflictRow(usize),
+    /// A button on a Conflict's bar: the side it accepts, for the Conflict the
+    /// caret was put in by the same click.
+    AcceptConflict(conflict::Side),
     /// A click on a row of the Variables, the same shape again.
     ClickVariablesRow(usize),
     /// A Group tab on the Strip's top border, clicked or reached by its chord:
@@ -1104,6 +1114,8 @@ pub enum Event {
     ToggleBreakpointList,
     /// The Diagnostic list, on or off, opening on [`lsp::opening`].
     ToggleDiagnosticList,
+    /// The Conflict list, on or off — the same corner again.
+    ToggleConflictList,
     /// The Diagnostic list in the Corner showing one Severity: its letter, a
     /// click on its Severity label, or on its count on the tree's border.
     ShowDiagnostics(lsp::Severity),
@@ -2333,6 +2345,15 @@ pub struct State {
     /// its place rather than sending it back to the top.
     pub diagnostics_selection: usize,
     pub diagnostics_scroll: usize,
+    /// The same two for the Conflict list, an index into `conflict::listed`
+    /// for the same reason: resolving the Conflict it is on leaves it on the
+    /// row that took its place.
+    pub conflicts_selection: usize,
+    pub conflicts_scroll: usize,
+    /// The Conflicts in each unmerged file as the edge last read it off the
+    /// disk, on the git poll's thread. Told, never written here; an open
+    /// Buffer's own are read instead.
+    pub conflicts_on_disk: BTreeMap<PathBuf, Vec<conflict::Conflict>>,
     /// And for the Variables, which is a list in the Strip rather than in the
     /// corner but is one all the same — a row to open, and a first row on
     /// screen.
@@ -2657,6 +2678,9 @@ impl Default for State {
             frames_scroll: 0,
             diagnostics_selection: 0,
             diagnostics_scroll: 0,
+            conflicts_selection: 0,
+            conflicts_scroll: 0,
+            conflicts_on_disk: BTreeMap::new(),
             variables_selection: 0,
             variables_scroll: 0,
             adapters: BTreeMap::new(),
@@ -2897,6 +2921,16 @@ fn settle(mut next: State, mut effects: Vec<Effect>, wheeled: bool) -> (State, V
             next.diagnostics_scroll,
             next.diagnostics_selection,
             diagnostic_rows,
+            corner_rows(&next),
+        );
+        let conflict_rows = conflict::listed(&next).len();
+        next.conflicts_selection = next
+            .conflicts_selection
+            .min(conflict_rows.saturating_sub(1));
+        next.conflicts_scroll = layout::viewport(
+            next.conflicts_scroll,
+            next.conflicts_selection,
+            conflict_rows,
             corner_rows(&next),
         );
         let frame_rows = debug::frame_rows(&next).len();
@@ -4147,9 +4181,11 @@ fn on_key_3(state: &State, next: State, event: Event, _wheeled: bool) -> Answere
             })
         }
 
-        // The Frames' `j` and `k`, as every list in the corner has.
+        // The Frames' and the Conflict list's `j` and `k`, as every list in
+        // the corner has.
         Event::Key(key @ ('j' | 'k'))
-            if state.focus == Pane::Frames && state.modal == Modal::None =>
+            if matches!(state.focus, Pane::Frames | Pane::Conflicts)
+                && state.modal == Modal::None =>
         {
             Ok(match key {
                 'j' => update(state, Event::MoveSelection(Direction::Down)),
@@ -4315,6 +4351,7 @@ fn palette_command(next: State, entry: &str) -> Result<(State, Vec<Effect>), Sta
         "Cursor history" => Event::ToggleCursorHistory,
         "Breakpoints" => Event::ToggleBreakpointList,
         "Diagnostics" => Event::ToggleDiagnosticList,
+        "Merge conflicts" => Event::ToggleConflictList,
         // The tree's own `c` reaches this too, but only from the tree: the
         // palette is how it is reached from wherever the growing tree was
         // noticed, which is usually the pane being read rather than the tree.
@@ -4641,6 +4678,7 @@ fn on_submit_review(state: &State, mut next: State, event: Event, wheeled: bool)
             | Pane::Breakpoints
             | Pane::Frames
             | Pane::Diagnostics
+            | Pane::Conflicts
             | Pane::Variables => vec![],
         },
         Event::ClickLink { row, column } => editor::link_at(&row, column)
@@ -4854,6 +4892,7 @@ fn on_scroll(state: &State, mut next: State, event: Event, wheeled: bool) -> Ans
                     | Pane::Breakpoints
                     | Pane::Frames
                     | Pane::Diagnostics
+                    | Pane::Conflicts
                     | Pane::Variables => {
                         vec![]
                     }
@@ -4919,6 +4958,15 @@ fn on_scroll(state: &State, mut next: State, event: Event, wheeled: bool) -> Ans
                         direction,
                         state.diagnostics_scroll,
                         lsp::listed(state).len(),
+                        corner_rows(state),
+                    );
+                    vec![]
+                }
+                Pane::Conflicts => {
+                    next.conflicts_scroll = wheeled_to(
+                        direction,
+                        state.conflicts_scroll,
+                        conflict::listed(state).len(),
                         corner_rows(state),
                     );
                     vec![]
@@ -6077,7 +6125,7 @@ fn on_editor_key(state: &State, mut next: State, event: Event, wheeled: bool) ->
         // motions, `/`, `n`/`N`, yanking a selection — falls through past
         // this arm and keeps working.
         Event::EditorKey(
-            'a' | 'o' | 'O' | 'I' | 'x' | 'r' | 'd' | 'D' | 'p' | 'P' | 'u' | 'U' | 'V',
+            'a' | 'o' | 'O' | 'I' | 'x' | 'r' | 'd' | 'D' | 'p' | 'P' | 'u' | 'U' | 'V' | 'c',
         )
         | Event::EditorUndo
         | Event::EditorRedo
@@ -7728,6 +7776,10 @@ fn on_quit_force(state: &State, mut next: State, event: Event, wheeled: bool) ->
             };
             take_the_corner(state, &mut next, asked)
         }
+        Event::ToggleConflictList => {
+            next.conflicts_selection = 0;
+            take_the_corner(state, &mut next, layout::Corner::Conflicts)
+        }
         // Never a toggle: a letter or a label asks to see a Severity, and a
         // second press on the one showing is still asking to see it.
         Event::ShowDiagnostics(severity) => {
@@ -8729,6 +8781,16 @@ fn on_move_selection(state: &State, mut next: State, event: Event, wheeled: bool
             vec![]
         }
 
+        Event::MoveSelection(direction) if state.focus == Pane::Conflicts => {
+            let last = conflict::listed(state).len().saturating_sub(1);
+            next.conflicts_selection = match direction {
+                Direction::Down => (state.conflicts_selection + 1).min(last),
+                Direction::Up => state.conflicts_selection.saturating_sub(1),
+                _ => state.conflicts_selection.min(last),
+            };
+            vec![]
+        }
+
         Event::MoveSelection(direction) if state.focus == Pane::Frames => {
             let last = debug::frame_rows(state).len().saturating_sub(1);
             next.frames_selection = match direction {
@@ -8972,6 +9034,17 @@ fn on_activate_2(state: &State, mut next: State, event: Event, wheeled: bool) ->
             }
         }
 
+        // A Landing on the Conflict's first marker line, and so a Jump.
+        Event::Activate if state.focus == Pane::Conflicts => {
+            match conflict::landing(state, state.conflicts_selection) {
+                Some((path, at)) => {
+                    next.focus = Pane::Editor;
+                    vec![Effect::OpenAt { path, at }]
+                }
+                None => vec![],
+            }
+        }
+
         Event::Activate if state.focus == Pane::Risk => match risk::selected(state) {
             Some(function) => {
                 let path = state.root.join(&function.file);
@@ -9020,6 +9093,23 @@ fn on_activate_2(state: &State, mut next: State, event: Event, wheeled: bool) ->
             let (mut opened, effects) = update(&next, Event::Activate);
             opened.focus = Pane::Diagnostics;
             return Ok((opened, effects));
+        }
+
+        Event::ClickConflictRow(index) => {
+            next.focus = Pane::Conflicts;
+            next.conflicts_selection = index;
+            let (mut opened, effects) = update(&next, Event::Activate);
+            opened.focus = Pane::Conflicts;
+            return Ok((opened, effects));
+        }
+
+        // An edit to the Buffer and nothing else: nothing is saved, and
+        // nothing is ever staged.
+        Event::AcceptConflict(side) => {
+            if let Some(buffer) = current(&mut next) {
+                buffer.accept(side)
+            }
+            vec![]
         }
 
         Event::ClickFrameRow(index) => {
@@ -9167,6 +9257,7 @@ fn on_bytes(state: &State, next: State, event: Event, wheeled: bool) -> Answered
             | Pane::Breakpoints
             | Pane::Frames
             | Pane::Diagnostics
+            | Pane::Conflicts
             | Pane::Variables => vec![],
         },
 
@@ -9197,6 +9288,7 @@ fn on_pasted(state: &State, mut next: State, event: Event, wheeled: bool) -> Ans
                 | Pane::Breakpoints
                 | Pane::Frames
                 | Pane::Diagnostics
+                | Pane::Conflicts
                 | Pane::Variables => None,
             };
             match asked {
@@ -10032,6 +10124,7 @@ fn mouse_encoding(state: &State, pane: Pane) -> mouse::Encoding {
         | Pane::Breakpoints
         | Pane::Frames
         | Pane::Diagnostics
+        | Pane::Conflicts
         | Pane::Variables => mouse::Encoding::None,
     }
 }
@@ -13690,9 +13783,9 @@ mod tests {
             roomy.last().map(|(_, row)| row.as_str()),
             Some("   Esc  cancel")
         );
-        // 27 and not 26: with ten Panes entries the cancel line is the row a
-        // 26-row screen gives up, and it is the first row a short screen gives up.
-        assert!(palette_rows(27)
+        // 28 and not 26: with eleven Panes entries the cancel line is the row a
+        // 27-row screen gives up, and it is the first row a short screen gives up.
+        assert!(palette_rows(28)
             .iter()
             .any(|(_, row)| row == "   Esc  cancel"));
 

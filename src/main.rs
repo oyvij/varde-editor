@@ -321,7 +321,11 @@ fn git_status(root: &Path) -> Option<Vec<GitFile>> {
             .filter_map(|entry| {
                 let path = entry.path().ok()?.to_string();
                 let flags = entry.status();
-                let status = if flags.is_wt_new() {
+                // First: an unmerged file is also modified in the index and
+                // the tree, and what it needs is resolving.
+                let status = if flags.is_conflicted() {
+                    GitStatus::Conflicted
+                } else if flags.is_wt_new() {
                     GitStatus::Untracked
                 } else if flags.is_index_new() || flags.is_index_modified() {
                     GitStatus::Staged
@@ -334,6 +338,21 @@ fn git_status(root: &Path) -> Option<Vec<GitFile>> {
             })
             .collect(),
     )
+}
+
+/// The Conflicts in each unmerged file's text as it is on disk. A file that
+/// cannot be read as text is left out rather than read as having none, which
+/// would tick it resolved: a binary file's Conflict is not one Varde can draw.
+fn unmerged(root: &Path, files: &[GitFile]) -> BTreeMap<PathBuf, Vec<varde::conflict::Conflict>> {
+    files
+        .iter()
+        .filter(|file| file.status == GitStatus::Conflicted)
+        .filter_map(|file| {
+            let path = root.join(&file.path);
+            let text = std::fs::read_to_string(&path).ok()?;
+            Some((path, varde::conflict::find(text.split('\n'))))
+        })
+        .collect()
 }
 
 /// The hunks the range under the spine is made of, at Varde's pinned diff
@@ -766,6 +785,8 @@ struct Edge {
 /// a walk without opening the repository on the main loop.
 struct Polled {
     repo: Option<Vec<GitFile>>,
+    /// The Conflicts in each file `repo` names unmerged, read off the disk.
+    conflicts: BTreeMap<PathBuf, Vec<varde::conflict::Conflict>>,
     file_hunks: Arc<[story::FileHunks]>,
     ignored: BTreeSet<PathBuf>,
     branch: Option<String>,
@@ -1594,11 +1615,13 @@ fn refresh_git(
             || answer.ignored != state.ignored
             || answer.branch != state.branch
             || answer.committed != state.committed
+            || answer.conflicts != state.conflicts_on_disk
             || fresh_authorship != state.authorship;
         state.repo = answer.repo;
         state.file_hunks = answer.file_hunks;
         state.ignored = answer.ignored;
         state.committed = answer.committed;
+        state.conflicts_on_disk = answer.conflicts;
         state.authorship = fresh_authorship;
         // A commit that moved is what makes the figure worth recomputing, so the
         // core is told on the same poll rather than remembering the commit it
@@ -1658,8 +1681,10 @@ fn refresh_git(
         // they are compared here and an unchanged read hands back the very
         // `Arc` the core holds: the loop tells the two apart by pointer.
         let fresh = file_hunks(&repo, inventory, &named);
+        let status = git_status(&root);
         let _ = answer.send(Polled {
-            repo: git_status(&root),
+            conflicts: unmerged(&root, status.as_deref().unwrap_or_default()),
+            repo: status,
             file_hunks: if *fresh == *told { told } else { fresh.into() },
             ignored: ignored(&root, &contents),
             branch: head_branch(&repo),
@@ -2858,6 +2883,7 @@ fn grid_lines(edge: &Edge, pane: Pane, split: usize, upto: usize) -> Option<Vec<
         | Pane::Breakpoints
         | Pane::Frames
         | Pane::Diagnostics
+        | Pane::Conflicts
         | Pane::Variables => return None,
     };
     let (rows, columns) = screen.size();
@@ -2975,6 +3001,7 @@ fn perform_terminal(effect: Effect, split: usize, edge: &mut Edge) -> Option<Eff
             | Pane::Breakpoints
             | Pane::Frames
             | Pane::Diagnostics
+            | Pane::Conflicts
             | Pane::Variables => {}
         },
         other => return Some(other),

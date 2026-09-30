@@ -719,6 +719,16 @@ fn pressed(
             let at = place_in(state, panes, pane, (input.column, input.row));
             vec![Event::ClickText(at), Event::ToggleFold { all: false }]
         }
+        // A button on a Conflict's bar. The caret lands in the Conflict first,
+        // so which one it accepts is the one the cursor is in — the fold
+        // toggle's shape.
+        (Pane::Editor, _) if conflict_button(state, panes, input).is_some() => {
+            let at = place_in(state, panes, pane, (input.column, input.row));
+            conflict_button(state, panes, input)
+                .into_iter()
+                .flat_map(|side| [Event::ClickText(at), Event::AcceptConflict(side)])
+                .collect()
+        }
         // A diff is read-only and has no cursor to place.
         (Pane::Editor, _) if state.diff.is_none() && state.current_buffer.is_some() => {
             let at = place_in(state, panes, pane, (input.column, input.row));
@@ -745,6 +755,16 @@ fn pressed(
         (Pane::History, _) => pressed_in_history(state, panes, input),
         (Pane::Breakpoints, _) => pressed_in_breakpoints(state, panes, input),
         (Pane::Diagnostics, _) => pressed_in_diagnostics(state, panes, input),
+        (Pane::Conflicts, _) => {
+            let index = list_row(panes.corner, input.row, state.conflicts_scroll);
+            let on_a_row = input.row > panes.corner.y
+                && input.row < panes.corner.bottom().saturating_sub(1)
+                && index < crate::conflict::listed(state).len();
+            match on_a_row {
+                true => vec![Event::ClickConflictRow(index)],
+                false => vec![Event::ClickPane(Pane::Conflicts)],
+            }
+        }
         (Pane::Frames, _) => {
             let index = list_row(panes.corner, input.row, state.frames_scroll);
             let on_a_row = input.row > panes.corner.y
@@ -950,6 +970,31 @@ fn moved_by(at: u16, by: i32) -> u16 {
     (i32::from(at) + by).clamp(0, i32::from(u16::MAX)) as u16
 }
 
+/// Which side the button under the pointer accepts, when it is on a Conflict's
+/// bar. Counted from where the text starts and never scrolled sideways, as the
+/// bar is drawn.
+fn conflict_button(state: &State, panes: &Layout, input: Input) -> Option<crate::conflict::Side> {
+    let text = text_area(state, panes, Pane::Editor);
+    if !text.holds(input.column, input.row) {
+        return None;
+    }
+    let line = place_in(state, panes, Pane::Editor, (input.column, input.row)).line;
+    let crate::conflict::Drawn::Bar(pieces) = crate::conflict::drawn(state, line)? else {
+        return None;
+    };
+    let mut from = usize::from(input.column - text.x);
+    pieces.into_iter().find_map(|(piece, side)| {
+        let width = piece.chars().count();
+        match from < width {
+            true => Some(side),
+            false => {
+                from -= width;
+                None
+            }
+        }
+    })?
+}
+
 /// A Severity label on the Diagnostic list's top border, at the columns `ui`
 /// draws them from the same labels, or one of its rows.
 fn pressed_in_diagnostics(state: &State, panes: &Layout, input: Input) -> Vec<Event> {
@@ -1043,6 +1088,7 @@ fn dragged(
         | Pane::Breakpoints
         | Pane::Frames
         | Pane::Diagnostics
+        | Pane::Conflicts
         | Pane::Variables => Outcome::default(),
         // Moving the window, resizing it and picking text in the Snippet are
         // all drags, and which one this is was decided at the press: the
@@ -1457,6 +1503,7 @@ fn place_in(state: &State, panes: &Layout, pane: Pane, (column, row): (u16, u16)
         | Pane::Breakpoints
         | Pane::Frames
         | Pane::Diagnostics
+        | Pane::Conflicts
         | Pane::Variables => (0, 0),
     };
     Place {
@@ -1518,7 +1565,8 @@ fn text_area(state: &State, panes: &Layout, pane: Pane) -> Area {
         | Pane::History
         | Pane::Breakpoints
         | Pane::Frames
-        | Pane::Diagnostics => interior(panes.corner),
+        | Pane::Diagnostics
+        | Pane::Conflicts => interior(panes.corner),
         // The Strip's own rectangle less whatever the Program output beside it
         // is taking, which the Debug group has instead of the shells.
         Pane::Variables => interior(panes.terminal),

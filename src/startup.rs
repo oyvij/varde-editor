@@ -1822,6 +1822,7 @@ fn initial_state(
             Some("Buffers") => crate::layout::Corner::Buffers,
             Some("History") => crate::layout::Corner::History,
             Some("Breakpoints") => crate::layout::Corner::Breakpoints,
+            Some("Conflicts") => crate::layout::Corner::Conflicts,
             // On Errors whatever it showed last: nothing has been reported
             // yet, and with nothing the list opens on Errors.
             Some(saved) if saved.starts_with("Diagnostics") => {
@@ -2355,6 +2356,16 @@ mod tests {
             state.corner,
             crate::layout::Corner::Diagnostics(crate::lsp::Severity::Error)
         );
+    }
+
+    #[test]
+    fn the_conflict_list_is_back_in_the_corner_after_a_restart() {
+        let (state, _, _) = start(&Startup {
+            state_json: Some(r#"{"corner": "Conflicts"}"#.to_string()),
+            ..Startup::default()
+        })
+        .expect("started");
+        assert_eq!(state.corner, crate::layout::Corner::Conflicts);
     }
 
     /// The refusal a project layer earns, so that the tests below assert the

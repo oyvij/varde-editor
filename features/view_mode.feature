@@ -30,27 +30,28 @@ Feature: The command palette
     When I press Ctrl and press Ctrl again after 120 ms
     Then the view palette is shown
     And the view palette offers:
-      | group   | key | entry          |
-      | Panes   | o   | Editor         |
-      | Panes   | g   | Buffers        |
-      | Panes   | d   | Files          |
-      | Panes   | t   | Terminal       |
-      | Panes   | k   | Risk           |
-      | Panes   | y   | Cursor history |
-      | Panes   | b   | Breakpoints    |
-      | Panes   | i   | Diagnostics    |
-      | Panes   | a   | AI             |
-      | Panes   | l   | Tall           |
-      | Views   | e   | Edit           |
-      | Views   | r   | Review         |
-      | Views   | s   | Story          |
-      | Project | f   | Find           |
-      | Project | v   | Tools          |
-      | Project | n   | Launch         |
-      | Project | c   | Collapse       |
-      | Help    | h   | Keys           |
-      | Help    | u   | Update         |
-      |         | q   | Quit           |
+      | group   | key | entry           |
+      | Panes   | o   | Editor          |
+      | Panes   | g   | Buffers         |
+      | Panes   | d   | Files           |
+      | Panes   | t   | Terminal        |
+      | Panes   | k   | Risk            |
+      | Panes   | y   | Cursor history  |
+      | Panes   | b   | Breakpoints     |
+      | Panes   | i   | Diagnostics     |
+      | Panes   | m   | Merge conflicts |
+      | Panes   | a   | AI              |
+      | Panes   | l   | Tall            |
+      | Views   | e   | Edit            |
+      | Views   | r   | Review          |
+      | Views   | s   | Story           |
+      | Project | f   | Find            |
+      | Project | v   | Tools           |
+      | Project | n   | Launch          |
+      | Project | c   | Collapse        |
+      | Help    | h   | Keys            |
+      | Help    | u   | Update          |
+      |         | q   | Quit            |
 
   Scenario: Two Ctrl presses too far apart are not a double-tap
     When I press Ctrl and press Ctrl again after 450 ms

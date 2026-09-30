@@ -50,7 +50,8 @@ Edit view has four panes:
 | AI | right | an AI CLI, or the box that starts one |
 
 Beneath the tree there is one more slot, the Corner. It holds one occupant at a time — the Risk
-list, the Buffers pane, the Cursor history, the Breakpoint list or the Diagnostic list — or nothing;
+list, the Buffers pane, the Cursor history, the Breakpoint list, the Diagnostic list or the Conflict
+list — or nothing;
 asking for one while another is showing replaces it.
 
 The tree's top border counts the project's errors (red `✖`) and warnings (orange `▲`) as the
@@ -90,6 +91,7 @@ The palette is grouped. Press the letter, or click the row:
 | | `y` | Cursor history | show or hide the list of places you jumped from ([editing.md](editing.md)) |
 | | `b` | Breakpoints | show or hide every Breakpoint in the workspace: Enter goes to one, `d` removes it, `D` clears them all |
 | | `i` | Diagnostics | show or hide every Diagnostic the Language servers have reported, one Severity at a time: `e` `w` `i` `h` or a label on its border switch Severity, Enter goes to one |
+| | `m` | Merge conflicts | show or hide the Conflict list: every file git reports as unmerged and the Conflicts still in it; Enter goes to one. A file with none left is ticked `✓` and stays until you stage it yourself |
 | | `a` | AI | focus the AI pane — it does not start a session |
 | | `l` | Tall | swap the AI pane between beside the editor and the whole right-hand edge |
 | Views | `e` | Edit | switch to Edit view |

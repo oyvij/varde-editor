@@ -195,6 +195,7 @@ pub enum Corner {
     /// The Diagnostic list, and which Severity it is showing — held here so
     /// the list and the Severity cannot be out of step with the slot.
     Diagnostics(crate::lsp::Severity),
+    Conflicts,
 }
 
 impl Corner {
@@ -212,6 +213,7 @@ impl Corner {
             Corner::Breakpoints => Some(Pane::Breakpoints),
             Corner::Frames => Some(Pane::Frames),
             Corner::Diagnostics(_) => Some(Pane::Diagnostics),
+            Corner::Conflicts => Some(Pane::Conflicts),
         }
     }
 }

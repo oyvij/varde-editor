@@ -213,6 +213,18 @@ carries a toggle in its gutter, which a click also flips. The caret steps over a
 rather than into it, and `Enter` with the cursor on the fold's dots opens it. With no file open
 the command is refused out loud.
 
+## Merge conflicts
+
+A Conflict a merge left in the file is drawn over its text: each marker line becomes a dim bar
+naming its side — `Current change (HEAD)`, `Common ancestor`, `Incoming change` — the current side
+is tinted green and the incoming side blue. The text itself is unchanged, and the marker the cursor
+is on shows as the text it is, so it can be edited by hand.
+
+With the cursor anywhere inside a Conflict, `cc` keeps the current side, `ci` the incoming side and
+`cb` both, current first; the bar's `[accept current]`, `[accept incoming]` and `[accept both]` do
+the same with a click. Each is one `u`. Accepting only edits the buffer: nothing is saved, and Varde
+never stages anything. Palette `m` lists every unmerged file's Conflicts.
+
 ## Reading the shape of the code
 
 **Indent guides** run down each level of indentation, and every space is drawn as a dot, so a line's

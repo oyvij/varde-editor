@@ -285,6 +285,9 @@ pub fn draw(
                 frame.render_widget(diagnostics_widget(state, areas.corner.width), areas.corner);
                 severity_labels(frame, state, showing, areas.panes.corner);
             }
+            layout::Corner::Conflicts => {
+                frame.render_widget(conflicts_widget(state, areas.corner.width), areas.corner)
+            }
         }
     }
     let caret_is_free = state.modal == Modal::None && typing.is_none() && !finding;
@@ -1183,6 +1186,34 @@ fn diagnostics_lines(state: &State, width: u16) -> Vec<Line<'static>> {
                     style,
                 )),
             }
+        })
+        .collect()
+}
+
+fn conflicts_widget(state: &State, width: u16) -> Paragraph<'static> {
+    Paragraph::new(conflicts_lines(state, width))
+        .scroll((state.conflicts_scroll as u16, 0))
+        .block(pane_block(
+            varde::conflict::title(state),
+            state,
+            Pane::Conflicts,
+        ))
+}
+
+/// A row per unmerged file and one per Conflict under it, cut to the pane.
+fn conflicts_lines(state: &State, width: u16) -> Vec<Line<'static>> {
+    let inner = width.saturating_sub(2) as usize;
+    varde::conflict::listed(state)
+        .into_iter()
+        .enumerate()
+        .map(|(index, (path, conflict))| {
+            let style = match (index == state.conflicts_selection, conflict) {
+                (true, _) => Style::default().add_modifier(Modifier::REVERSED),
+                (false, None) => Style::default().add_modifier(Modifier::BOLD),
+                (false, Some(_)) => Style::default(),
+            };
+            let text = varde::conflict::row_text(state, &path, conflict);
+            Line::from(Span::styled(truncate(&format!(" {text}"), inner), style))
         })
         .collect()
 }
@@ -2236,6 +2267,30 @@ fn source_lines(
         }
     }
     shift(&mut lines, state, 1);
+    // A Conflict's marker lines as bars and its sides tinted — after `shift`,
+    // so a bar is never scrolled sideways away from its buttons, and before
+    // the gutter's marks, which still count the line.
+    for (line, &number) in lines.iter_mut().zip(&shown) {
+        let Some(drawn) = varde::conflict::drawn(state, number) else {
+            continue;
+        };
+        *line = match drawn {
+            varde::conflict::Drawn::Bar(pieces) => {
+                let text: String = pieces.into_iter().map(|(piece, _)| piece).collect();
+                // The width `conflict::drawn` measured the bar against.
+                let run = varde::fits(state).2.saturating_sub(text.chars().count());
+                let mut bar = numbered(number, cursor_line(state));
+                bar.push_span(Span::styled(
+                    format!("{text}{}", "┄".repeat(run)),
+                    Style::default().add_modifier(Modifier::DIM),
+                ));
+                bar
+            }
+            varde::conflict::Drawn::Current => washed(line, change_colours(false, dark).2),
+            varde::conflict::Drawn::Incoming => washed(line, incoming_tint(dark)),
+            varde::conflict::Drawn::Ancestor => washed(line, word_tint(dark)),
+        };
+    }
     // Last, for the reason the Site's mark is last in `marked_code`: everything
     // above counts columns from the start of the line, and a barred line's
     // gutter is two spans rather than one.
@@ -2701,6 +2756,16 @@ fn word_tint(dark: bool) -> Color {
         Color::Rgb(0x33, 0x38, 0x40)
     } else {
         Color::Indexed(253)
+    }
+}
+
+/// The incoming side of a Conflict: a blue of the weight the diff's added
+/// green has, so neither side reads as the one that won.
+fn incoming_tint(dark: bool) -> Color {
+    if dark {
+        Color::Rgb(0x1b, 0x2a, 0x40)
+    } else {
+        Color::Indexed(189)
     }
 }
 

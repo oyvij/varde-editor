@@ -444,6 +444,33 @@ impl Buffer {
         &self.shape.indents
     }
 
+    /// The Conflicts in the text, found with the revision.
+    pub fn conflicts(&self) -> &[crate::conflict::Conflict] {
+        &self.shape.conflicts
+    }
+
+    /// The Conflict the cursor is in, replaced — markers and all — by the side
+    /// asked for, as one undo step. Nothing outside one.
+    pub fn accept(&mut self, side: crate::conflict::Side) {
+        let Some(conflict) = self
+            .shape
+            .conflicts
+            .iter()
+            .find(|conflict| (conflict.start..=conflict.end).contains(&self.line))
+            .cloned()
+        else {
+            return;
+        };
+        let mut lines = self.lines();
+        let kept = crate::conflict::kept(&lines, &conflict, side);
+        self.remember(Step::Other);
+        lines.splice(conflict.start - 1..conflict.end, kept);
+        self.line = conflict.start;
+        self.column = 1;
+        self.set(&lines);
+        self.clamp();
+    }
+
     fn remember(&mut self, kind: Step) {
         let (joins, open) = match (self.step, kind) {
             (Step::Typing | Step::Space, Step::Typing) => (true, Step::Typing),
@@ -1112,7 +1139,7 @@ impl Buffer {
 
         // An operator must not consume the count: in `2dd` the 2 belongs to the
         // dd that follows, not to the first d.
-        if matches!(key, 'g' | 'd' | 'y') {
+        if matches!(key, 'g' | 'd' | 'y' | 'c') {
             self.pending.push(key);
             return None;
         }
@@ -1149,6 +1176,11 @@ impl Buffer {
             // `dgg` arrives with the `g` already in the chord, so the key that
             // completes it takes the lines back to where `gg` lands.
             ("dg", 'g') => self.delete_lines(1, self.line),
+            // Outside a Conflict these do nothing, and say nothing: they name
+            // a binding, only not one that applies here.
+            ("c", 'c') => self.accept(crate::conflict::Side::Current),
+            ("c", 'i') => self.accept(crate::conflict::Side::Incoming),
+            ("c", 'b') => self.accept(crate::conflict::Side::Both),
             ("d", key) => return self.delete_over(key, times),
             _ => return Some(format!("{chord}{key}")),
         }
@@ -1705,6 +1737,7 @@ struct Shape {
     /// it did — and which of these was still open around it. A mismatched
     /// closer is passed over rather than guessed at.
     brackets: Vec<(crate::Place, Option<crate::Place>, Option<usize>)>,
+    conflicts: Vec<crate::conflict::Conflict>,
 }
 
 impl Shape {
@@ -1736,6 +1769,7 @@ impl Shape {
             indents: lines.iter().map(|line| crate::fold::indent(line)).collect(),
             unit: indent_unit(&lines, tab_width),
             brackets,
+            conflicts: crate::conflict::find(lines.iter().copied()),
         }
     }
 }
@@ -1966,6 +2000,40 @@ mod tests {
         buffer.key('\n');
         assert_eq!(buffer.shown(), "one\n two");
         assert_eq!((buffer.line, buffer.column), (2, 1));
+    }
+
+    #[test]
+    fn cc_ci_cb_accept_a_side_as_one_undo_step() {
+        let text = "a\n<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> x\nz";
+        for (key, left) in [
+            ('c', "a\nours\nz"),
+            ('i', "a\ntheirs\nz"),
+            ('b', "a\nours\ntheirs\nz"),
+        ] {
+            let mut buffer = Buffer::open(text, false, 4);
+            buffer.key('j');
+            buffer.key('j');
+            buffer.key('c');
+            buffer.key(key);
+            assert_eq!(buffer.shown(), left, "c{key}");
+            assert!(buffer.conflicts().is_empty());
+            buffer.undo();
+            assert_eq!(buffer.shown(), text, "one undo puts c{key} back");
+        }
+    }
+
+    #[test]
+    fn cc_outside_a_conflict_changes_nothing() {
+        let mut buffer = Buffer::open(
+            "a\n<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> x",
+            false,
+            4,
+        );
+        let before = buffer.revision();
+        buffer.key('c');
+        assert_eq!(buffer.key('c'), None);
+        assert_eq!(buffer.revision(), before);
+        assert_eq!(buffer.pending(), "");
     }
 
     /// The Document version F31 sends is this number, and it counts from the
