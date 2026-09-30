@@ -809,12 +809,22 @@ pub enum Event {
     /// is a [`Buffer`]; these two are not, because the editor spends Home and
     /// End as `0` and `$`, and in a query those are letters.
     QueryEnd(Direction),
-    /// Escape — abandons the search and goes back where it started.
+    /// Escape in the query — ends the search and goes back where it started.
     CloseFind,
-    /// Enter — leaves the match as the selection.
+    /// Enter in the query — leaves the match as the selection and hands the
+    /// keyboard to the buffer. The search stays on.
     AcceptFind,
-    /// `n` and `N` — the next and previous match of what `/` last looked for.
+    /// `n` and `N` — the next and previous match of the search that is on.
     StepMatch(Direction),
+    /// The keyboard moving within the search that is on, or out of it.
+    FindKeys(FindKeys),
+    /// `[Aa]` — flips whether the search that is on matches case exactly.
+    ToggleCase,
+    /// `[replace]` — the match at the cursor, or the next one after it, and
+    /// on to the next.
+    ReplaceMatch,
+    /// `[replace all]` — every match in the buffer, as one undo step.
+    ReplaceAll,
     /// The query changed; the edge scans and answers with `Searched`.
     SearchQuery(String),
     Searched(Results),
@@ -1336,6 +1346,68 @@ impl Default for Search {
         }
     }
 }
+
+/// An in-file search that is on: `/` began it and only Escape ends it, so its
+/// line, count and highlights stay while the keyboard goes elsewhere.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Find {
+    /// What `/` is looking for. State rather than a draft the edge collects,
+    /// because the cursor moves to the closest match on every keystroke.
+    pub query: Buffer,
+    /// Where the cursor was when `/` began the search, so Escape in the query
+    /// costs nothing.
+    pub origin: Place,
+    pub case: search::Case,
+    pub keys: FindKeys,
+}
+
+/// Where the keyboard is while a search is on. Core state rather than the
+/// edge's, because what a key means depends on it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FindKeys {
+    /// The buffer or another pane has it; the search is only showing.
+    Away,
+    Query,
+    /// On one of the line's icons.
+    Icon(FindIcon),
+    /// In the replace box, which is open exactly as long as this is.
+    Replace(ReplaceField),
+}
+
+/// The icons drawn after the count, in the order `Left` and `Right` walk them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FindIcon {
+    Case,
+    Replace,
+    ReplaceAll,
+}
+
+pub const FIND_ICONS: [(FindIcon, &str); 3] = [
+    (FindIcon::Case, "[Aa]"),
+    (FindIcon::Replace, "[replace]"),
+    (FindIcon::ReplaceAll, "[replace all]"),
+];
+
+/// The replace box's stops, in the order Tab walks them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReplaceField {
+    Find,
+    With,
+    Replace,
+    ReplaceAll,
+}
+
+pub const REPLACE_BUTTONS: [(ReplaceField, &str); 2] = [
+    (ReplaceField::Replace, "[replace]"),
+    (ReplaceField::ReplaceAll, "[replace all]"),
+];
+
+pub const REPLACE_FIELDS: [ReplaceField; 4] = [
+    ReplaceField::Find,
+    ReplaceField::With,
+    ReplaceField::Replace,
+    ReplaceField::ReplaceAll,
+];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiffLine {
@@ -1947,15 +2019,12 @@ pub struct State {
     pub system_clipboard: bool,
     /// Open when search is showing; `None` when the modal is closed.
     pub search: Option<Search>,
-    /// Where the cursor was when `/` opened, so Escape costs nothing; `None`
-    /// while the line is closed. Separate from `search`: one finds here, the
-    /// other everywhere, and they are never both open.
-    pub find: Option<Place>,
-    /// What `/` is looking for. It is state rather than a draft the edge
-    /// collects, because the cursor moves to the closest match on every
-    /// keystroke — and it outlives the line, because `n` and `N` step through
-    /// its matches in normal mode and every one of them stays highlighted.
-    pub find_query: Buffer,
+    /// The in-file search, from `/` until Escape; `None` while there is none.
+    /// Separate from `search`: one finds here, the other everywhere.
+    pub find: Option<Find>,
+    /// What the replace box last replaced a match with — remembered for the
+    /// session, so it outlives the search it was typed in.
+    pub replace_with: Buffer,
     pub diff: Option<Vec<DiffLine>>,
     pub diff_file: Option<String>,
     /// The blob oid of what `diff_file` holds, told by `Event::ShowDiff` — a
@@ -2558,7 +2627,7 @@ impl Default for State {
             system_clipboard: true,
             search: None,
             find: None,
-            find_query: Buffer::text_box(""),
+            replace_with: Buffer::text_box(""),
             diff: None,
             diff_file: None,
             diff_revision: None,
@@ -2742,6 +2811,15 @@ fn settle(mut next: State, mut effects: Vec<Effect>, wheeled: bool) -> (State, V
     // and there is no event to hang it on.
     if next.focus == Pane::Output && !next.output_running {
         next.focus = Pane::Editor;
+    }
+    // The in-file search has the keyboard only while nothing else took it:
+    // another pane, the project search or a modal. Losing it here, rather than
+    // in every arm that moves focus, is also what lands a return to the editor
+    // in the buffer rather than back in the box. The search stays on.
+    if let Some(find) = next.find.as_mut() {
+        if next.focus != Pane::Editor || next.search.is_some() || next.modal != Modal::None {
+            find.keys = FindKeys::Away;
+        }
     }
     let showing_lines = next.focus == Pane::Editor && next.diff.is_none() && !previewing(&next);
     let linewise = showing_lines
@@ -3316,11 +3394,20 @@ fn on_comment_body(mut next: State, event: Event, wheeled: bool) -> Answered {
 /// A key is pasted rather than typed: typing pairs brackets, and a search for
 /// `foo(` would look for `foo()`. Only a change to the text searches again, so
 /// moving the caret leaves the selected hit and the cursor where they are.
+///
+/// The in-file search's query is typed on its line or in the replace box's
+/// "find" field, and the box's "with" field is a query of the same shape that
+/// searches nothing.
 fn on_query(mut next: State, event: Event, wheeled: bool) -> Answered {
+    let keys = next.find.as_ref().map(|find| find.keys);
     let query = if let Some(search) = next.search.as_mut() {
         &mut search.query
-    } else if next.find.is_some() {
-        &mut next.find_query
+    } else if let (Some(find), Some(FindKeys::Query | FindKeys::Replace(ReplaceField::Find))) =
+        (next.find.as_mut(), keys)
+    {
+        &mut find.query
+    } else if keys == Some(FindKeys::Replace(ReplaceField::With)) {
+        &mut next.replace_with
     } else {
         return Err((next, event));
     };
@@ -3354,7 +3441,8 @@ fn on_query(mut next: State, event: Event, wheeled: bool) -> Answered {
     if query.revision() == before {
         return Ok(settle(next, vec![], wheeled));
     }
-    let effects = match (next.search.as_mut(), next.find) {
+    let find = next.find.as_ref().map(|find| (find.keys, find.origin));
+    let effects = match (next.search.as_mut(), find) {
         (Some(search), _) => {
             search.selected = 0;
             // A new query is a new list, as it is for `SearchQuery`.
@@ -3365,13 +3453,13 @@ fn on_query(mut next: State, event: Event, wheeled: bool) -> Answered {
         // so a longer query cannot walk you down the file one keystroke at a
         // time. Nothing matching leaves the cursor alone: a query being
         // typed is half-finished, not wrong.
-        (None, Some(origin)) => {
+        (None, Some((FindKeys::Replace(ReplaceField::With), _))) | (None, None) => vec![],
+        (None, Some((_, origin))) => {
             if let Some(at) = closest_match(&next, origin) {
                 go_to_match(&mut next, at);
             }
             vec![]
         }
-        (None, None) => vec![],
     };
     Ok(settle(next, effects, wheeled))
 }
@@ -5070,7 +5158,7 @@ fn on_buffer_opened(_state: &State, mut next: State, event: Event, wheeled: bool
 }
 
 /// Indexed, OpenSearch, ShowBuffer, StepBuffer
-fn on_step_buffer(_state: &State, mut next: State, event: Event, wheeled: bool) -> Answered {
+fn on_step_buffer(state: &State, mut next: State, event: Event, wheeled: bool) -> Answered {
     let effects = match event {
         Event::StepBuffer(direction) => {
             let paths: Vec<PathBuf> = next.buffers.keys().cloned().collect();
@@ -5100,8 +5188,24 @@ fn on_step_buffer(_state: &State, mut next: State, event: Event, wheeled: bool) 
             vec![]
         }
 
+        // On what the editor has selected, as `gr` opens it; a pick in a hosted
+        // pane is the child's text, not something to look for in the project.
         Event::OpenSearch => {
-            next.search = Some(Search::default());
+            let in_editor = matches!(
+                state.selection,
+                Some(
+                    Selection::Buffer { .. }
+                        | Selection::Lines { .. }
+                        | Selection::Screen {
+                            pane: Pane::Editor,
+                            ..
+                        }
+                )
+            );
+            match state.selected_text().filter(|text| !text.trim().is_empty()) {
+                Some(query) if in_editor => return Ok(open_search_for(next, query)),
+                _ => next.search = Some(Search::default()),
+            }
             vec![]
         }
 
@@ -5141,12 +5245,25 @@ fn on_search_word_under_cursor(
             vec![]
         }
 
+        // With a search already on, `/` goes back into its query with the
+        // text intact, and Escape from there still restores where the search
+        // started.
         Event::OpenFind => {
-            let Some(at) = cursor_place(state) else {
+            let Some(origin) = cursor_place(state) else {
                 return Ok((next, vec![]));
             };
-            next.find = Some(at);
-            next.find_query = Buffer::text_box("");
+            next.find = Some(match next.find.take() {
+                Some(find) => Find {
+                    keys: FindKeys::Query,
+                    ..find
+                },
+                None => Find {
+                    query: Buffer::text_box(""),
+                    origin,
+                    case: search::Case::Smart,
+                    keys: FindKeys::Query,
+                },
+            });
             vec![]
         }
 
@@ -5155,30 +5272,104 @@ fn on_search_word_under_cursor(
     Ok(settle(next, effects, wheeled))
 }
 
-/// AcceptFind, CloseFind
+/// AcceptFind, CloseFind, FindKeys, ReplaceAll, ReplaceMatch, ToggleCase
 fn on_find_query(state: &State, mut next: State, event: Event, wheeled: bool) -> Answered {
     let effects = match event {
         // Abandoning the search takes the highlights with it: they are what the
         // query is showing, and the query is gone.
         Event::CloseFind => {
-            let Some(origin) = next.find.take() else {
+            let Some(find) = next.find.take() else {
                 return Ok((next, vec![]));
             };
-            next.find_query = Buffer::text_box("");
-            go_to_match(&mut next, origin);
+            go_to_match(&mut next, find.origin);
             vec![]
         }
 
         // The match becomes the selection, which is what lets it be copied or
         // handed to project search without being retyped. Found again rather
         // than remembered: the query already says where it is, so there is no
-        // second copy to keep true.
+        // second copy to keep true. The search stays on — only the keyboard
+        // leaves it.
         Event::AcceptFind => {
-            let Some(origin) = next.find.take() else {
+            let Some(find) = next.find.as_mut() else {
                 return Ok((next, vec![]));
             };
+            find.keys = FindKeys::Away;
+            let origin = find.origin;
             if let Some(at) = closest_match(state, origin) {
                 land_on(&mut next, at);
+            }
+            vec![]
+        }
+
+        Event::FindKeys(keys) => {
+            if let Some(find) = next.find.as_mut() {
+                find.keys = keys;
+            }
+            // The replace box is over the editor, so it takes the keyboard
+            // there from wherever the icon was clicked.
+            if matches!(keys, FindKeys::Replace(_)) {
+                next.focus = Pane::Editor;
+            }
+            vec![]
+        }
+
+        // Flipping what is *shown*: a smart-case query holding a capital is lit,
+        // so pressing it turns it off rather than on.
+        Event::ToggleCase => {
+            if let Some(find) = next.find.as_mut() {
+                find.case = match find.case.exact(find.query.shown()) {
+                    true => search::Case::Ignore,
+                    false => search::Case::Exact,
+                };
+            }
+            vec![]
+        }
+
+        // Not while previewing: a match there is a rendered row and column,
+        // not a place in the text the replacement would go into.
+        Event::ReplaceMatch => {
+            let (Some(find), Some(cursor), false) =
+                (state.find.as_ref(), cursor_place(state), previewing(state))
+            else {
+                return Ok((next, vec![]));
+            };
+            let width = find.query.shown().chars().count();
+            let places = matches(state, ..);
+            let after = |at: &&Place| (at.line, at.column) > (cursor.line, cursor.column);
+            let Some(&target) = under_cursor(state, &places)
+                .and_then(|at| places.get(at))
+                .or_else(|| places.iter().find(after))
+                .or_else(|| places.first())
+            else {
+                return Ok((next, vec![]));
+            };
+            let with = state.replace_with.shown().to_string();
+            let Some(buffer) = current(&mut next) else {
+                return Ok((next, vec![]));
+            };
+            let landed = buffer.replace_at(&[target], width, &with)[0];
+            buffer.go_to_place(landed);
+            next.selection = None;
+            if let Some(at) = closest_match(&next, landed) {
+                land_on(&mut next, at);
+            }
+            vec![]
+        }
+
+        // One `replace_at`, so one undo puts every match back. The box closes
+        // and the search stays on, now most likely matching nothing.
+        Event::ReplaceAll => {
+            let (Some(find), false) = (next.find.as_mut(), previewing(state)) else {
+                return Ok((next, vec![]));
+            };
+            find.keys = FindKeys::Away;
+            let width = find.query.shown().chars().count();
+            let places = matches(state, ..);
+            let with = state.replace_with.shown().to_string();
+            next.selection = None;
+            if let (false, Some(buffer)) = (places.is_empty(), current(&mut next)) {
+                buffer.replace_at(&places, width, &with);
             }
             vec![]
         }
@@ -6495,10 +6686,10 @@ fn on_editor_escape(state: &State, mut next: State, event: Event, wheeled: bool)
 
         Event::EditorEscape => {
             next.modal = Modal::None;
-            // Escape is how everything on screen is dismissed, and an accepted
-            // query is on screen: its matches stay lit until something clears
-            // them, and `/` was the only thing that did.
-            next.find_query = Buffer::text_box("");
+            // Escape is how everything on screen is dismissed, and a search
+            // that is on is on screen until something ends it. The cursor
+            // stays: this is ending a search, not abandoning one.
+            next.find = None;
             next.gutter = None;
             next.hover = None;
             next.diff_anchor = None;
@@ -10341,8 +10532,9 @@ pub fn word_occurrences(state: &State, lines: impl RangeBounds<usize>) -> Vec<Pl
 /// what the editor highlights, and the places `n` and `N` step between. Worked
 /// out on the spot rather than stored: an edit changes the contents and the next
 /// call answers about the new ones, so a highlight cannot go stale. The matching
-/// is the project searcher's, handed one file's lines, so smartcase behaves the
-/// same whether you are finding here or everywhere.
+/// is the project searcher's, handed one file's lines and the search's own
+/// [`search::Case`], so an untouched `[Aa]` behaves the same whether you are
+/// finding here or everywhere.
 ///
 /// Preview-aware rather than duplicated: while previewing, positions are in
 /// **row** coordinates, searched over what `preview_rows` draws rather than
@@ -10359,16 +10551,21 @@ pub fn word_occurrences(state: &State, lines: impl RangeBounds<usize>) -> Vec<Pl
 /// Only in `lines` — rows, while previewing — for the reason [`Buffer::lines_within`]
 /// gives: `n` and `N` ask for the whole file, the renderer for its window.
 pub fn matches(state: &State, lines: impl RangeBounds<usize>) -> Vec<Place> {
-    if state.find_query.shown().is_empty() {
+    let Some((query, case)) = state
+        .find
+        .as_ref()
+        .map(|find| (find.query.shown(), find.case))
+        .filter(|(query, _)| !query.is_empty())
+    else {
         return Vec::new();
-    }
+    };
     if previewing(state) {
         return buffer_rows(state)
             .iter()
             .enumerate()
             .filter(|(index, _)| lines.contains(&(index + 1)))
             .flat_map(|(index, row)| {
-                search::occurrences(state.find_query.shown(), &row.text())
+                search::occurrences(query, &row.text(), case)
                     .into_iter()
                     .map(move |column| Place {
                         line: index + 1,
@@ -10387,7 +10584,7 @@ pub fn matches(state: &State, lines: impl RangeBounds<usize>) -> Vec<Place> {
     buffer
         .lines_within(lines)
         .flat_map(|(number, line)| {
-            search::occurrences(state.find_query.shown(), line)
+            search::occurrences(query, line, case)
                 .into_iter()
                 .map(move |column| Place {
                     line: number,
@@ -10395,6 +10592,50 @@ pub fn matches(state: &State, lines: impl RangeBounds<usize>) -> Vec<Place> {
                 })
         })
         .collect()
+}
+
+/// Which of `places` the cursor is inside, if any — the match a replace takes
+/// and the one the count says you are on.
+fn under_cursor(state: &State, places: &[Place]) -> Option<usize> {
+    let cursor = cursor_place(state)?;
+    let width = state.find.as_ref()?.query.shown().chars().count();
+    places.iter().position(|at| {
+        at.line == cursor.line && at.column <= cursor.column && cursor.column < at.column + width
+    })
+}
+
+/// The in-file search's line on the editor's bottom border, piece by piece:
+/// the query (with its caret while it is being typed), the count, and each
+/// icon. `ui` draws these pieces and `mouse` hit-tests the same ones from the
+/// border's first column, for the one-layout reason. Empty with no search on.
+pub fn find_line(state: &State) -> Vec<(String, Option<FindIcon>)> {
+    let Some(find) = state.find.as_ref() else {
+        return Vec::new();
+    };
+    let text = find.query.shown();
+    let query = match find.keys {
+        FindKeys::Query => {
+            let at = find.query.column.saturating_sub(1);
+            let before: String = text.chars().take(at).collect();
+            let after: String = text.chars().skip(at).collect();
+            format!("/{before}█{after}")
+        }
+        _ => format!("/{text}"),
+    };
+    let places = matches(state, ..);
+    let count = match (under_cursor(state, &places), places.len()) {
+        (_, 0) if text.is_empty() => String::new(),
+        (_, 0) => "no match".to_string(),
+        (Some(at), all) => format!("{} of {all}", at + 1),
+        (None, all) => format!("{all} found"),
+    };
+    let mut pieces = vec![(format!(" {query} "), None), (count, None)];
+    for (icon, label) in FIND_ICONS {
+        pieces.push((" ".to_string(), None));
+        pieces.push((label.to_string(), Some(icon)));
+    }
+    pieces.push((" ".to_string(), None));
+    pieces
 }
 
 /// Which lines of the current buffer the last commit does not hold, 1-based:
@@ -10501,7 +10742,10 @@ fn go_to_match(next: &mut State, at: Place) {
 /// being retyped. Matching is literal, so a match is exactly as long as the
 /// query — there is no second copy of where it ended to keep true.
 fn land_on(next: &mut State, at: Place) {
-    let length = next.find_query.shown().chars().count();
+    let length = next
+        .find
+        .as_ref()
+        .map_or(1, |find| find.query.shown().chars().count());
     let end = Place {
         line: at.line,
         column: at.column + length - 1,
@@ -12554,6 +12798,16 @@ mod tests {
         assert_eq!(set.breakpoints[0].text, "two");
     }
 
+    /// A search that is on, with the keyboard back in the buffer.
+    fn finding(query: &str) -> Find {
+        Find {
+            query: Buffer::text_box(query),
+            origin: Place { line: 1, column: 1 },
+            case: search::Case::Smart,
+            keys: FindKeys::Away,
+        }
+    }
+
     /// The pane a Preview lays out to, arrived at through the events the edge
     /// sends: a screen size and an opened file.
     fn previewing_readme(contents: &str) -> State {
@@ -13132,10 +13386,10 @@ mod tests {
     #[test]
     fn matches_searches_rendered_rows_while_previewing() {
         let mut state = previewing_readme("## Install\n");
-        state.find_query = Buffer::text_box("Install");
+        state.find = Some(finding("Install"));
         assert_eq!(matches(&state, ..), vec![Place { line: 1, column: 1 }]);
 
-        state.find_query = Buffer::text_box("##");
+        state.find = Some(finding("##"));
         assert!(matches(&state, ..).is_empty(), "a consumed marker matched");
     }
 
@@ -13147,8 +13401,66 @@ mod tests {
         let mut state = previewing_readme("## Install\n");
         let path = state.current_buffer.clone().unwrap();
         state.buffers.get_mut(&path).unwrap().previewing = false;
-        state.find_query = Buffer::text_box("##");
+        state.find = Some(finding("##"));
         assert_eq!(matches(&state, ..), vec![Place { line: 1, column: 1 }]);
+    }
+
+    /// A Preview's matches are rendered rows and columns, not places in the
+    /// text, so neither replace touches the buffer there.
+    #[test]
+    fn nothing_is_replaced_while_previewing() {
+        let mut state = previewing_readme("Install\n\nInstall\n");
+        state.find = Some(finding("Install"));
+        state.replace_with = Buffer::text_box("Setup");
+        for replace in [Event::ReplaceMatch, Event::ReplaceAll] {
+            let after = update(&state, replace).0;
+            let buffer = current_buffer(&after).expect("a buffer");
+            assert_eq!(buffer.shown(), "Install\n\nInstall\n");
+        }
+    }
+
+    /// The replace box's "find" field is the search's own query, so typing in
+    /// it searches again; its "with" field searches nothing.
+    #[test]
+    fn the_replace_boxs_fields_edit_the_query_and_the_replacement() {
+        let mut state = State::default();
+        let path = PathBuf::from("/w/a.rs");
+        state.current_buffer = Some(path.clone());
+        state
+            .buffers
+            .insert(path, Buffer::open("stat state\n", false, 4));
+        let mut find = finding("stat");
+        find.keys = FindKeys::Replace(ReplaceField::Find);
+        state.find = Some(find);
+        let typed = update(&state, Event::EditorKey('e')).0;
+        assert_eq!(typed.find.as_ref().expect("on").query.shown(), "state");
+        assert_eq!(matches(&typed, ..), vec![Place { line: 1, column: 6 }]);
+        let with = update(
+            &typed,
+            Event::FindKeys(FindKeys::Replace(ReplaceField::With)),
+        )
+        .0;
+        let typed = update(&with, Event::EditorKey('x')).0;
+        assert_eq!(typed.replace_with.shown(), "x");
+        assert_eq!(typed.find.as_ref().expect("on").query.shown(), "state");
+    }
+
+    /// Going back into a search with `/` keeps where it started, so Escape
+    /// from the query still puts the cursor back there.
+    #[test]
+    fn slash_back_into_a_search_keeps_where_it_started() {
+        let mut state = State::default();
+        let path = PathBuf::from("/w/a.rs");
+        state.current_buffer = Some(path.clone());
+        state
+            .buffers
+            .insert(path, Buffer::open("a\nb\nc\n", false, 4));
+        state.find = Some(finding("c"));
+        let moved = update(&state, Event::StepMatch(Direction::Right)).0;
+        let back = update(&moved, Event::OpenFind).0;
+        let escaped = update(&back, Event::CloseFind).0;
+        let buffer = current_buffer(&escaped).expect("a buffer");
+        assert_eq!((buffer.line, buffer.column), (1, 1));
     }
 
     /// `n`/`N` step between preview matches by row: the cursor lands on
@@ -13157,7 +13469,7 @@ mod tests {
     #[test]
     fn stepping_matches_in_a_preview_moves_the_row() {
         let mut state = previewing_readme("Install\n\nInstall\n");
-        state.find_query = Buffer::text_box("Install");
+        state.find = Some(finding("Install"));
         let path = state.current_buffer.clone().unwrap();
         state.buffers.get_mut(&path).unwrap().row = 1;
         let after = update(&state, Event::StepMatch(Direction::Right)).0;

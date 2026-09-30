@@ -58,18 +58,38 @@ pub fn sources(state: &State, disk: Vec<(String, String)>) -> Vec<(String, Strin
     sources
 }
 
+/// How a query treats case. `Smart` is ripgrep's rule — case-insensitive
+/// unless the query holds a capital — and it is where every search starts;
+/// the other two are an in-file search's `[Aa]` pressed, which then stays put
+/// while the query is edited.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Case {
+    Smart,
+    Exact,
+    Ignore,
+}
+
+impl Case {
+    /// Whether this query is matched case-sensitively — what `[Aa]` shows lit.
+    pub fn exact(self, query: &str) -> bool {
+        match self {
+            Case::Smart => query.chars().any(char::is_uppercase),
+            Case::Exact => true,
+            Case::Ignore => false,
+        }
+    }
+}
+
 /// Where in a line the query matches, 1-based, every occurrence rather than
 /// only the first: a buffer highlights each match and `n` steps to each, while
-/// the results modal renders one line per hit. Literal matching,
-/// case-insensitive unless the query contains a capital — ripgrep's smart case.
-/// Literal so a query arriving from a selection needs no escaping, and the rule
-/// lives here alone so finding here and finding everywhere cannot disagree.
-pub fn occurrences(query: &str, line: &str) -> Vec<u32> {
+/// the results modal renders one line per hit. Literal matching, so a query
+/// arriving from a selection needs no escaping, and the rule lives here alone
+/// so finding here and finding everywhere cannot disagree.
+pub fn occurrences(query: &str, line: &str, case: Case) -> Vec<u32> {
     if query.is_empty() {
         return Vec::new();
     }
-    let exact = query.chars().any(char::is_uppercase);
-    let (needle, haystack) = if exact {
+    let (needle, haystack) = if case.exact(query) {
         (query.to_string(), line.to_string())
     } else {
         (query.to_lowercase(), line.to_lowercase())
@@ -92,7 +112,7 @@ pub fn scan(query: &str, files: &[(String, String)]) -> Results {
         for (index, line) in contents.split('\n').enumerate() {
             // One hit per line: the modal renders lines, so a line matching
             // twice is still one line to open.
-            let Some(&column) = occurrences(query, line).first() else {
+            let Some(&column) = occurrences(query, line, Case::Smart).first() else {
                 continue;
             };
             if results.hits.len() == CAP {
@@ -216,7 +236,7 @@ pub fn completion(query: &str, results: &Results) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{completion, files, in_next_file, occurrences, rows, scan, Results, Row};
+    use super::{completion, files, in_next_file, occurrences, rows, scan, Case, Results, Row};
     use crate::Direction;
 
     fn corpus() -> Vec<(String, String)> {
@@ -263,12 +283,28 @@ mod tests {
 
     #[test]
     fn every_occurrence_in_a_line_is_a_match() {
-        assert_eq!(occurrences("state", "state and state"), vec![1, 11]);
+        assert_eq!(
+            occurrences("state", "state and state", Case::Smart),
+            vec![1, 11]
+        );
+    }
+
+    // Smart case is the default rule, and either setting of `[Aa]` overrides
+    // it in both directions: a capital can be ignored, a lowercase query exact.
+    #[test]
+    fn case_overrides_smart_case_either_way() {
+        assert_eq!(occurrences("State", "state State", Case::Smart), vec![7]);
+        assert_eq!(
+            occurrences("State", "state State", Case::Ignore),
+            vec![1, 7]
+        );
+        assert_eq!(occurrences("state", "state State", Case::Smart), vec![1, 7]);
+        assert_eq!(occurrences("state", "state State", Case::Exact), vec![1]);
     }
 
     #[test]
     fn a_match_is_not_counted_twice_where_it_overlaps_itself() {
-        assert_eq!(occurrences("aa", "aaa"), vec![1]);
+        assert_eq!(occurrences("aa", "aaa", Case::Smart), vec![1]);
     }
 
     // A line matching twice is one line to open, however many matches a buffer

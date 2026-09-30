@@ -169,7 +169,13 @@ pub fn draw(
     draw_list_pane(frame, state, rows, &areas, &chrome);
     // Composed once: the renderer, the caret and the "is the caret free"
     // question all have to agree about whether a line is being typed.
-    let typing = command_line(state, chrome.command_draft);
+    let typing = chrome.command_draft.map(|draft| format!(":{draft}█"));
+    // The in-file search draws its own caret, and while it has the keyboard no
+    // pane's caret is free either.
+    let finding = state
+        .find
+        .as_ref()
+        .is_some_and(|find| find.keys != varde::FindKeys::Away);
     // The reading surface gets a field of its own: `Black` is the theme's
     // palette 0 rather than a hex that would fight whatever palette the
     // terminal is set to, and it lifts every foreground's contrast without
@@ -210,7 +216,10 @@ pub fn draw(
     // the text was allowed to reach is covered.
     minimap(frame, state, &areas, chrome.tokens);
     cheatsheet(frame, state, areas.editor);
-    place_cursor(frame, state, &areas, typing.as_deref());
+    replace_box(frame, state, areas.panes.editor);
+    if !finding {
+        place_cursor(frame, state, &areas, typing.as_deref());
+    }
     // One occupant at a time, exhaustively: the Strip is one rectangle, and a
     // group drawn over the one beside it is two panes claiming the same rows.
     match state.strip {
@@ -278,7 +287,7 @@ pub fn draw(
             }
         }
     }
-    let caret_is_free = state.modal == Modal::None && typing.is_none();
+    let caret_is_free = state.modal == Modal::None && typing.is_none() && !finding;
     if let (Pane::Output, layout::Group::Debug, true, Some(output)) =
         (state.focus, state.strip, caret_is_free, output)
     {
@@ -2148,7 +2157,10 @@ fn source_lines(
     // Every match of what `/` looked for, not only the one the cursor is on, so
     // the count is visible without walking them. Under the selection, so the
     // match being stepped to still reads as picked.
-    let matched = state.find_query.shown().chars().count();
+    let matched = state
+        .find
+        .as_ref()
+        .map_or(0, |find| find.query.shown().chars().count());
     for at in varde::matches(state, first..=last) {
         let Some(line) = row(at.line).map(|index| &mut lines[index]) else {
             continue;
@@ -2728,7 +2740,10 @@ fn preview_widget(
     // Every match of what `/` looked for, painted on the row it is in — the
     // same highlight Source draws, over rows rather than lines, since
     // `varde::matches` already answers in row coordinates while previewing.
-    let matched = state.find_query.shown().chars().count();
+    let matched = state
+        .find
+        .as_ref()
+        .map_or(0, |find| find.query.shown().chars().count());
     for at in varde::matches(state, ..) {
         let Some(line) = lines.get_mut(at.line - 1) else {
             continue;
@@ -3630,6 +3645,68 @@ fn cheatsheet_rows(state: &State, height: u16) -> Vec<(String, Color)> {
     rows
 }
 
+/// The replace box, while it has the keyboard: find, with, and the two
+/// buttons, at the rows and columns `mouse` hit-tests them by. `[Aa]` is the
+/// search's own toggle, drawn a second time rather than being a second
+/// setting. Its keys go in the bottom border, for the reason the comment box's
+/// do.
+fn replace_box(frame: &mut Frame, state: &State, editor: Area) {
+    let Some(find) = state.find.as_ref() else {
+        return;
+    };
+    let varde::FindKeys::Replace(field) = find.keys else {
+        return;
+    };
+    let spot = layout::replace_box(editor);
+    let on = |at| match at == field {
+        true => Style::default().add_modifier(Modifier::REVERSED),
+        false => Style::default(),
+    };
+    let text = |buffer: &varde::editor::Buffer, at| match at == field {
+        true => with_caret(buffer.shown(), buffer.column),
+        false => vec![Span::raw(buffer.shown().to_string())],
+    };
+    let mut find_row = vec![Span::raw(" find  ")];
+    find_row.extend(text(&find.query, varde::ReplaceField::Find));
+    let mut with_row = vec![Span::raw(" with  ")];
+    with_row.extend(text(&state.replace_with, varde::ReplaceField::With));
+    let footer = keys::REPLACE_BOX_KEYS
+        .iter()
+        .map(|(key, word)| format!("{key} {word}"))
+        .collect::<Vec<_>>()
+        .join(" · ");
+    let area = rect(spot);
+    frame.render_widget(Clear, area);
+    frame.render_widget(
+        Paragraph::new(vec![Line::from(find_row), Line::from(with_row)]).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" replace ")
+                .title_bottom(Line::from(Span::styled(
+                    format!(" {footer} "),
+                    Style::default().fg(Color::DarkGray),
+                ))),
+        ),
+        area,
+    );
+    frame.render_widget(
+        Span::styled(
+            varde::FIND_ICONS[0].1,
+            match find.case.exact(find.query.shown()) {
+                true => Style::default().fg(Color::Yellow),
+                false => Style::default().fg(Color::DarkGray),
+            },
+        ),
+        rect(layout::replace_case(spot)),
+    );
+    for ((at, label), (_, spot)) in varde::REPLACE_BUTTONS
+        .iter()
+        .zip(layout::replace_buttons(spot))
+    {
+        frame.render_widget(Span::styled(*label, on(*at)), rect(spot));
+    }
+}
+
 fn cheatsheet(frame: &mut Frame, state: &State, area: Rect) {
     if !showing_cheatsheet(state) || state.focus != Pane::Editor {
         return;
@@ -3897,18 +3974,33 @@ fn over_buffer_line(
 }
 
 /// What the editor's bottom-left line is showing, prefix and all: a `:` command
-/// being typed, or a `/` search of this file. One line, two prefixes — which is
-/// what keeps finding here looking different from finding everywhere. The caret
-/// is part of it, since the `/` query's can be anywhere in it.
-fn command_line(state: &State, command: Option<&str>) -> Option<String> {
-    match (command, state.find) {
-        (Some(draft), _) => Some(format!(":{draft}█")),
-        (None, Some(_)) => {
-            let (before, after) = at_caret(&state.find_query);
-            Some(format!("/{before}█{after}"))
-        }
-        (None, None) => None,
+/// being typed, or the `/` search of this file that is on. One line, two
+/// prefixes — which is what keeps finding here looking different from finding
+/// everywhere. The search's pieces are `varde::find_line`'s, which the mouse
+/// hit-tests too: `[Aa]` dim unless the search is exact, and the icon holding
+/// the keyboard reversed.
+fn command_line(state: &State, command: Option<&str>) -> Line<'static> {
+    let yellow = Style::default().fg(Color::Yellow);
+    if let Some(line) = command {
+        return Line::from(Span::styled(format!(" {line} "), yellow));
     }
+    let Some(find) = state.find.as_ref() else {
+        return Line::default();
+    };
+    let lit = find.case.exact(find.query.shown());
+    let pieces = varde::find_line(state).into_iter().map(|(text, icon)| {
+        let style = match icon {
+            Some(varde::FindIcon::Case) if !lit => Style::default().fg(Color::DarkGray),
+            _ => yellow,
+        };
+        match (icon, find.keys) {
+            (Some(icon), varde::FindKeys::Icon(on)) if icon == on => {
+                Span::styled(text, style.add_modifier(Modifier::REVERSED))
+            }
+            _ => Span::styled(text, style),
+        }
+    });
+    Line::from(pieces.collect::<Vec<_>>())
 }
 
 /// A search query either side of its caret.
@@ -3939,13 +4031,7 @@ fn editor_block(
     pane_block(title, state, Pane::Editor)
         .title(right_title(state, room, width))
         .title_bottom(Line::from(footer).right_aligned())
-        .title_bottom(
-            Line::from(Span::styled(
-                command.map(|line| format!(" {line} ")).unwrap_or_default(),
-                Style::default().fg(Color::Yellow),
-            ))
-            .left_aligned(),
-        )
+        .title_bottom(command_line(state, command).left_aligned())
 }
 
 /// The diff's rows, comments and all. Comments anchor to the new-file numbers
@@ -5235,7 +5321,12 @@ mod tests {
             1,
             varde::authorship::traced(Some(&committed), &text).into(),
         ));
-        state.find_query = varde::editor::Buffer::text_box("step");
+        state.find = Some(varde::Find {
+            query: varde::editor::Buffer::text_box("step"),
+            origin: varde::Place { line: 1, column: 1 },
+            case: varde::search::Case::Smart,
+            keys: varde::FindKeys::Away,
+        });
         state.diagnostics.insert(
             path.clone(),
             [(
@@ -5315,7 +5406,10 @@ mod tests {
     ///
     /// Against that renderer's own output, taken at the commit before #101 and
     /// committed beside the suite: a comparison with a whole-file render of
-    /// today's code passes any regression the two paths share (#104).
+    /// today's code passes any regression the two paths share (#104). Its
+    /// bottom border was redrawn once, when the in-file search's line came to
+    /// stay on with its highlights (#79); every row of text inside it is still
+    /// that renderer's.
     #[test]
     fn a_scrolled_pane_draws_what_the_whole_file_renderer_drew() {
         let before = include_str!("../tests/snapshots/editor_before_101.txt");
@@ -5346,7 +5440,12 @@ mod tests {
         let path = std::path::PathBuf::from("/w/main.rs");
         let mut state = State::default();
         state.current_buffer = Some(path.clone());
-        state.find_query = varde::editor::Buffer::text_box("x");
+        state.find = Some(varde::Find {
+            query: varde::editor::Buffer::text_box("x"),
+            origin: varde::Place { line: 1, column: 1 },
+            case: varde::search::Case::Smart,
+            keys: varde::FindKeys::Away,
+        });
         state
             .buffers
             .insert(path.clone(), varde::editor::Buffer::open(&text, false, 4));

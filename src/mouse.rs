@@ -5,7 +5,9 @@
 //! [`Selection`] request for the edge to fulfil.
 
 use crate::layout::{self, Area, Layout};
-use crate::{tree, Direction, Event, Modal, Pane, Place, Pointed, State};
+use crate::{
+    tree, Direction, Event, FindIcon, FindKeys, Modal, Pane, Place, Pointed, ReplaceField, State,
+};
 use terminput::KeyModifiers;
 use unicode_width::UnicodeWidthStr;
 
@@ -641,6 +643,9 @@ fn pressed(
         return pressed_in_evaluator(state, panes, pointer, input);
     }
     if let Some(events) = pressed_in_hover(state, panes, input) {
+        return events;
+    }
+    if let Some(events) = pressed_in_find(state, panes, input).filter(|_| pane == Pane::Editor) {
         return events;
     }
     if let Some(key) = palette_entry_at(state, panes, input.column, input.row) {
@@ -1370,6 +1375,51 @@ fn pressed_in_hover(state: &State, panes: &Layout, input: Input) -> Option<Vec<E
     })
 }
 
+/// A press on the in-file search's icons or inside its replace box, whatever
+/// has the keyboard. The icons are the pieces `crate::find_line` gives `ui`,
+/// walked from the bottom border's first column; the box's rows are the ones
+/// [`layout::replace_box`] names. Anywhere else inside the box is swallowed
+/// rather than placing a caret in the text under it.
+fn pressed_in_find(state: &State, panes: &Layout, input: Input) -> Option<Vec<Event>> {
+    let find = state.find.as_ref()?;
+    let spot = layout::replace_box(panes.editor);
+    if matches!(find.keys, FindKeys::Replace(_)) && spot.holds(input.column, input.row) {
+        let field = |field| vec![Event::FindKeys(FindKeys::Replace(field))];
+        if layout::replace_case(spot).holds(input.column, input.row) {
+            return Some(vec![Event::ToggleCase]);
+        }
+        let button = layout::replace_buttons(spot)
+            .into_iter()
+            .find(|(_, at)| at.holds(input.column, input.row));
+        return Some(match (button, input.row - spot.y) {
+            (Some((ReplaceField::ReplaceAll, _)), _) => vec![Event::ReplaceAll],
+            (Some((ReplaceField::Replace | ReplaceField::Find | ReplaceField::With, _)), _) => {
+                vec![Event::ReplaceMatch]
+            }
+            (None, 1) => field(ReplaceField::Find),
+            (None, 2) => field(ReplaceField::With),
+            (None, _) => Vec::new(),
+        });
+    }
+    if input.row + 1 != panes.editor.bottom() {
+        return None;
+    }
+    let mut at = panes.editor.x + 1;
+    for (text, icon) in crate::find_line(state) {
+        let width = UnicodeWidthStr::width(text.as_str()) as u16;
+        if (at..at + width).contains(&input.column) {
+            return Some(match icon? {
+                FindIcon::Case => vec![Event::ToggleCase],
+                FindIcon::Replace | FindIcon::ReplaceAll => {
+                    vec![Event::FindKeys(FindKeys::Replace(ReplaceField::With))]
+                }
+            });
+        }
+        at += width;
+    }
+    None
+}
+
 /// Whether the pointer is on the Hover box, border and all, against the
 /// rectangle the renderer draws it in.
 fn on_hover(state: &State, panes: &Layout, input: Input) -> bool {
@@ -1818,6 +1868,44 @@ mod tests {
             },
         )
         .events
+    }
+
+    /// Each row of the replace box is where `ui` draws it: the fields on the
+    /// first two, `[Aa]` at the right of the first, the buttons on the third.
+    #[test]
+    fn a_press_in_the_replace_box_lands_on_what_is_drawn_there() {
+        let mut state = workspace();
+        state.find = Some(crate::Find {
+            query: crate::editor::Buffer::text_box("state"),
+            origin: Place { line: 1, column: 1 },
+            case: crate::search::Case::Smart,
+            keys: crate::FindKeys::Replace(crate::ReplaceField::With),
+        });
+        let editor = panes(120, 26, 30, None, 0, 0, Shapes::default()).editor;
+        let spot = crate::layout::replace_box(editor);
+        let field = |field| vec![Event::FindKeys(crate::FindKeys::Replace(field))];
+        assert_eq!(
+            click(&state, spot.x + 3, spot.y + 1),
+            field(crate::ReplaceField::Find)
+        );
+        assert_eq!(
+            click(&state, spot.x + 3, spot.y + 2),
+            field(crate::ReplaceField::With)
+        );
+        assert_eq!(
+            click(&state, spot.right() - 4, spot.y + 1),
+            vec![Event::ToggleCase]
+        );
+        assert_eq!(
+            click(&state, spot.x + 2, spot.y + 3),
+            vec![Event::ReplaceMatch]
+        );
+        assert_eq!(
+            click(&state, spot.x + 12, spot.y + 3),
+            vec![Event::ReplaceAll]
+        );
+        assert_eq!(click(&state, spot.x + 11, spot.y + 3), vec![]);
+        assert_eq!(click(&state, spot.x + 3, spot.y), vec![], "the border");
     }
 
     /// The cell the encoding tests report on, so each expectation reads as the

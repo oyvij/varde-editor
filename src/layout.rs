@@ -678,6 +678,52 @@ pub fn search_box(width: u16, height: u16) -> Area {
     inset(width, height, 8, 3)
 }
 
+/// The replace box: floating in the editor's top-right corner, inside its
+/// border, so the text it covers is the text furthest from the `/` line.
+/// Three rows inside — find, with, and the two buttons — which `ui` draws and
+/// `mouse` hit-tests by their offset from `y + 1`.
+pub fn replace_box(editor: Area) -> Area {
+    let width = editor.width.saturating_sub(2).min(44);
+    Area {
+        x: (editor.x + editor.width).saturating_sub(1 + width),
+        y: editor.y + 1,
+        width,
+        height: editor.height.saturating_sub(2).min(5),
+    }
+}
+
+/// Where the replace box draws `[Aa]` — against its right border on the
+/// "find" row — and each of its buttons on the third row, a column apart.
+/// `ui` renders into these rectangles and `mouse` hit-tests them, so neither
+/// works out a column of its own.
+pub fn replace_case(spot: Area) -> Area {
+    let width = crate::FIND_ICONS[0].1.len() as u16;
+    Area {
+        x: spot.right().saturating_sub(2 + width),
+        y: spot.y + 1,
+        width,
+        height: 1,
+    }
+}
+
+pub fn replace_buttons(spot: Area) -> Vec<(crate::ReplaceField, Area)> {
+    let mut x = spot.x + 2;
+    crate::REPLACE_BUTTONS
+        .iter()
+        .map(|(field, label)| {
+            let width = label.len() as u16;
+            let at = Area {
+                x,
+                y: spot.y + 3,
+                width,
+                height: 1,
+            };
+            x += width + 1;
+            (*field, at)
+        })
+        .collect()
+}
+
 pub fn search_hit_rows(width: u16, height: u16) -> usize {
     search_box(width, height)
         .height
@@ -1476,6 +1522,46 @@ mod tests {
         assert_eq!(super::search_hit_rows(100, 16), 5);
         // A terminal too short for a list still asks for no negative rows.
         assert_eq!(super::search_hit_rows(20, 4), 0);
+    }
+
+    /// Inside the editor's border at its top-right, and never wider or taller
+    /// than the pane has room for.
+    #[test]
+    fn the_replace_box_sits_inside_the_editors_top_right_corner() {
+        let editor = Area {
+            x: 30,
+            y: 0,
+            width: 60,
+            height: 20,
+        };
+        let spot = super::replace_box(editor);
+        assert_eq!((spot.x, spot.y, spot.width, spot.height), (45, 1, 44, 5));
+        let narrow = Area {
+            width: 20,
+            height: 4,
+            ..editor
+        };
+        let spot = super::replace_box(narrow);
+        assert_eq!((spot.x, spot.y, spot.width, spot.height), (31, 1, 18, 2));
+    }
+
+    /// `[Aa]` ends a column short of the right border, and the buttons start a
+    /// column in from the left one with a column between them.
+    #[test]
+    fn the_replace_boxs_toggle_and_buttons_have_one_place_each() {
+        let spot = Area {
+            x: 45,
+            y: 1,
+            width: 44,
+            height: 5,
+        };
+        let case = super::replace_case(spot);
+        assert_eq!((case.x, case.y, case.width), (83, 2, 4));
+        let buttons: Vec<(u16, u16, u16)> = super::replace_buttons(spot)
+            .iter()
+            .map(|(_, at)| (at.x, at.y, at.width))
+            .collect();
+        assert_eq!(buttons, vec![(47, 4, 9), (57, 4, 13)]);
     }
 
     #[test]

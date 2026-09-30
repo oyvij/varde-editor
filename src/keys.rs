@@ -13,7 +13,10 @@
 //! the wrong pane, a modal not claiming what belonged to it, or a modifier
 //! discarded on the way in.
 
-use crate::{debug, tree, Direction, Event, Modal, Pane, Resolution, Selection, State, Tap, View};
+use crate::{
+    debug, tree, Direction, Event, Find, FindIcon, FindKeys, Modal, Pane, ReplaceField, Resolution,
+    Selection, State, Tap, View, FIND_ICONS, REPLACE_FIELDS,
+};
 use terminput::{
     Encoding, Event as Input, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, ModifierKeyCode,
 };
@@ -101,7 +104,9 @@ pub const CHEATSHEET: [(&str, &str, &[View]); 45] = [
         "copy / paste",
         &[View::Edit, View::Review, View::Story],
     ),
-    ("/ n N", "find", &[View::Edit]),
+    // Tab is the find line's, not the buffer's: it walks from the query onto
+    // `[Aa] [replace] [replace all]`, which Right does too at the query's end.
+    ("/ n N Tab", "find / its icons", &[View::Edit]),
     ("gt gT", "buffer", &[View::Edit]),
     // Two rows for one gesture, because the two spellings do not reach the
     // same views. The chord needs a buffer to hold the waiting `g`: Review
@@ -206,7 +211,11 @@ pub const CHEATSHEET: [(&str, &str, &[View]); 45] = [
     // fires exactly when its key becomes the thing to press, which is a better
     // teacher than a standing row — the row is here so the key is on the
     // contract, not because this is where anybody learns it.
-    ("C-f", "project", &[View::Edit, View::Review, View::Story]),
+    (
+        "C-f D-f",
+        "project",
+        &[View::Edit, View::Review, View::Story],
+    ),
     ("D", "diverged from disk", &[View::Edit]),
     // The write key rides `:w`'s row rather than one of its own: Edit's rows
     // are at the limit a 26-row window has, and it is the same write.
@@ -420,6 +429,14 @@ pub const COMMENT_BOX_KEYS: [(&str, &str); 4] = [
     ("C-z", "undo"),
     ("C-S-z", "redo"),
 ];
+
+/// The keys the replace box answers and the word it says for each, drawn in
+/// its bottom border for the reason [`COMMENT_BOX_KEYS`] is: the box exists
+/// only while it is up, and `[replace]` on the `/` line is what opens it.
+/// Enter replaces from either field or `[replace]`, and replaces every match
+/// from `[replace all]`.
+pub const REPLACE_BOX_KEYS: [(&str, &str); 3] =
+    [("Tab", "next"), ("Enter", "replace"), ("Esc", "close")];
 
 /// The keys the results box answers and the word it says for each — here for
 /// the reason [`TOOL_LIST_KEYS`] is here: the box exists only while a search
@@ -678,6 +695,9 @@ fn reserved(state: &State, drafts: &mut Drafts, event: KeyEvent, at_ms: u64) -> 
 /// The keys Varde answers whatever is on screen, once the child has not taken
 /// them.
 fn claimed_everywhere(state: &State, event: KeyEvent) -> Option<Vec<Event>> {
+    if event.modifiers.contains(KeyModifiers::SUPER) && event.code == KeyCode::Char('f') {
+        return Some(vec![Event::OpenSearch]);
+    }
     if event.modifiers.contains(KeyModifiers::CTRL) {
         match event.code {
             KeyCode::Char('q') => return Some(vec![Event::Quit]),
@@ -1032,7 +1052,10 @@ fn child_owns_keys(state: &State, drafts: &Drafts) -> bool {
 fn a_box_has_the_keys(state: &State, drafts: &Drafts) -> bool {
     !matches!(state.modal, Modal::None)
         || state.search.is_some()
-        || state.find.is_some()
+        || state
+            .find
+            .as_ref()
+            .is_some_and(|find| find.keys != FindKeys::Away)
         || drafts.command.is_some()
         || drafts.filter.is_some()
 }
@@ -1252,16 +1275,72 @@ fn searching(event: KeyEvent) -> Vec<Event> {
     }
 }
 
-/// `/` in the editor. The query is state rather than a draft because the cursor
-/// moves to the closest match on every keystroke.
-fn finding(event: KeyEvent) -> Vec<Event> {
-    if let Some(events) = query_key(event) {
-        return events;
-    }
-    match event.code {
-        KeyCode::Esc => vec![Event::CloseFind],
-        KeyCode::Enter => vec![Event::AcceptFind],
-        _ => vec![],
+/// `/` in the editor, while its search has the keyboard: the query, one of
+/// the icons after it, or the replace box. The query is state rather than a
+/// draft because the cursor moves to the closest match on every keystroke.
+fn finding(find: &Find, event: KeyEvent) -> Vec<Event> {
+    let keys = |keys| vec![Event::FindKeys(keys)];
+    let back = event.modifiers.contains(KeyModifiers::SHIFT);
+    match find.keys {
+        FindKeys::Away => vec![],
+        FindKeys::Query => {
+            let at_end = find.query.column > find.query.shown().chars().count();
+            match event.code {
+                KeyCode::Esc => vec![Event::CloseFind],
+                KeyCode::Enter => vec![Event::AcceptFind],
+                KeyCode::Tab => keys(FindKeys::Icon(FindIcon::Case)),
+                KeyCode::Right if at_end && event.modifiers.is_empty() => {
+                    keys(FindKeys::Icon(FindIcon::Case))
+                }
+                _ => query_key(event).unwrap_or_default(),
+            }
+        }
+        FindKeys::Icon(icon) => {
+            let at = FIND_ICONS.iter().position(|(each, _)| *each == icon);
+            let at = at.unwrap_or(0);
+            match event.code {
+                KeyCode::Left if at == 0 => vec![
+                    Event::FindKeys(FindKeys::Query),
+                    Event::QueryEnd(Direction::Right),
+                ],
+                KeyCode::Left => keys(FindKeys::Icon(FIND_ICONS[at - 1].0)),
+                KeyCode::Right => keys(FindKeys::Icon(
+                    FIND_ICONS[(at + 1).min(FIND_ICONS.len() - 1)].0,
+                )),
+                KeyCode::Up | KeyCode::Esc => keys(FindKeys::Query),
+                KeyCode::Enter => match icon {
+                    FindIcon::Case => vec![Event::ToggleCase],
+                    FindIcon::Replace | FindIcon::ReplaceAll => {
+                        keys(FindKeys::Replace(ReplaceField::With))
+                    }
+                },
+                _ => vec![],
+            }
+        }
+        FindKeys::Replace(field) => {
+            let at = REPLACE_FIELDS.iter().position(|each| *each == field);
+            let at = at.unwrap_or(0);
+            let count = REPLACE_FIELDS.len();
+            match event.code {
+                KeyCode::Esc => keys(FindKeys::Away),
+                KeyCode::Tab if back => {
+                    keys(FindKeys::Replace(REPLACE_FIELDS[(at + count - 1) % count]))
+                }
+                KeyCode::Tab => keys(FindKeys::Replace(REPLACE_FIELDS[(at + 1) % count])),
+                KeyCode::Enter if field == ReplaceField::ReplaceAll => vec![Event::ReplaceAll],
+                KeyCode::Enter => vec![Event::ReplaceMatch],
+                _ if matches!(field, ReplaceField::Find | ReplaceField::With) => {
+                    query_key(event).unwrap_or_default()
+                }
+                // On a button no letter is text, so `n` and `N` step past a
+                // match without replacing it.
+                _ => match typed(event) {
+                    Some('n') => vec![Event::StepMatch(Direction::Right)],
+                    Some('N') => vec![Event::StepMatch(Direction::Left)],
+                    _ => vec![],
+                },
+            }
+        }
     }
 }
 
@@ -1674,8 +1753,12 @@ fn focus_alias(event: KeyEvent, alt: bool) -> Option<Vec<Event>> {
 /// open and gives them straight back when it closes, which is why `/` costs no
 /// motion.
 fn collecting(state: &State, drafts: &mut Drafts, event: KeyEvent) -> Option<Vec<Event>> {
-    if state.find.is_some() {
-        return Some(finding(event));
+    if let Some(find) = state
+        .find
+        .as_ref()
+        .filter(|find| find.keys != FindKeys::Away)
+    {
+        return Some(finding(find, event));
     }
     if drafts.command.is_some() {
         return Some(command_line(drafts, event));
@@ -2084,7 +2167,8 @@ fn filter_box(drafts: &mut Drafts, event: KeyEvent) -> Vec<Event> {
 mod tests {
     use super::{command, on_key_event, on_paste, Drafts, Pasted};
     use crate::{
-        story, DiffLine, Direction, Event, Modal, Pane, Place, Selection, State, Tap, View,
+        story, DiffLine, Direction, Event, Find, FindIcon, FindKeys, Modal, Pane, Place,
+        ReplaceField, Selection, State, Tap, View,
     };
     use terminput::{
         KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MediaKeyCode, ModifierDirection,
@@ -3045,10 +3129,7 @@ mod tests {
     // into the query must still move back a word once the search has closed.
     #[test]
     fn the_in_file_search_claims_the_editors_keys_only_while_it_is_open() {
-        let finding = State {
-            find: Some(Place { line: 1, column: 1 }),
-            ..State::default()
-        };
+        let finding = typing_a_query("");
         assert_eq!(press(&finding, plain('b')), vec![Event::EditorKey('b')]);
         assert_eq!(
             press(&finding, KeyEvent::new(KeyCode::Backspace)),
@@ -3067,6 +3148,118 @@ mod tests {
             press(&focused(Pane::Editor), plain('b')),
             vec![Event::EditorKey('b')]
         );
+        // On, with the keyboard back in the buffer: the same.
+        let mut away = typing_a_query("b");
+        away.find.as_mut().expect("on").keys = FindKeys::Away;
+        assert_eq!(press(&away, plain('b')), vec![Event::EditorKey('b')]);
+    }
+
+    fn typing_a_query(query: &str) -> State {
+        State {
+            find: Some(Find {
+                query: crate::editor::Buffer::text_box(query),
+                origin: Place { line: 1, column: 1 },
+                case: crate::search::Case::Smart,
+                keys: FindKeys::Query,
+            }),
+            ..State::default()
+        }
+    }
+
+    fn with_find_keys(keys: FindKeys) -> State {
+        let mut state = typing_a_query("state");
+        state.find.as_mut().expect("on").keys = keys;
+        state
+    }
+
+    /// Right moves the caret until the query runs out, and then walks onto
+    /// the icons; Tab goes there from anywhere in it. Left off the first icon
+    /// puts the caret back at the end rather than wherever it was left.
+    #[test]
+    fn the_icons_are_walked_from_the_end_of_the_query() {
+        let right = KeyEvent::new(KeyCode::Right);
+        let left = KeyEvent::new(KeyCode::Left);
+        let icon = |icon| vec![Event::FindKeys(FindKeys::Icon(icon))];
+        let mut middle = typing_a_query("state");
+        middle
+            .find
+            .as_mut()
+            .expect("on")
+            .query
+            .arrow(Direction::Left);
+        assert_eq!(
+            press(&middle, right),
+            vec![Event::EditorArrow(Direction::Right)]
+        );
+        assert_eq!(
+            press(&middle, KeyEvent::new(KeyCode::Tab)),
+            icon(FindIcon::Case)
+        );
+        assert_eq!(press(&typing_a_query("state"), right), icon(FindIcon::Case));
+        let on_case = with_find_keys(FindKeys::Icon(FindIcon::Case));
+        assert_eq!(press(&on_case, right), icon(FindIcon::Replace));
+        assert_eq!(
+            press(&on_case, left),
+            vec![
+                Event::FindKeys(FindKeys::Query),
+                Event::QueryEnd(Direction::Right)
+            ]
+        );
+        assert_eq!(
+            press(&on_case, KeyEvent::new(KeyCode::Enter)),
+            vec![Event::ToggleCase]
+        );
+        let on_last = with_find_keys(FindKeys::Icon(FindIcon::ReplaceAll));
+        assert_eq!(press(&on_last, right), icon(FindIcon::ReplaceAll));
+        assert_eq!(press(&on_last, left), icon(FindIcon::Replace));
+        for back in [KeyCode::Up, KeyCode::Esc] {
+            assert_eq!(
+                press(&on_last, KeyEvent::new(back)),
+                vec![Event::FindKeys(FindKeys::Query)]
+            );
+        }
+        assert_eq!(
+            press(&on_last, KeyEvent::new(KeyCode::Enter)),
+            vec![Event::FindKeys(FindKeys::Replace(ReplaceField::With))]
+        );
+    }
+
+    /// What the replace box's footer names is what it answers, from the field
+    /// the box opens on.
+    #[test]
+    fn the_replace_box_answers_the_keys_its_footer_names() {
+        let with = with_find_keys(FindKeys::Replace(ReplaceField::With));
+        for (key, word) in super::REPLACE_BOX_KEYS {
+            let code = match key {
+                "Tab" => KeyCode::Tab,
+                "Enter" => KeyCode::Enter,
+                "Esc" => KeyCode::Esc,
+                other => panic!("no key spells {other}"),
+            };
+            assert!(
+                !press(&with, KeyEvent::new(code)).is_empty(),
+                "the box offers {key} for {word} and does nothing with it"
+            );
+        }
+        let shift_tab = KeyEvent::new(KeyCode::Tab).modifiers(KeyModifiers::SHIFT);
+        assert_eq!(
+            press(&with, shift_tab),
+            vec![Event::FindKeys(FindKeys::Replace(ReplaceField::Find))]
+        );
+        assert_eq!(press(&with, plain('n')), vec![Event::EditorKey('n')]);
+        let on_all = with_find_keys(FindKeys::Replace(ReplaceField::ReplaceAll));
+        assert_eq!(
+            press(&on_all, KeyEvent::new(KeyCode::Enter)),
+            vec![Event::ReplaceAll]
+        );
+        assert_eq!(
+            press(&on_all, plain('n')),
+            vec![Event::StepMatch(Direction::Right)]
+        );
+        assert_eq!(
+            press(&on_all, KeyEvent::new(KeyCode::Tab)),
+            vec![Event::FindKeys(FindKeys::Replace(ReplaceField::Find))]
+        );
     }
 
     /// Both queries are a buffer with a caret, so the keys that move through
@@ -3074,10 +3267,14 @@ mod tests {
     /// shape macOS sends it included. Up and down stay the results box's.
     #[test]
     fn a_search_query_answers_the_keys_that_move_through_text() {
-        let finding = State {
-            find: Some(Place { line: 1, column: 1 }),
-            ..State::default()
-        };
+        // Mid-query, since Right at the end of one walks onto its icons.
+        let mut finding = typing_a_query("ab");
+        finding
+            .find
+            .as_mut()
+            .expect("on")
+            .query
+            .arrow(Direction::Left);
         let searching = State {
             search: Some(crate::Search::default()),
             ..State::default()
@@ -3163,6 +3360,7 @@ mod tests {
     fn ctrl_f_opens_search_from_the_panes_varde_owns() {
         for pane in [Pane::Editor, Pane::Tree] {
             assert_eq!(press(&focused(pane), ctrl('f')), vec![Event::OpenSearch]);
+            assert_eq!(press(&focused(pane), cmd('f')), vec![Event::OpenSearch]);
             // `C-S-f` is not `C-f`. The shift a terminal reports separately is
             // applied on the way in, so a binding reads the key that was
             // pressed rather than the one underneath it.
@@ -3963,9 +4161,10 @@ mod tests {
     /// One spelling per *gesture*, not per key event: the sweep drives all
     /// sixty-four modifier combinations of every code, and a modifier the router
     /// never inspects names no gesture of its own. `Super+x` types the `x` it
-    /// always typed, so it is spelled `x` — except on the four keys where the
-    /// router does inspect it, `D-c`, `D-v`, `D-s` and `D-d`, which are Command's
-    /// own spellings of copy, paste, write and the next occurrence and are folded
+    /// always typed, so it is spelled `x` — except on the five keys where the
+    /// router does inspect it, `D-c`, `D-v`, `D-s`, `D-d` and `D-f`, which are
+    /// Command's own spellings of copy, paste, write, the next occurrence and
+    /// project search and are folded
     /// onto no other row for the reason `M-Bksp` is not folded onto `Bksp`. Ctrl
     /// outranks Alt for the same reason — the Ctrl bindings ask `contains(CTRL)`
     /// and never look at Alt, so `C-M-q` is `C-q` carrying a modifier the
@@ -4004,7 +4203,7 @@ mod tests {
             KeyCode::Char('z') if ctrl || command => "C-z".to_string(),
             KeyCode::Char('Z') if ctrl || command => "C-S-z".to_string(),
             KeyCode::Char(c) if ctrl => format!("C-{c}"),
-            KeyCode::Char(c @ ('c' | 'v' | 's' | 'd')) if command => format!("D-{c}"),
+            KeyCode::Char(c @ ('c' | 'v' | 's' | 'd' | 'f')) if command => format!("D-{c}"),
             KeyCode::Char(c) if alt => format!("M-{c}"),
             KeyCode::Char(c) => c.to_string(),
             // A gesture of its own since `backspace_word` inspects Alt on it:
@@ -4110,10 +4309,10 @@ mod tests {
         }
         event.modifiers &= match event.code {
             KeyCode::Char(_) if event.modifiers.contains(KeyModifiers::CTRL) => KeyModifiers::CTRL,
-            // Command is a gesture of its own on these four and nowhere else,
+            // Command is a gesture of its own on these five and nowhere else,
             // which is the claim `label` makes about them and this is where it
             // is checked.
-            KeyCode::Char('c' | 'v' | 's' | 'd')
+            KeyCode::Char('c' | 'v' | 's' | 'd' | 'f')
                 if event.modifiers.contains(KeyModifiers::SUPER) =>
             {
                 KeyModifiers::SUPER

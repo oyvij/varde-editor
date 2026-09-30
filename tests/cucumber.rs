@@ -2852,6 +2852,7 @@ fn named_key(key: &str) -> Option<terminput::KeyEvent> {
         "Cmd+c" => plain(terminput::KeyCode::Char('c')).modifiers(terminput::KeyModifiers::SUPER),
         "Cmd+v" => plain(terminput::KeyCode::Char('v')).modifiers(terminput::KeyModifiers::SUPER),
         "Ctrl+d" => plain(terminput::KeyCode::Char('d')).modifiers(terminput::KeyModifiers::CTRL),
+        "Ctrl+f" => plain(terminput::KeyCode::Char('f')).modifiers(terminput::KeyModifiers::CTRL),
         "Ctrl+n" => plain(terminput::KeyCode::Char('n')).modifiers(terminput::KeyModifiers::CTRL),
         "Ctrl+p" => plain(terminput::KeyCode::Char('p')).modifiers(terminput::KeyModifiers::CTRL),
         "Ctrl+s" => plain(terminput::KeyCode::Char('s')).modifiers(terminput::KeyModifiers::CTRL),
@@ -3800,6 +3801,7 @@ fn pane_still_has_focus(world: &mut VardeWorld, pane: String) {
     assert_eq!(world.state.focus, parse_pane(&pane));
 }
 
+#[given(expr = "I click in the {word} pane")]
 #[when(expr = "I click in the {word} pane")]
 fn click_pane(world: &mut VardeWorld, pane: String) {
     // A click is a press and a release: the press is ours, and the release is
@@ -6885,6 +6887,8 @@ fn there_are_no_matches(world: &mut VardeWorld) {
 /// nothing — and a key lands wherever the query's caret is.
 #[given(expr = "I type {string} into the in-file search")]
 #[when(expr = "I type {string} into the in-file search")]
+#[given(expr = "I type {string} into the replace box")]
+#[when(expr = "I type {string} into the replace box")]
 fn type_into_find(world: &mut VardeWorld, query: String) {
     for key in query.chars() {
         route_key(world, &key.to_string(), 0);
@@ -6893,7 +6897,73 @@ fn type_into_find(world: &mut VardeWorld, query: String) {
 
 #[then(expr = "the in-file search query is {string}")]
 fn find_query_is(world: &mut VardeWorld, expected: String) {
-    assert_eq!(world.state.find_query.shown(), expected);
+    let find = world.state.find.as_ref().expect("a search that is on");
+    assert_eq!(find.query.shown(), expected);
+}
+
+fn find_keys(world: &VardeWorld) -> varde::FindKeys {
+    world.state.find.as_ref().expect("a search that is on").keys
+}
+
+fn find_icon(name: &str) -> varde::FindIcon {
+    match name {
+        "case" => varde::FindIcon::Case,
+        "replace" => varde::FindIcon::Replace,
+        "replace all" => varde::FindIcon::ReplaceAll,
+        other => panic!("no icon {other:?}"),
+    }
+}
+
+#[then(expr = "the keyboard is in the in-file search query")]
+fn keyboard_in_query(world: &mut VardeWorld) {
+    assert_eq!(find_keys(world), varde::FindKeys::Query);
+}
+
+#[then(expr = "the keyboard is on the in-file search's {string} icon")]
+fn keyboard_on_icon(world: &mut VardeWorld, icon: String) {
+    assert_eq!(find_keys(world), varde::FindKeys::Icon(find_icon(&icon)));
+}
+
+#[then(expr = "the keyboard is not in the in-file search")]
+fn keyboard_not_in_find(world: &mut VardeWorld) {
+    assert_eq!(find_keys(world), varde::FindKeys::Away);
+}
+
+#[then(expr = "the case toggle is {word}")]
+fn case_toggle_is(world: &mut VardeWorld, shown: String) {
+    let find = world.state.find.as_ref().expect("a search that is on");
+    let lit = find.case.exact(find.query.shown());
+    assert_eq!(lit, shown == "lit", "the toggle is lit: {lit}");
+}
+
+#[then(expr = "the replace box is open")]
+fn replace_box_open(world: &mut VardeWorld) {
+    assert!(matches!(find_keys(world), varde::FindKeys::Replace(_)));
+}
+
+#[then(expr = "the replace box is not open")]
+fn replace_box_closed(world: &mut VardeWorld) {
+    assert!(!matches!(find_keys(world), varde::FindKeys::Replace(_)));
+}
+
+/// Through the mouse, at the column `find_line` draws the icon in — the pieces
+/// the renderer draws and the hit-test walks.
+#[given(expr = "I click the {string} icon on the in-file search line")]
+#[when(expr = "I click the {string} icon on the in-file search line")]
+fn click_find_icon(world: &mut VardeWorld, icon: String) {
+    let icon = find_icon(&icon);
+    let editor = world.panes().editor;
+    let mut column = editor.x + 1;
+    for (text, piece) in varde::find_line(&world.state) {
+        if piece == Some(icon) {
+            break;
+        }
+        column += UnicodeWidthStr::width(text.as_str()) as u16;
+    }
+    let row = editor.bottom() - 1;
+    world.pointer = mouse::Pointer::default();
+    world.report(mouse::Kind::LeftDown, column, row);
+    world.report(mouse::Kind::LeftUp, column, row);
 }
 
 #[when(expr = "I press Escape during the in-file search")]

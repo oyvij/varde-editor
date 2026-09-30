@@ -9,9 +9,17 @@ Feature: Finding inside the buffer
   started; Enter leaves the found text as the selection, so it can be copied or
   handed to project search without retyping it.
 
+  The search stays on until it is ended: Enter hands the keyboard to the buffer
+  and leaves the line, its count and its highlights where they are, and `/`
+  goes back into the query. Escape in the buffer ends it where the cursor is.
+
   Matching is the project searcher's, handed a single file rather than the whole
   workspace, so a lowercase query ignores case and a capital makes it exact —
-  one rule, not two.
+  one rule, not two — until `[Aa]` is pressed, which then stays where it was put
+  for the rest of this search.
+
+  `[replace]` and `[replace all]` open the replace box. Replacing edits the
+  buffer and nothing else: it is written when it is saved, like any other edit.
 
   Background:
     Given the workspace root is "/home/me/projects/varde"
@@ -75,7 +83,42 @@ Feature: Finding inside the buffer
     And I type "other" into the in-file search
     When I press Enter during the in-file search
     Then the selection holds "other"
-    And the in-file search is not open
+    And the in-file search is open
+
+  Scenario: Enter hands the keyboard to the buffer and the search stays on
+    Given I press "/" in the editor
+    And I type "update" into the in-file search
+    And I press the key "Enter"
+    When I press the key "j"
+    Then the cursor is at line 2 column 4
+    And the keyboard is not in the in-file search
+    And the in-file search query is "update"
+
+  Scenario: Slash goes back into the query with its text intact
+    Given I press "/" in the editor
+    And I type "state" into the in-file search
+    And I press the key "Enter"
+    When I press the key "/"
+    Then the keyboard is in the in-file search query
+    And the in-file search query is "state"
+
+  Scenario: Another pane takes the keyboard and the search stays on
+    Given I press "/" in the editor
+    And I type "state" into the in-file search
+    And I click in the terminal pane
+    When I press the key "x"
+    Then the terminal received "x"
+    And the in-file search query is "state"
+    And the highlighted matches are:
+      | 1 | 11 |
+      | 3 | 10 |
+
+  Scenario: Coming back to the editor lands in the buffer, not the query
+    Given I press "/" in the editor
+    And I type "state" into the in-file search
+    And I click in the terminal pane
+    When I click in the editor pane
+    Then the keyboard is not in the in-file search
 
   Scenario: A lowercase query ignores case
     Given I press "/" in the editor
@@ -178,9 +221,171 @@ Feature: Finding inside the buffer
     Then the highlighted matches are:
       | 3 | 10 |
 
-  Scenario: Escape clears a finished search, highlights and all
+  Scenario: Escape in the buffer ends the search where the cursor is
     Given I press "/" in the editor
     And I type "state" into the in-file search
     And I press Enter during the in-file search
     When I press "Escape" in the editor
     Then nothing is highlighted
+    And the in-file search is not open
+    And the cursor is at line 1 column 11
+
+  Scenario: Right at the end of the query reaches the case icon
+    Given I press "/" in the editor
+    And I type "state" into the in-file search
+    When I press the key "Right"
+    Then the keyboard is on the in-file search's "case" icon
+
+  Scenario: Right and Left walk the icons
+    Given I press "/" in the editor
+    And I type "state" into the in-file search
+    And I press the key "Tab"
+    And I press the key "Right"
+    And I press the key "Right"
+    When I press the key "Left"
+    Then the keyboard is on the in-file search's "replace" icon
+
+  Scenario: Left from the case icon returns to the end of the query
+    Given I press "/" in the editor
+    And I type "stat" into the in-file search
+    And I press the key "Left"
+    And I press the key "Left"
+    And I press the key "Tab"
+    And I press the key "Left"
+    When I type "e" into the in-file search
+    Then the in-file search query is "state"
+
+  Scenario: A lowercase query leaves the case toggle dim and finds a capital
+    Given I press "/" in the editor
+    When I type "update" into the in-file search
+    Then the case toggle is dim
+    And the highlighted matches are:
+      | 1 | 4 |
+      | 2 | 5 |
+
+  Scenario: A capital lights the case toggle and no longer finds the lowercase
+    Given I press "/" in the editor
+    When I type "Update" into the in-file search
+    Then the case toggle is lit
+    And the highlighted matches are:
+      | 2 | 5 |
+
+  Scenario: Pressing the case toggle on a capital query ignores case
+    Given I press "/" in the editor
+    And I type "Update" into the in-file search
+    When I click the "case" icon on the in-file search line
+    Then the case toggle is dim
+    And the highlighted matches are:
+      | 1 | 4 |
+      | 2 | 5 |
+
+  Scenario: The case toggle stays where it was put while the query is edited
+    Given I press "/" in the editor
+    And I type "up" into the in-file search
+    And I click the "case" icon on the in-file search line
+    When I type "date" into the in-file search
+    Then the case toggle is lit
+    And the highlighted matches are:
+      | 1 | 4 |
+
+  Scenario: A new search after Escape starts on smart case
+    Given I press "/" in the editor
+    And I type "up" into the in-file search
+    And I click the "case" icon on the in-file search line
+    And I press the key "Escape"
+    And I press "/" in the editor
+    When I type "update" into the in-file search
+    Then the case toggle is dim
+    And the highlighted matches are:
+      | 1 | 4 |
+      | 2 | 5 |
+
+  Scenario: Replace takes the match at the cursor and lands on the next
+    Given I press "/" in the editor
+    And I type "state" into the in-file search
+    And I press the key "Enter"
+    And I click the "replace" icon on the in-file search line
+    And I type "status" into the replace box
+    When I press the key "Enter"
+    Then the buffer holds:
+      """
+      fn update(status)
+      let Update = 1
+      fn other(state)
+      """
+    And the cursor is at line 3 column 10
+    And the replace box is open
+
+  Scenario: Replace all replaces every match and writes nothing
+    Given I press "/" in the editor
+    And I type "state" into the in-file search
+    And I press the key "Enter"
+    And I click the "replace all" icon on the in-file search line
+    And I type "status" into the replace box
+    And I press the key "Tab"
+    And I press the key "Tab"
+    When I press the key "Enter"
+    Then the buffer holds:
+      """
+      fn update(status)
+      let Update = 1
+      fn other(status)
+      """
+    And the replace box is not open
+    And the in-file search is open
+    And no file was written
+
+  Scenario: One undo puts back every match a replace all took
+    Given I press "/" in the editor
+    And I type "state" into the in-file search
+    And I press the key "Enter"
+    And I click the "replace all" icon on the in-file search line
+    And I type "status" into the replace box
+    And I press the key "Tab"
+    And I press the key "Tab"
+    And I press the key "Enter"
+    When I press "u" in the editor
+    Then the buffer holds:
+      """
+      fn update(state)
+      let Update = 1
+      fn other(state)
+      """
+
+  Scenario: Replace all honours the case toggle
+    Given I press "/" in the editor
+    And I type "Update" into the in-file search
+    And I press the key "Enter"
+    And I click the "replace all" icon on the in-file search line
+    And I type "Upgrade" into the replace box
+    And I press the key "Tab"
+    And I press the key "Tab"
+    When I press the key "Enter"
+    Then the buffer holds:
+      """
+      fn update(state)
+      let Upgrade = 1
+      fn other(state)
+      """
+
+  Scenario: Escape closes the replace box and the search stays on
+    Given I press "/" in the editor
+    And I type "state" into the in-file search
+    And I press the key "Enter"
+    And I click the "replace" icon on the in-file search line
+    When I press the key "Escape"
+    Then the replace box is not open
+    And the in-file search query is "state"
+
+  Scenario: Ctrl+F searches the project for what the editor has selected
+    Given I press "/" in the editor
+    And I type "other" into the in-file search
+    And I press the key "Enter"
+    When I press the key "Ctrl+f"
+    Then the search is open
+    And the search query is "other"
+
+  Scenario: Ctrl+F with nothing selected opens an empty project search
+    When I press the key "Ctrl+f"
+    Then the search is open
+    And the search query is ""
