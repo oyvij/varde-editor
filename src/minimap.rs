@@ -22,7 +22,8 @@
 //! every font there is, and the editor already draws the middle dot for a
 //! space.
 //!
-//! Past `WIDTH * COLUMNS` characters a line is not mirrored at all — the mirror
+//! Past `(WIDTH - 2) * COLUMNS` characters — the strip less the slider's
+//! column and the mark lane's — a line is not mirrored at all — the mirror
 //! is for the shape of a file, and a strip wide enough for a long line is a
 //! strip taking the columns the line is read in.
 //!
@@ -36,9 +37,8 @@ use crate::highlight::{Kind, Token};
 use crate::layout::Area;
 use crate::State;
 
-/// How many of the editor pane's columns the strip takes. The scrollbar is
-/// drawn over its last column rather than beside it, the way an overlay
-/// scrollbar sits over what it scrolls — so this is the whole cost.
+/// How many of the editor pane's columns the strip takes, the slider's first
+/// column and the mark lane's last among them — so this is the whole cost.
 const WIDTH: u16 = 12;
 
 /// How many source columns one cell of the strip stands for.
@@ -240,6 +240,46 @@ pub fn cells(tokens: &[Vec<Token>], first: usize, rows: usize, width: usize) -> 
         .collect()
 }
 
+/// What a row of the lane down the strip's last column says: the most
+/// important thing on either of its two lines, anywhere in the file, so an
+/// error below the window can be seen without scrolling to it. Declared in
+/// that order, which `Ord` is what picks by.
+///
+/// The gutter's own priority, a Diagnostic before a change, with the two
+/// quieter severities and the voice's reading place left out: a mark on a
+/// strip this far off has to be worth a look, and the gutter already says the
+/// rest where the line is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Mark {
+    Error,
+    Warning,
+    Changed,
+}
+
+/// The lane's `rows` marks, mirroring from the 0-based line `first` — the rows
+/// on screen, as [`cells`] is. Read off the same Diagnostics and the same
+/// Change-bar trace the gutter reads, so the lane and the gutter cannot
+/// disagree about a line.
+pub fn lane(state: &State, first: usize, rows: usize) -> Vec<Option<Mark>> {
+    let Some(path) = state.current_buffer.as_deref() else {
+        return vec![None; rows];
+    };
+    // The trace `changed_lines` filters, indexed at the lines on screen rather
+    // than filtered whole, so the lane costs its rows and not the file.
+    let traced = crate::authorship::traced_lines(state).unwrap_or_default();
+    let mark = |line: usize| match crate::lsp::mark(state, path, line) {
+        Some(crate::lsp::Severity::Error) => Some(Mark::Error),
+        Some(crate::lsp::Severity::Warning) => Some(Mark::Warning),
+        _ => (traced.get(line - 1) == Some(&None)).then_some(Mark::Changed),
+    };
+    (0..rows)
+        .map(|row| {
+            let line = first + row * LINES + 1;
+            (line..line + LINES).filter_map(mark).min()
+        })
+        .collect()
+}
+
 /// Which kind, if any, has ink in each cell of one line. The *first* inked
 /// character of the four a cell stands for: a cell is one mark, and a mark
 /// that averaged four kinds would be a colour the file does not hold.
@@ -362,5 +402,94 @@ mod tests {
                 vec![Cell::default()],
             ]
         );
+    }
+
+    /// A 60-line file whose line 7 and line 9 the commit does not hold, with
+    /// the Diagnostics given, 1-based.
+    fn committed() -> String {
+        (1..=60).map(|n| format!("line {n}\n")).collect()
+    }
+
+    fn marked(diagnostics: &[(usize, crate::lsp::Severity)]) -> State {
+        let committed = committed();
+        let text = committed
+            .replace("line 7\n", "edited\n")
+            .replace("line 9\n", "edited\n");
+        let path = std::path::PathBuf::from("/w/main.rs");
+        let buffer = crate::editor::Buffer::open(&text, false, 4);
+        let mut state = State {
+            current_buffer: Some(path.clone()),
+            traced: Some((
+                path.clone(),
+                buffer.revision(),
+                crate::authorship::traced(Some(&committed), &text).into(),
+            )),
+            ..State::default()
+        };
+        state.buffers.insert(path.clone(), buffer);
+        let diagnostics = diagnostics
+            .iter()
+            .map(|&(line, severity)| crate::lsp::Diagnostic {
+                line,
+                column: 1,
+                end_column: None,
+                severity,
+                message: "no".to_string(),
+            })
+            .collect();
+        state
+            .diagnostics
+            .insert(path, [("rust".to_string(), diagnostics)].into());
+        state
+    }
+
+    #[test]
+    fn an_error_off_screen_marks_its_row() {
+        let state = marked(&[(40, crate::lsp::Severity::Error)]);
+        // Line 40 is the second line of row 19 from the top of the file.
+        let lane = lane(&state, 0, 30);
+        assert_eq!(lane[19], Some(Mark::Error));
+        assert_eq!(
+            lane.iter().flatten().filter(|&&m| m == Mark::Error).count(),
+            1
+        );
+    }
+
+    #[test]
+    fn a_row_takes_its_most_important_line() {
+        use crate::lsp::Severity::{Error, Warning};
+        // Row 3 holds 7 (changed) and 8 (warning); row 5 holds 11 and 12.
+        let state = marked(&[(8, Warning), (11, Error), (12, Warning)]);
+        let lane = lane(&state, 0, 6);
+        assert_eq!(lane[3], Some(Mark::Warning));
+        assert_eq!(lane[4], Some(Mark::Changed));
+        assert_eq!(lane[5], Some(Mark::Error));
+    }
+
+    #[test]
+    fn the_quiet_severities_do_not_mark_the_lane() {
+        use crate::lsp::Severity::{Hint, Information};
+        let state = marked(&[(1, Information), (4, Hint)]);
+        assert_eq!(lane(&state, 0, 2), [None, None]);
+    }
+
+    #[test]
+    fn a_line_back_as_committed_is_not_marked_changed() {
+        let mut state = marked(&[]);
+        let path = state.current_buffer.clone().expect("open");
+        let committed = committed();
+        let revision = state.buffers[&path].revision();
+        state.traced = Some((
+            path,
+            revision,
+            crate::authorship::traced(Some(&committed), &committed).into(),
+        ));
+        assert_eq!(lane(&state, 0, 6), [None; 6]);
+    }
+
+    #[test]
+    fn the_lane_starts_where_the_mirror_does() {
+        let state = marked(&[(40, crate::lsp::Severity::Error)]);
+        assert_eq!(lane(&state, 38, 1), [Some(Mark::Error)]);
     }
 }

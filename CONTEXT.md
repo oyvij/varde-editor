@@ -260,7 +260,10 @@ _Avoid_: dropdown, completion, command palette (the palette is a different thing
 A far-off mirror of the whole file down the editor's right-hand edge, two lines to a row and four
 source columns to a cell — the shape of the file rather than its text. Press or drag in it to
 travel. Not a pane: it takes columns out of the editor's own rectangle and is hit-tested inside it,
-the way the gutter is.
+the way the gutter is. Its last column is the **mark lane**: a row holding an Error, a Warning or a
+changed line is marked in the gutter's colour for it, the most important of its two lines winning,
+so a problem off screen can be seen without scrolling to it. Information, Hint and the reading
+place never mark it.
 _Avoid_: overview, preview (that is a markdown Buffer here), thumbnail, bird's-eye view
 
 **Slider**:

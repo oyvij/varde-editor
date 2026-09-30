@@ -2204,8 +2204,8 @@ fn source_lines(
         .collect()
 }
 
-/// The mirror of the file down the editor's right-hand edge, and the scrollbar
-/// over its last column.
+/// The mirror of the file down the editor's right-hand edge, the mark lane
+/// down its last column, and the scrollbar when there is no mirror.
 ///
 /// Four source columns and two source lines to a cell, drawn as a dot: a
 /// bullet where both lines hold ink, a middle dot where one does. Why a dot
@@ -2250,14 +2250,17 @@ fn minimap(frame: &mut Frame, state: &State, areas: &Areas, tokens: &[Vec<highli
         frame
             .buffer_mut()
             .set_style(area, Style::default().bg(field));
-        // The first column is the slider's, so the cells start one in.
+        // The first column is the slider's and the last the lane's, so the
+        // cells are the ones between.
         let (top, height) = minimap::slider(first - 1, state.editor_scroll, fits);
-        let cells = area.width.saturating_sub(1) as usize;
+        let cells = area.width.saturating_sub(2) as usize;
+        let lane = minimap::lane(state, first - 1, area.height as usize);
         let rows: Vec<Line<'static>> =
             minimap::cells(tokens, first - 1, area.height as usize, cells)
                 .into_iter()
+                .zip(lane)
                 .enumerate()
-                .map(|(row, cells)| {
+                .map(|(row, (cells, mark))| {
                     let inside = row >= top && row < top + height;
                     let mut spans = vec![Span::styled(
                         match inside {
@@ -2288,6 +2291,23 @@ fn minimap(frame: &mut Frame, state: &State, areas: &Areas, tokens: &[Vec<highli
                                 .add_modifier(Modifier::DIM),
                         )
                     }));
+                    // The gutter's own colours, so red on the strip means what
+                    // red beside a line does.
+                    spans.push(match mark {
+                        Some(mark) => Span::styled(
+                            "\u{2595}",
+                            Style::default()
+                                .fg(match mark {
+                                    minimap::Mark::Error => severity_colour(lsp::Severity::Error),
+                                    minimap::Mark::Warning => {
+                                        severity_colour(lsp::Severity::Warning)
+                                    }
+                                    minimap::Mark::Changed => Color::Green,
+                                })
+                                .bg(field),
+                        ),
+                        None => Span::raw(" "),
+                    });
                     Line::from(spans)
                 })
                 .collect();
