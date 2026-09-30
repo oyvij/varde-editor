@@ -192,6 +192,9 @@ pub enum Corner {
     History,
     Breakpoints,
     Frames,
+    /// The Diagnostic list, and which Severity it is showing — held here so
+    /// the list and the Severity cannot be out of step with the slot.
+    Diagnostics(crate::lsp::Severity),
 }
 
 impl Corner {
@@ -208,6 +211,7 @@ impl Corner {
             Corner::History => Some(Pane::History),
             Corner::Breakpoints => Some(Pane::Breakpoints),
             Corner::Frames => Some(Pane::Frames),
+            Corner::Diagnostics(_) => Some(Pane::Diagnostics),
         }
     }
 }

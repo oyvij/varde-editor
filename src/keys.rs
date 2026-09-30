@@ -72,7 +72,7 @@ pub struct Drafts {
 /// surface does not. It lives
 /// here rather than in the renderer so a test can hold it to the bindings
 /// above; `ui` only draws it, filtered to the view on screen.
-pub const CHEATSHEET: [(&str, &str, &[View]); 44] = [
+pub const CHEATSHEET: [(&str, &str, &[View]); 45] = [
     ("i a o O x", "edit", &[View::Edit]),
     ("w b e", "word", &[View::Edit]),
     ("gg G", "file ends", &[View::Edit]),
@@ -228,6 +228,15 @@ pub const CHEATSHEET: [(&str, &str, &[View]); 44] = [
     (
         "C-space v",
         "tools",
+        &[View::Edit, View::Review, View::Story],
+    ),
+    // The keys the Diagnostic list answers with the keyboard in it, from
+    // whichever view it was opened over. Last, because the palette's `i` that
+    // opens it is drawn in the palette itself, and a short window's rows go to
+    // what nothing else teaches.
+    (
+        "e w i h j k Enter",
+        "diagnostic list: severity, row, go",
         &[View::Edit, View::Review, View::Story],
     ),
 ];
@@ -1012,6 +1021,7 @@ fn child_owns_keys(state: &State, drafts: &Drafts) -> bool {
             | Pane::History
             | Pane::Breakpoints
             | Pane::Frames
+            | Pane::Diagnostics
             | Pane::Variables => false,
         }
 }
@@ -1709,6 +1719,7 @@ fn claims_colon(state: &State) -> bool {
         | Pane::History
         | Pane::Breakpoints
         | Pane::Frames
+        | Pane::Diagnostics
         | Pane::Variables => true,
         Pane::Ai | Pane::Terminal | Pane::Output => false,
     }
@@ -1746,8 +1757,10 @@ fn arrow_event(state: &State, event: KeyEvent, alt: bool, shift: bool) -> Option
         // list as well, in the Strip rather than the corner: the arrows reach
         // a tree the same way they reach a flat list, because what they move
         // is the selection either way.
-        (Pane::Breakpoints | Pane::Frames | Pane::Variables, false) => list_arrow(direction),
-        (Pane::Breakpoints | Pane::Frames | Pane::Variables, true) => vec![],
+        (Pane::Breakpoints | Pane::Frames | Pane::Diagnostics | Pane::Variables, false) => {
+            list_arrow(direction)
+        }
+        (Pane::Breakpoints | Pane::Frames | Pane::Diagnostics | Pane::Variables, true) => vec![],
         // A hosted pane's arrows went to its child; see below.
         (Pane::Ai | Pane::Terminal | Pane::Output, _) => vec![],
     })
@@ -1800,6 +1813,7 @@ fn pane_key(state: &State, event: KeyEvent) -> Vec<Event> {
         | Pane::History
         | Pane::Breakpoints
         | Pane::Frames
+        | Pane::Diagnostics
         | Pane::Variables => list_pane_key(event),
         // A hosted pane never arrives here: with nothing of Varde's own
         // collecting, `child_owns_keys` sent the key to `to_child`, and with
@@ -3837,7 +3851,7 @@ mod tests {
     /// nobody noticed. Every entry is held to still doing something in every
     /// view it names, so the list cannot quietly outlive the binding it
     /// excuses.
-    const UNLISTED: [(&str, &str, &[View]); 27] = [
+    const UNLISTED: [(&str, &str, &[View]); 24] = [
         (
             "Ctrl",
             "the router still answers a bare Ctrl press with a tap, but no \
@@ -3846,15 +3860,15 @@ mod tests {
              Listing a gesture nobody can perform teaches the wrong key",
             &[View::Edit, View::Review, View::Story],
         ),
+        // `h`, `j` and `k` are cursor motion too, and listed: the Diagnostic
+        // list's row names them, since the cheatsheet is drawn per view and
+        // not per pane.
         (
-            "h",
+            "l",
             "cursor motion — the one thing nobody needs reminding of. Over a \
              Preview it is the same motion, run over the rendered row",
             &[View::Edit],
         ),
-        ("j", "cursor motion", &[View::Edit]),
-        ("k", "cursor motion", &[View::Edit]),
-        ("l", "cursor motion", &[View::Edit]),
         (
             "arr",
             "cursor motion, in every mode — and through a walked Site too, \

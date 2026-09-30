@@ -610,6 +610,7 @@ impl VardeWorld {
             | Pane::History
             | Pane::Breakpoints
             | Pane::Frames
+            | Pane::Diagnostics
             | Pane::Variables
             | Pane::Output
             | Pane::Terminal => self.screen.clone(),
@@ -2287,9 +2288,12 @@ fn pointer_at(
         Pane::Tree => (panes.tree, 0, state.tree_scroll),
         Pane::Ai => (panes.ai, 0, 0),
         Pane::Output => (panes.output, 0, 0),
-        Pane::Risk | Pane::Buffers | Pane::History | Pane::Breakpoints | Pane::Frames => {
-            (panes.corner, 0, 0)
-        }
+        Pane::Risk
+        | Pane::Buffers
+        | Pane::History
+        | Pane::Breakpoints
+        | Pane::Frames
+        | Pane::Diagnostics => (panes.corner, 0, 0),
         Pane::Terminal | Pane::Variables => (panes.terminal, 0, 0),
         // The window itself, not the Snippet's own rectangle: the `+ 1` below
         // is the border every other pane's rectangle carries.
@@ -3776,6 +3780,7 @@ fn parse_pane(name: &str) -> Pane {
         "risk" => Pane::Risk,
         "buffers" => Pane::Buffers,
         "history" => Pane::History,
+        "diagnostics" => Pane::Diagnostics,
         other => panic!("unknown pane {other:?}"),
     }
 }
@@ -5954,9 +5959,12 @@ fn drag_past(world: &mut VardeWorld, side: String, pane: String) {
         Pane::Ai => world.panes().ai,
         Pane::Output => world.panes().output,
         Pane::Terminal | Pane::Variables => world.panes().terminal,
-        Pane::Risk | Pane::Buffers | Pane::History | Pane::Breakpoints | Pane::Frames => {
-            world.panes().corner
-        }
+        Pane::Risk
+        | Pane::Buffers
+        | Pane::History
+        | Pane::Breakpoints
+        | Pane::Frames
+        | Pane::Diagnostics => world.panes().corner,
         Pane::Evaluator => world.panes().evaluator,
     };
     // Straight out from where the button went down, which is the gesture a
@@ -17741,4 +17749,206 @@ fn adapter_sent_naming(world: &mut VardeWorld, command: String, class: String) {
         last_request(world, &command)["arguments"]["exceptionOptions"][0]["path"][0]["names"],
         json!([class])
     );
+}
+
+// ---- The Diagnostic list ----
+
+/// A Severity as the Scenarios name it: the protocol's own word, which is
+/// `lsp::Severity::as_str`, never a label's copy.
+fn severity_named(name: &str) -> lsp::Severity {
+    lsp::Severity::ALL
+        .into_iter()
+        .find(|severity| severity.as_str() == name)
+        .unwrap_or_else(|| panic!("no such severity: {name}"))
+}
+
+/// Through the palette's event, as every other Corner occupant's is: the only
+/// way the list comes to be on screen is being asked for.
+#[given("the Diagnostic list is shown")]
+fn diagnostic_list_is_shown(world: &mut VardeWorld) {
+    if lsp::showing(&world.state).is_none() {
+        world.send(Event::ToggleDiagnosticList);
+    }
+    assert_eq!(world.state.focus, Pane::Diagnostics);
+}
+
+#[when("I show the Diagnostic list")]
+fn show_diagnostic_list(world: &mut VardeWorld) {
+    assert_eq!(lsp::showing(&world.state), None);
+    world.send(Event::ToggleDiagnosticList);
+}
+
+#[then("the Corner holds the Diagnostic list")]
+fn corner_holds_diagnostic_list(world: &mut VardeWorld) {
+    assert!(
+        matches!(world.state.corner, layout::Corner::Diagnostics(_)),
+        "{:?}",
+        world.state.corner
+    );
+}
+
+#[then(expr = "the Diagnostic list shows {string}")]
+fn diagnostic_list_shows(world: &mut VardeWorld, severity: String) {
+    assert_eq!(lsp::showing(&world.state), Some(severity_named(&severity)));
+}
+
+#[then("the Diagnostic list has no rows")]
+fn diagnostic_list_is_empty(world: &mut VardeWorld) {
+    assert!(lsp::listed(&world.state).is_empty());
+}
+
+/// With a header row: a file heading has neither line nor column.
+#[then("the Diagnostic list rows are:")]
+fn diagnostic_list_rows(world: &mut VardeWorld, step: &Step) {
+    let expected: Vec<(String, Option<(usize, usize)>)> = step
+        .table()
+        .expect("table")
+        .rows
+        .iter()
+        .skip(1)
+        .map(|row| {
+            let at = match row[1].trim() {
+                "" => None,
+                line => Some((
+                    line.parse().expect("a line"),
+                    row[2].trim().parse().expect("a column"),
+                )),
+            };
+            (row[0].clone(), at)
+        })
+        .collect();
+    let listed: Vec<(String, Option<(usize, usize)>)> = lsp::listed(&world.state)
+        .into_iter()
+        .map(|(path, diagnostic)| {
+            (
+                varde::relative(&world.state, path),
+                diagnostic.map(|diagnostic| (diagnostic.line, diagnostic.column)),
+            )
+        })
+        .collect();
+    assert_eq!(listed, expected);
+}
+
+/// The index of the row naming a file's Diagnostic on a line, or its heading.
+fn diagnostic_row(world: &VardeWorld, file: &str, line: Option<usize>) -> usize {
+    let path = abs(world, file);
+    lsp::listed(&world.state)
+        .iter()
+        .position(|(at, diagnostic)| {
+            *at == path.as_path() && diagnostic.map(|diagnostic| diagnostic.line) == line
+        })
+        .unwrap_or_else(|| panic!("no row for {file} {line:?}"))
+}
+
+/// Moved to with the keyboard, the way a reader gets there.
+fn select_diagnostic_row(world: &mut VardeWorld, index: usize) {
+    world.state.focus = Pane::Diagnostics;
+    while world.state.diagnostics_selection > index {
+        world.send(Event::Key('k'));
+    }
+    while world.state.diagnostics_selection < index {
+        world.send(Event::Key('j'));
+    }
+}
+
+#[given(expr = "the Diagnostic list selection is on {string} line {int}")]
+fn diagnostic_selection_on(world: &mut VardeWorld, file: String, line: usize) {
+    let index = diagnostic_row(world, &file, Some(line));
+    select_diagnostic_row(world, index);
+}
+
+#[given(expr = "the Diagnostic list selection is on the heading for {string}")]
+fn diagnostic_selection_on_heading(world: &mut VardeWorld, file: String) {
+    let index = diagnostic_row(world, &file, None);
+    select_diagnostic_row(world, index);
+}
+
+#[then(expr = "the Diagnostic list selection is on {string} line {int}")]
+fn diagnostic_selection_should_be_on(world: &mut VardeWorld, file: String, line: usize) {
+    assert_eq!(
+        world.state.diagnostics_selection,
+        diagnostic_row(world, &file, Some(line))
+    );
+}
+
+/// Through the hit-test, a press and a release on the row's text.
+#[when(expr = "I click the Diagnostic list row for {string} line {int}")]
+fn click_diagnostic_row(world: &mut VardeWorld, file: String, line: usize) {
+    let index = diagnostic_row(world, &file, Some(line));
+    let corner = world.panes().corner;
+    let row = corner.y + 1 + (index - world.state.diagnostics_scroll) as u16;
+    world.report(mouse::Kind::LeftDown, corner.x + 2, row);
+    world.report(mouse::Kind::LeftUp, corner.x + 2, row);
+}
+
+/// On the label's first column, found the way `ui` right-aligns them.
+#[when(expr = "I click the Severity label for {string}")]
+fn click_severity_label(world: &mut VardeWorld, severity: String) {
+    let corner = world.panes().corner;
+    let labels = lsp::severity_labels(&world.state, corner.width);
+    let at = lsp::Severity::ALL
+        .iter()
+        .position(|each| *each == severity_named(&severity))
+        .expect("a label");
+    let column =
+        corner.right() - 1 - layout::strip_width(&labels) + layout::strip_width(&labels[..at]) + 1;
+    world.report(mouse::Kind::LeftDown, column, corner.y);
+    world.report(mouse::Kind::LeftUp, column, corner.y);
+}
+
+/// Headerless: a Severity and its count, every one of the four.
+#[then("the Severity labels count:")]
+fn severity_labels_count(world: &mut VardeWorld, step: &Step) {
+    for row in &step.table().expect("table").rows {
+        assert_eq!(
+            lsp::total(&world.state, severity_named(row[0].trim())),
+            row[1].trim().parse::<usize>().expect("a count"),
+            "{}",
+            row[0]
+        );
+    }
+}
+
+/// Headerless: the Severities the tree's border counts, in the order drawn.
+#[then("the tree's border counts:")]
+fn tree_border_counts(world: &mut VardeWorld, step: &Step) {
+    let expected: Vec<(lsp::Severity, usize)> = step
+        .table()
+        .expect("table")
+        .rows
+        .iter()
+        .map(|row| {
+            (
+                severity_named(row[0].trim()),
+                row[1].trim().parse().expect("a count"),
+            )
+        })
+        .collect();
+    let drawn: Vec<(lsp::Severity, usize)> = lsp::nudge(&world.state)
+        .into_iter()
+        .map(|(severity, _)| (severity, lsp::total(&world.state, severity)))
+        .collect();
+    assert_eq!(drawn, expected);
+}
+
+#[then("the tree's border counts nothing")]
+fn tree_border_counts_nothing(world: &mut VardeWorld) {
+    assert_eq!(lsp::nudge(&world.state), vec![]);
+}
+
+/// On the count's first column: the title and every string before it, then
+/// the gap its own string opens with.
+#[when(expr = "I click the tree's {word} count")]
+fn click_tree_count(world: &mut VardeWorld, severity: String) {
+    let tree = world.panes().tree;
+    let mut column = tree.x + 1 + tree::title(&world.state).width() as u16;
+    for (each, label) in lsp::nudge(&world.state) {
+        if each == severity_named(&severity) {
+            column += (label.len() - label.trim_start().len()) as u16;
+            break;
+        }
+        column += label.width() as u16;
+    }
+    world.report(mouse::Kind::LeftDown, column, tree.y);
+    world.report(mouse::Kind::LeftUp, column, tree.y);
 }

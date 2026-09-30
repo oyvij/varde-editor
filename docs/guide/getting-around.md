@@ -50,8 +50,12 @@ Edit view has four panes:
 | AI | right | an AI CLI, or the box that starts one |
 
 Beneath the tree there is one more slot, the Corner. It holds one occupant at a time — the Risk
-list, the Buffers pane, the Cursor history or the Breakpoint list — or nothing; asking for one while
-another is showing replaces it.
+list, the Buffers pane, the Cursor history, the Breakpoint list or the Diagnostic list — or nothing;
+asking for one while another is showing replaces it.
+
+The tree's top border counts the project's errors (red `✖`) and warnings (orange `▲`) as the
+Language servers report them, and says nothing when there are none. Clicking a count opens the
+Diagnostic list on that Severity.
 
 The palette switches between three views:
 
@@ -85,6 +89,7 @@ The palette is grouped. Press the letter, or click the row:
 | | `k` | Risk | show or hide the Risk list in the Corner ([risk.md](risk.md)) |
 | | `y` | Cursor history | show or hide the list of places you jumped from ([editing.md](editing.md)) |
 | | `b` | Breakpoints | show or hide every Breakpoint in the workspace: Enter goes to one, `d` removes it, `D` clears them all |
+| | `i` | Diagnostics | show or hide every Diagnostic the Language servers have reported, one Severity at a time: `e` `w` `i` `h` or a label on its border switch Severity, Enter goes to one |
 | | `a` | AI | focus the AI pane — it does not start a session |
 | | `l` | Tall | swap the AI pane between beside the editor and the whole right-hand edge |
 | Views | `e` | Edit | switch to Edit view |

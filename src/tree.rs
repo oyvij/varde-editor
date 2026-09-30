@@ -7,6 +7,18 @@ use crate::{filter, review, story, State, View};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
+/// The pane's name, and what Risk says about the workspace. One place on
+/// screen always answers the same question, so the figure lives on the border
+/// rather than in a pane of its own. In the library rather than in `ui`
+/// because the Diagnostic totals are drawn after it, and `mouse` hit-tests
+/// them from where it ends.
+pub fn title(state: &State) -> String {
+    match crate::risk::border(state) {
+        Some(figure) => format!("tree  {figure}"),
+        None => "tree".to_string(),
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Entry {
     pub name: String,

@@ -123,6 +123,9 @@ pub enum Pane {
     /// group. A hosted pane like the shells and the AI: its child owns the
     /// keyboard, and Varde is the terminal answering its queries.
     Output,
+    /// The Diagnostic list, in the same corner: a row names a place a
+    /// Language server said something about.
+    Diagnostics,
     /// The Evaluator's Snippet, in the floating window over the editor. Its
     /// own variant rather than a mode of the editor's: the editor goes on
     /// showing its file behind it, so a click lands in one or the other and
@@ -254,6 +257,8 @@ pub const PALETTE: [(&str, &[(char, &str)]); 5] = [
             // that hosts a shell.
             ('y', "Cursor history"),
             ('b', "Breakpoints"),
+            // `i` because it is the one letter in the word still free.
+            ('i', "Diagnostics"),
             ('a', "AI"),
             ('l', "  Tall"),
         ],
@@ -675,6 +680,8 @@ pub enum Event {
     ClickBreakpointRow(usize),
     /// A click on a row of the Frames, the same shape again.
     ClickFrameRow(usize),
+    /// A click on a row of the Diagnostic list — the Risk list's shape.
+    ClickDiagnosticRow(usize),
     /// A click on a row of the Variables, the same shape again.
     ClickVariablesRow(usize),
     /// A Group tab on the Strip's top border, clicked or reached by its chord:
@@ -1085,6 +1092,11 @@ pub enum Event {
     ToggleCursorHistory,
     /// The Breakpoint list, on or off — the same corner again.
     ToggleBreakpointList,
+    /// The Diagnostic list, on or off, opening on [`lsp::opening`].
+    ToggleDiagnosticList,
+    /// The Diagnostic list in the Corner showing one Severity: its letter, a
+    /// click on its Severity label, or on its count on the tree's border.
+    ShowDiagnostics(lsp::Severity),
     /// `Ctrl+p` / `gp` and `Ctrl+n` / `gn` — one step towards the oldest place
     /// the cursor has been, and one towards the newest.
     JumpBack,
@@ -2247,6 +2259,11 @@ pub struct State {
     /// The same two for the Frames.
     pub frames_selection: usize,
     pub frames_scroll: usize,
+    /// The same two for the Diagnostic list. An index into `lsp::listed`, so
+    /// a report that removes the row it is on leaves it on the row that took
+    /// its place rather than sending it back to the top.
+    pub diagnostics_selection: usize,
+    pub diagnostics_scroll: usize,
     /// And for the Variables, which is a list in the Strip rather than in the
     /// corner but is one all the same — a row to open, and a first row on
     /// screen.
@@ -2399,6 +2416,10 @@ pub struct State {
     /// also what lets a server that dies take exactly its own marks
     /// (`lsp::gone`), rather than every mark on every file it served.
     pub diagnostics: BTreeMap<PathBuf, BTreeMap<String, Vec<lsp::Diagnostic>>>,
+    /// How many of those there are per Severity, in `lsp::Severity::ALL`'s
+    /// order. Kept by `lsp` as each report lands, so the tree's border does
+    /// not walk every Diagnostic in the project once a frame.
+    pub diagnostic_totals: [usize; 4],
     /// What the server said about the symbol under the cursor, once a reply
     /// matched the question that caused it. Absent until one does, and gone
     /// again on Escape — or as soon as it stops describing what is under the
@@ -2565,6 +2586,8 @@ impl Default for State {
             breakpoints_scroll: 0,
             frames_selection: 0,
             frames_scroll: 0,
+            diagnostics_selection: 0,
+            diagnostics_scroll: 0,
             variables_selection: 0,
             variables_scroll: 0,
             adapters: BTreeMap::new(),
@@ -2650,6 +2673,7 @@ impl Default for State {
             os: String::new(),
             arch: String::new(),
             diagnostics: BTreeMap::new(),
+            diagnostic_totals: [0; 4],
             hover: None,
             hovered_action: None,
             transport_lit: None,
@@ -2782,6 +2806,19 @@ fn settle(mut next: State, mut effects: Vec<Effect>, wheeled: bool) -> (State, V
             next.history_scroll,
             next.history_selection.min(history_rows.saturating_sub(1)),
             history_rows,
+            corner_rows(&next),
+        );
+        // Clamped here rather than by the arm that changed the list: a report
+        // arrives from a server at any time, and the index staying where it
+        // was is what leaves it on the row that took a fixed one's place.
+        let diagnostic_rows = lsp::listed(&next).len();
+        next.diagnostics_selection = next
+            .diagnostics_selection
+            .min(diagnostic_rows.saturating_sub(1));
+        next.diagnostics_scroll = layout::viewport(
+            next.diagnostics_scroll,
+            next.diagnostics_selection,
+            diagnostic_rows,
             corner_rows(&next),
         );
         let frame_rows = debug::frame_rows(&next).len();
@@ -4003,6 +4040,25 @@ fn on_key_3(state: &State, next: State, event: Event, _wheeled: bool) -> Answere
             ))
         }
 
+        // The Diagnostic list's `j` and `k`, and a Severity's letter to show
+        // that Severity — the key its Severity label is shed to on a narrow
+        // Corner.
+        Event::Key(key @ ('j' | 'k' | 'e' | 'w' | 'i' | 'h'))
+            if state.focus == Pane::Diagnostics && state.modal == Modal::None =>
+        {
+            Ok(match key {
+                'j' => update(state, Event::MoveSelection(Direction::Down)),
+                'k' => update(state, Event::MoveSelection(Direction::Up)),
+                letter => match lsp::Severity::ALL
+                    .into_iter()
+                    .find(|severity| lsp::letter(*severity) == letter)
+                {
+                    Some(severity) => update(state, Event::ShowDiagnostics(severity)),
+                    None => (next, vec![]),
+                },
+            })
+        }
+
         // The Frames' `j` and `k`, as every list in the corner has.
         Event::Key(key @ ('j' | 'k'))
             if state.focus == Pane::Frames && state.modal == Modal::None =>
@@ -4170,6 +4226,7 @@ fn palette_command(next: State, entry: &str) -> Result<(State, Vec<Effect>), Sta
         "Buffers" => Event::ToggleBuffersList,
         "Cursor history" => Event::ToggleCursorHistory,
         "Breakpoints" => Event::ToggleBreakpointList,
+        "Diagnostics" => Event::ToggleDiagnosticList,
         // The tree's own `c` reaches this too, but only from the tree: the
         // palette is how it is reached from wherever the growing tree was
         // noticed, which is usually the pane being read rather than the tree.
@@ -4495,6 +4552,7 @@ fn on_submit_review(state: &State, mut next: State, event: Event, wheeled: bool)
             | Pane::History
             | Pane::Breakpoints
             | Pane::Frames
+            | Pane::Diagnostics
             | Pane::Variables => vec![],
         },
         Event::ClickLink { row, column } => editor::link_at(&row, column)
@@ -4707,6 +4765,7 @@ fn on_scroll(state: &State, mut next: State, event: Event, wheeled: bool) -> Ans
                     | Pane::History
                     | Pane::Breakpoints
                     | Pane::Frames
+                    | Pane::Diagnostics
                     | Pane::Variables => {
                         vec![]
                     }
@@ -4763,6 +4822,15 @@ fn on_scroll(state: &State, mut next: State, event: Event, wheeled: bool) -> Ans
                         direction,
                         state.history_scroll,
                         state.visits.len(),
+                        corner_rows(state),
+                    );
+                    vec![]
+                }
+                Pane::Diagnostics => {
+                    next.diagnostics_scroll = wheeled_to(
+                        direction,
+                        state.diagnostics_scroll,
+                        lsp::listed(state).len(),
                         corner_rows(state),
                     );
                     vec![]
@@ -7459,6 +7527,27 @@ fn on_quit_force(state: &State, mut next: State, event: Event, wheeled: bool) ->
         Event::ToggleBreakpointList => {
             take_the_corner(state, &mut next, layout::Corner::Breakpoints)
         }
+        // Hidden when it is there whatever it is showing, since the toggle
+        // asks for the list rather than for one Severity of it.
+        Event::ToggleDiagnosticList => {
+            next.diagnostics_selection = 0;
+            let asked = match state.corner {
+                layout::Corner::Diagnostics(showing) => layout::Corner::Diagnostics(showing),
+                _ => layout::Corner::Diagnostics(lsp::opening(state)),
+            };
+            take_the_corner(state, &mut next, asked)
+        }
+        // Never a toggle: a letter or a label asks to see a Severity, and a
+        // second press on the one showing is still asking to see it.
+        Event::ShowDiagnostics(severity) => {
+            if lsp::showing(state) != Some(severity) {
+                next.diagnostics_selection = 0;
+            }
+            next.selected_action = None;
+            next.corner = layout::Corner::Diagnostics(severity);
+            next.focus = Pane::Diagnostics;
+            vec![Effect::SaveState(state_json(&next))]
+        }
 
         // The two gestures the pane exists beside, answered wherever Varde's
         // own keys are answered. `history` holds the whole of what a step is,
@@ -8439,6 +8528,16 @@ fn on_move_selection(state: &State, mut next: State, event: Event, wheeled: bool
             vec![]
         }
 
+        Event::MoveSelection(direction) if state.focus == Pane::Diagnostics => {
+            let last = lsp::listed(state).len().saturating_sub(1);
+            next.diagnostics_selection = match direction {
+                Direction::Down => (state.diagnostics_selection + 1).min(last),
+                Direction::Up => state.diagnostics_selection.saturating_sub(1),
+                _ => state.diagnostics_selection.min(last),
+            };
+            vec![]
+        }
+
         Event::MoveSelection(direction) if state.focus == Pane::Frames => {
             let last = debug::frame_rows(state).len().saturating_sub(1);
             next.frames_selection = match direction {
@@ -8670,6 +8769,18 @@ fn on_activate_2(state: &State, mut next: State, event: Event, wheeled: bool) ->
             None => vec![],
         },
 
+        // A Landing on the Diagnostic's start, through the `OpenAt` every
+        // Jump to a place in a file takes, so it records a Visit.
+        Event::Activate if state.focus == Pane::Diagnostics => {
+            match lsp::landing(state, state.diagnostics_selection) {
+                Some((path, at)) => {
+                    next.focus = Pane::Editor;
+                    vec![Effect::OpenAt { path, at }]
+                }
+                None => vec![],
+            }
+        }
+
         Event::Activate if state.focus == Pane::Risk => match risk::selected(state) {
             Some(function) => {
                 let path = state.root.join(&function.file);
@@ -8708,6 +8819,15 @@ fn on_activate_2(state: &State, mut next: State, event: Event, wheeled: bool) ->
             next.history_selection = index;
             let (mut opened, effects) = update(&next, Event::Activate);
             opened.focus = Pane::History;
+            return Ok((opened, effects));
+        }
+
+        // The same shape as the Risk list's click, and for the same reason.
+        Event::ClickDiagnosticRow(index) => {
+            next.focus = Pane::Diagnostics;
+            next.diagnostics_selection = index;
+            let (mut opened, effects) = update(&next, Event::Activate);
+            opened.focus = Pane::Diagnostics;
             return Ok((opened, effects));
         }
 
@@ -8855,6 +8975,7 @@ fn on_bytes(state: &State, next: State, event: Event, wheeled: bool) -> Answered
             | Pane::History
             | Pane::Breakpoints
             | Pane::Frames
+            | Pane::Diagnostics
             | Pane::Variables => vec![],
         },
 
@@ -8884,6 +9005,7 @@ fn on_pasted(state: &State, mut next: State, event: Event, wheeled: bool) -> Ans
                 | Pane::History
                 | Pane::Breakpoints
                 | Pane::Frames
+                | Pane::Diagnostics
                 | Pane::Variables => None,
             };
             match asked {
@@ -9718,6 +9840,7 @@ fn mouse_encoding(state: &State, pane: Pane) -> mouse::Encoding {
         | Pane::History
         | Pane::Breakpoints
         | Pane::Frames
+        | Pane::Diagnostics
         | Pane::Variables => mouse::Encoding::None,
     }
 }
@@ -13255,7 +13378,9 @@ mod tests {
             roomy.last().map(|(_, row)| row.as_str()),
             Some("   Esc  cancel")
         );
-        assert!(palette_rows(26)
+        // 27 and not 26: with ten Panes entries the cancel line is the row a
+        // 26-row screen gives up, and it is the first row a short screen gives up.
+        assert!(palette_rows(27)
             .iter()
             .any(|(_, row)| row == "   Esc  cancel"));
 

@@ -38,6 +38,7 @@ Feature: The command palette
       | Panes   | k   | Risk           |
       | Panes   | y   | Cursor history |
       | Panes   | b   | Breakpoints    |
+      | Panes   | i   | Diagnostics    |
       | Panes   | a   | AI             |
       | Panes   | l   | Tall           |
       | Views   | e   | Edit           |

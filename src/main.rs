@@ -2857,6 +2857,7 @@ fn grid_lines(edge: &Edge, pane: Pane, split: usize, upto: usize) -> Option<Vec<
         | Pane::History
         | Pane::Breakpoints
         | Pane::Frames
+        | Pane::Diagnostics
         | Pane::Variables => return None,
     };
     let (rows, columns) = screen.size();
@@ -2973,6 +2974,7 @@ fn perform_terminal(effect: Effect, split: usize, edge: &mut Edge) -> Option<Eff
             | Pane::History
             | Pane::Breakpoints
             | Pane::Frames
+            | Pane::Diagnostics
             | Pane::Variables => {}
         },
         other => return Some(other),

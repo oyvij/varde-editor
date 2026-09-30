@@ -7,6 +7,7 @@
 use crate::layout::{self, Area, Layout};
 use crate::{tree, Direction, Event, Modal, Pane, Place, Pointed, State};
 use terminput::KeyModifiers;
+use unicode_width::UnicodeWidthStr;
 
 /// Which mouse-report encoding the program in a hosted pane asked for, as the
 /// terminal model in front of its pty reports it. A report in any other
@@ -656,6 +657,11 @@ fn pressed(
             None => vec![],
         };
     }
+    if pane == Pane::Tree && input.row == panes.tree.y {
+        if let Some(severity) = nudge_at(state, panes, input.column) {
+            return vec![Event::ShowDiagnostics(severity)];
+        }
+    }
     let row_index = row_index(state, panes, input.row);
     match (pane, action_at(state, panes, input.column, input.row)) {
         (Pane::Tree, Some(action)) => vec![Event::RowAction(action)],
@@ -733,6 +739,7 @@ fn pressed(
         (Pane::Buffers, _) => pressed_in_buffers(state, panes, input),
         (Pane::History, _) => pressed_in_history(state, panes, input),
         (Pane::Breakpoints, _) => pressed_in_breakpoints(state, panes, input),
+        (Pane::Diagnostics, _) => pressed_in_diagnostics(state, panes, input),
         (Pane::Frames, _) => {
             let index = list_row(panes.corner, input.row, state.frames_scroll);
             let on_a_row = input.row > panes.corner.y
@@ -938,6 +945,46 @@ fn moved_by(at: u16, by: i32) -> u16 {
     (i32::from(at) + by).clamp(0, i32::from(u16::MAX)) as u16
 }
 
+/// A Severity label on the Diagnostic list's top border, at the columns `ui`
+/// draws them from the same labels, or one of its rows.
+fn pressed_in_diagnostics(state: &State, panes: &Layout, input: Input) -> Vec<Event> {
+    if input.row == panes.corner.y {
+        let labels = crate::lsp::severity_labels(state, panes.corner.width);
+        return match layout::strip_at(panes.corner, &labels, input.column) {
+            Some(at) => vec![Event::ShowDiagnostics(crate::lsp::Severity::ALL[at])],
+            None => vec![Event::ClickPane(Pane::Diagnostics)],
+        };
+    }
+    let index = list_row(panes.corner, input.row, state.diagnostics_scroll);
+    let on_a_row = input.row < panes.corner.bottom().saturating_sub(1)
+        && index < crate::lsp::listed(state).len();
+    match on_a_row {
+        true => vec![Event::ClickDiagnosticRow(index)],
+        false => vec![Event::ClickPane(Pane::Diagnostics)],
+    }
+}
+
+/// Which of the Diagnostic totals on the tree's top border is under a column,
+/// measured off the strings `ui` draws end to end after `tree::title` — the
+/// gap each one opens with is no part of it. Nothing past the border's last
+/// column, where a title too long for the pane has been cut off.
+fn nudge_at(state: &State, panes: &Layout, column: u16) -> Option<crate::lsp::Severity> {
+    if column + 1 >= panes.tree.right() {
+        return None;
+    }
+    let mut at = panes.tree.x + 1 + UnicodeWidthStr::width(tree::title(state).as_str()) as u16;
+    crate::lsp::nudge(state)
+        .into_iter()
+        .find_map(|(severity, label)| {
+            let count = label.trim_start();
+            at += (label.len() - count.len()) as u16;
+            let width = UnicodeWidthStr::width(count) as u16;
+            let hit = column >= at && column < at + width;
+            at += width;
+            hit.then_some(severity)
+        })
+}
+
 fn dragged(
     state: &State,
     panes: &Layout,
@@ -990,6 +1037,7 @@ fn dragged(
         | Pane::History
         | Pane::Breakpoints
         | Pane::Frames
+        | Pane::Diagnostics
         | Pane::Variables => Outcome::default(),
         // Moving the window, resizing it and picking text in the Snippet are
         // all drags, and which one this is was decided at the press: the
@@ -1358,6 +1406,7 @@ fn place_in(state: &State, panes: &Layout, pane: Pane, (column, row): (u16, u16)
         | Pane::History
         | Pane::Breakpoints
         | Pane::Frames
+        | Pane::Diagnostics
         | Pane::Variables => (0, 0),
     };
     Place {
@@ -1414,9 +1463,12 @@ fn text_area(state: &State, panes: &Layout, pane: Pane) -> Area {
             state.terminals.len(),
             state.split(),
         )),
-        Pane::Risk | Pane::Buffers | Pane::History | Pane::Breakpoints | Pane::Frames => {
-            interior(panes.corner)
-        }
+        Pane::Risk
+        | Pane::Buffers
+        | Pane::History
+        | Pane::Breakpoints
+        | Pane::Frames
+        | Pane::Diagnostics => interior(panes.corner),
         // The Strip's own rectangle less whatever the Program output beside it
         // is taking, which the Debug group has instead of the shells.
         Pane::Variables => interior(panes.terminal),

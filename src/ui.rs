@@ -272,6 +272,10 @@ pub fn draw(
             layout::Corner::Frames => {
                 frame.render_widget(frames_widget(state, areas.corner.width), areas.corner)
             }
+            layout::Corner::Diagnostics(showing) => {
+                frame.render_widget(diagnostics_widget(state, areas.corner.width), areas.corner);
+                severity_labels(frame, state, showing, areas.panes.corner);
+            }
         }
     }
     let caret_is_free = state.modal == Modal::None && typing.is_none();
@@ -670,14 +674,17 @@ fn border_colour(state: &State, pane: Pane) -> Color {
     }
 }
 
-/// The pane's name, and what Risk says about the workspace. One place on
-/// screen always answers the same question, so the figure lives on the border
-/// rather than in a pane of its own.
-fn tree_title(state: &State) -> String {
-    match varde::risk::border(state) {
-        Some(figure) => format!("tree  {figure}"),
-        None => "tree".to_string(),
+/// `tree::title`, and after it the project's error and warning totals in the
+/// colours the gutter marks them in — the strings `mouse::nudge_at` measures.
+fn tree_title(state: &State) -> Line<'static> {
+    let mut spans = vec![Span::raw(varde::tree::title(state))];
+    for (severity, label) in varde::lsp::nudge(state) {
+        spans.push(Span::styled(
+            label,
+            Style::default().fg(severity_colour(severity)),
+        ));
     }
+    Line::from(spans)
 }
 
 /// The Risk pane's name and what the figure is: `measuring` while nothing has
@@ -1124,6 +1131,79 @@ fn variables_lines(state: &State, width: u16, draft: &str) -> Vec<Line<'static>>
             Line::from(spans)
         })
         .collect()
+}
+
+/// The Diagnostic list: its rows, and its name on the border while the
+/// Severity labels leave room for it.
+fn diagnostics_widget(state: &State, width: u16) -> Paragraph<'static> {
+    let labels = varde::lsp::severity_labels(state, width);
+    let title = match layout::strip_width(&labels) + layout::CORNER_TITLE <= width {
+        true => "diagnostics",
+        false => "",
+    };
+    Paragraph::new(diagnostics_lines(state, width))
+        .scroll((state.diagnostics_scroll as u16, 0))
+        .block(pane_block(title, state, Pane::Diagnostics))
+}
+
+/// A heading per file and a row per Diagnostic under it, cut to the pane with
+/// `…`. Split out of `diagnostics_widget` for the reason `risk_lines` is split
+/// out of `risk_widget`.
+fn diagnostics_lines(state: &State, width: u16) -> Vec<Line<'static>> {
+    let inner = width.saturating_sub(2) as usize;
+    varde::lsp::listed(state)
+        .into_iter()
+        .enumerate()
+        .map(|(index, (path, diagnostic))| {
+            let style = match index == state.diagnostics_selection {
+                true => Style::default().add_modifier(Modifier::REVERSED),
+                false => Style::default(),
+            };
+            match diagnostic {
+                // A path is a filename somebody chose, so it is untrusted too.
+                None => Line::from(Span::styled(
+                    truncate(
+                        &format!(" {}", varde::relative(state, path))
+                            .replace(|character: char| character.is_control(), ""),
+                        inner,
+                    ),
+                    style.add_modifier(Modifier::BOLD),
+                )),
+                Some(diagnostic) => Line::from(Span::styled(
+                    truncate(&format!("   {}", varde::lsp::row_text(diagnostic)), inner),
+                    style,
+                )),
+            }
+        })
+        .collect()
+}
+
+/// The Severity labels over the Diagnostic list's top border, right-aligned at
+/// the columns `mouse` hit-tests them from with `layout::strip_at`, the one
+/// showing lit — drawn the way the Strip's Group tabs are.
+fn severity_labels(frame: &mut Frame, state: &State, showing: lsp::Severity, corner: Area) {
+    let labels = varde::lsp::severity_labels(state, corner.width);
+    let Some(mut x) = corner
+        .right()
+        .saturating_sub(1)
+        .checked_sub(layout::strip_width(&labels))
+    else {
+        return;
+    };
+    for (severity, label) in lsp::Severity::ALL.into_iter().zip(labels) {
+        let style = match severity == showing {
+            true => Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::REVERSED),
+            false => Style::default().fg(Color::DarkGray),
+        };
+        let columns = label.width() as u16;
+        frame.render_widget(
+            Span::styled(label, style),
+            Rect::new(x, corner.y, columns, 1),
+        );
+        x += columns + 1;
+    }
 }
 
 /// One row per Visit: which file it was in, what the cursor was standing on,
@@ -5806,6 +5886,40 @@ mod tests {
         assert!(text.starts_with("\u{2192}  3 x"), "{text:?}");
         assert_eq!(text.width(), 30 - 2);
         assert!(line.spans.iter().all(|span| span.style.bg.is_some()));
+    }
+
+    /// A Diagnostic's row is its start and the first line of its message, cut
+    /// with `…` to the pane, under a heading naming its file.
+    #[test]
+    fn a_diagnostic_row_is_cut_to_the_pane_under_its_file() {
+        let mut state = State::default();
+        state.root = std::path::PathBuf::from("/w");
+        state.corner = varde::layout::Corner::Diagnostics(varde::lsp::Severity::Error);
+        state.diagnostics.insert(
+            std::path::PathBuf::from("/w/src/a.rs"),
+            [(
+                "rust".to_string(),
+                vec![varde::lsp::Diagnostic {
+                    line: 12,
+                    column: 5,
+                    end_column: None,
+                    severity: varde::lsp::Severity::Error,
+                    message: "mismatched types: expected u8\nfound u16".to_string(),
+                }],
+            )]
+            .into_iter()
+            .collect(),
+        );
+        let text: Vec<String> = super::diagnostics_lines(&state, 24)
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect()
+            })
+            .collect();
+        assert_eq!(text, [" src/a.rs", "   12:5 mismatched ty…"]);
     }
 
     /// The Breakpoint list's row: its path and line, `stale` when it is, and

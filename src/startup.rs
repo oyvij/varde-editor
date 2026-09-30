@@ -1822,6 +1822,11 @@ fn initial_state(
             Some("Buffers") => crate::layout::Corner::Buffers,
             Some("History") => crate::layout::Corner::History,
             Some("Breakpoints") => crate::layout::Corner::Breakpoints,
+            // On Errors whatever it showed last: nothing has been reported
+            // yet, and with nothing the list opens on Errors.
+            Some(saved) if saved.starts_with("Diagnostics") => {
+                crate::layout::Corner::Diagnostics(crate::lsp::Severity::Error)
+            }
             Some(_) => crate::layout::Corner::Hidden,
             None => match saved_text(input.state_json.as_deref(), "risk_list").as_deref() {
                 Some("Shown") => crate::layout::Corner::Risk,
@@ -2335,6 +2340,21 @@ mod tests {
         // not a rectangle of zeroes.
         let (fresh, _, _) = start(&Startup::default()).expect("started");
         assert_eq!(fresh.evaluator_at, None);
+    }
+
+    /// The Diagnostic list comes back too, on Errors: the Severity it showed
+    /// described reports from servers that are not running yet.
+    #[test]
+    fn the_diagnostic_list_is_back_in_the_corner_after_a_restart() {
+        let (state, _, _) = start(&Startup {
+            state_json: Some(r#"{"corner": "Diagnostics(Hint)"}"#.to_string()),
+            ..Startup::default()
+        })
+        .expect("started");
+        assert_eq!(
+            state.corner,
+            crate::layout::Corner::Diagnostics(crate::lsp::Severity::Error)
+        );
     }
 
     /// The refusal a project layer earns, so that the tests below assert the
