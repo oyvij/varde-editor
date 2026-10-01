@@ -4,8 +4,9 @@ Feature: Syntax highlighting
   token type a piece of text belongs to — never which colour it ends up, because
   colour is a theme's business and themes change.
 
-  The language comes from the file extension. A file whose language is unknown
-  renders as plain text rather than failing.
+  The language comes from the file extension, or, when the extension is unknown,
+  from the first line, such as an XML declaration. A file whose language is
+  unknown renders as plain text rather than failing.
 
   Background:
     Given the workspace root is "/home/me/projects/varde"
@@ -51,6 +52,15 @@ Feature: Syntax highlighting
       """
     When "LICENSE" is highlighted
     Then every token is plain text
+
+  Scenario: An unknown extension is recognised by its first line
+    Given "process.bpmn" contains:
+      """
+      <?xml version="1.0" encoding="UTF-8"?>
+      <bpmn:task id="Task_1"/>
+      """
+    When "process.bpmn" is highlighted
+    Then "id" is an attribute
 
   Scenario: Highlighting covers the whole line
     Given "src/main.rs" contains:
