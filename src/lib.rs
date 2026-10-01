@@ -3451,7 +3451,54 @@ fn on_snippet(state: &State, mut next: State, event: Event, wheeled: bool) -> An
 /// what goes, as typing over them replaces them: the selection names the text,
 /// not the character behind the cursor. Insert mode only, for the reason the
 /// typing-over arm is.
+///
+/// With occurrences taken it erases at every one of them, the way typing
+/// lands at every one, and each moves with what went: erasing only at the
+/// primary left the others marking columns the text had already left. A
+/// cursor at the start of its line erases nothing rather than joining lines,
+/// which would move every occurrence below it.
 fn erase(state: &State, next: &mut State) {
+    if !state.occurrences.is_empty() {
+        let picked = state.selection.as_ref().and_then(Selection::buffer_span);
+        next.selection = None;
+        if let Some(buffer) = edited_mut(next) {
+            buffer.mode = editor::Mode::Insert;
+            let primary = picked.map_or(
+                Place {
+                    line: buffer.line,
+                    column: buffer.column,
+                },
+                |(from, _)| from,
+            );
+            let places: Vec<Place> = std::iter::once(primary)
+                .chain(state.occurrences.iter().copied())
+                .collect();
+            let landed = match picked {
+                Some((from, to)) => buffer.replace_at(&places, to.column + 1 - from.column, ""),
+                None => {
+                    let behind: Vec<Place> = places
+                        .iter()
+                        .filter(|place| place.column > 1)
+                        .map(|place| Place {
+                            column: place.column - 1,
+                            ..*place
+                        })
+                        .collect();
+                    let mut erased = buffer.replace_at(&behind, 1, "").into_iter();
+                    places
+                        .iter()
+                        .map(|place| match place.column > 1 {
+                            true => erased.next().expect("one per place behind"),
+                            false => *place,
+                        })
+                        .collect()
+                }
+            };
+            buffer.go_to_place(landed[0]);
+            next.occurrences = landed[1..].to_vec();
+        }
+        return;
+    }
     let picked = match editor_inserting(state) {
         true => state.selection.as_ref().and_then(Selection::buffer_span),
         false => None,

@@ -1457,9 +1457,25 @@ impl Buffer {
             line: self.line,
             column: self.column,
         };
-        if let Some(place) = moved(&self.lines(), at, key) {
-            self.go_to_place(place);
+        let Some(place) = moved(&self.lines(), at, key) else {
+            return;
+        };
+        // Forwards, the end of the line is a stop of its own, as it is in
+        // every editor: the next word's start is on the line below, and
+        // jumping there skips the place a reader at the last word wants to
+        // type. Only once the cursor is already at that end does it go on —
+        // compared after the clamp, because in normal mode the end is the
+        // last character and the cursor could otherwise never leave it.
+        if matches!(stop, Word::Start) && place.line > at.line {
+            self.go_to_place(crate::Place {
+                column: usize::MAX,
+                ..at
+            });
+            if self.column != at.column {
+                return;
+            }
         }
+        self.go_to_place(place);
     }
 
     fn yank(&mut self, from: usize, to: usize) {
