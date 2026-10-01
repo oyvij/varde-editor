@@ -1,7 +1,5 @@
 use crate::layout::{self, Area, Layout};
-use crate::{
-    tree, Direction, Event, FindIcon, FindKeys, Modal, Pane, Place, Pointed, ReplaceField, State,
-};
+use crate::{tree, Direction, Event, FindKeys, Modal, Pane, Place, Pointed, ReplaceField, State};
 use terminput::KeyModifiers;
 use unicode_width::UnicodeWidthStr;
 
@@ -1001,8 +999,11 @@ fn pressed_in_find(state: &State, panes: &Layout, input: Input) -> Option<Vec<Ev
     let spot = layout::replace_box(panes.editor);
     if matches!(find.keys, FindKeys::Replace(_)) && spot.holds(input.column, input.row) {
         let field = |field| vec![Event::FindKeys(FindKeys::Replace(field))];
-        if layout::replace_case(spot).holds(input.column, input.row) {
-            return Some(vec![Event::ToggleCase]);
+        let toggle = layout::replace_toggles(spot)
+            .into_iter()
+            .find(|(_, _, at)| at.holds(input.column, input.row));
+        if let Some((icon, _, _)) = toggle {
+            return Some(icon.pressed());
         }
         let button = layout::replace_buttons(spot)
             .into_iter()
@@ -1024,12 +1025,7 @@ fn pressed_in_find(state: &State, panes: &Layout, input: Input) -> Option<Vec<Ev
     for (text, icon) in crate::find_line(state) {
         let width = UnicodeWidthStr::width(text.as_str()) as u16;
         if (at..at + width).contains(&input.column) {
-            return Some(match icon? {
-                FindIcon::Case => vec![Event::ToggleCase],
-                FindIcon::Replace | FindIcon::ReplaceAll => {
-                    vec![Event::FindKeys(FindKeys::Replace(ReplaceField::With))]
-                }
-            });
+            return Some(icon?.pressed());
         }
         at += width;
     }
@@ -1381,6 +1377,7 @@ mod tests {
             query: crate::editor::Buffer::text_box("state"),
             origin: Place { line: 1, column: 1 },
             case: crate::search::Case::Smart,
+            extent: crate::search::Extent::Anywhere,
             keys: crate::FindKeys::Replace(crate::ReplaceField::With),
         });
         let editor = panes(120, 26, 30, None, 0, 0, Shapes::default()).editor;
@@ -1397,6 +1394,10 @@ mod tests {
         assert_eq!(
             click(&state, spot.right() - 4, spot.y + 1),
             vec![Event::ToggleCase]
+        );
+        assert_eq!(
+            click(&state, spot.right() - 9, spot.y + 1),
+            vec![Event::ToggleWord]
         );
         assert_eq!(
             click(&state, spot.x + 2, spot.y + 3),

@@ -440,14 +440,26 @@ pub fn replace_box(editor: Area) -> Area {
     }
 }
 
-pub fn replace_case(spot: Area) -> Area {
-    let width = crate::FIND_ICONS[0].1.len() as u16;
-    Area {
-        x: spot.right().saturating_sub(2 + width),
-        y: spot.y + 1,
-        width,
-        height: 1,
-    }
+pub fn replace_toggles(spot: Area) -> Vec<(crate::FindIcon, &'static str, Area)> {
+    let mut right = spot.right().saturating_sub(2);
+    let mut toggles: Vec<_> = crate::FIND_ICONS
+        .iter()
+        .filter(|(icon, _)| matches!(icon, crate::FindIcon::Case | crate::FindIcon::Word))
+        .map(|(icon, label)| {
+            let width = label.len() as u16;
+            right = right.saturating_sub(width);
+            let at = Area {
+                x: right,
+                y: spot.y + 1,
+                width,
+                height: 1,
+            };
+            right = right.saturating_sub(1);
+            (*icon, *label, at)
+        })
+        .collect();
+    toggles.reverse();
+    toggles
 }
 
 pub fn replace_buttons(spot: Area) -> Vec<(crate::ReplaceField, Area)> {
@@ -1220,8 +1232,17 @@ mod tests {
             width: 44,
             height: 5,
         };
-        let case = super::replace_case(spot);
-        assert_eq!((case.x, case.y, case.width), (83, 2, 4));
+        let toggles: Vec<(crate::FindIcon, u16, u16, u16)> = super::replace_toggles(spot)
+            .iter()
+            .map(|(icon, _, at)| (*icon, at.x, at.y, at.width))
+            .collect();
+        assert_eq!(
+            toggles,
+            vec![
+                (crate::FindIcon::Word, 76, 2, 6),
+                (crate::FindIcon::Case, 83, 2, 4)
+            ]
+        );
         let buttons: Vec<(u16, u16, u16)> = super::replace_buttons(spot)
             .iter()
             .map(|(_, at)| (at.x, at.y, at.width))

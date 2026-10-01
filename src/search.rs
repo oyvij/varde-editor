@@ -179,7 +179,13 @@ impl Case {
     }
 }
 
-pub fn occurrences(query: &str, line: &str, case: Case) -> Vec<u32> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Extent {
+    Anywhere,
+    Word,
+}
+
+pub fn occurrences(query: &str, line: &str, case: Case, extent: Extent) -> Vec<u32> {
     if query.is_empty() {
         return Vec::new();
     }
@@ -188,18 +194,26 @@ pub fn occurrences(query: &str, line: &str, case: Case) -> Vec<u32> {
     } else {
         (query.to_lowercase(), line.to_lowercase())
     };
+    let wordy = |c: Option<char>| c.is_some_and(|c| c.is_alphanumeric() || c == '_');
     let mut columns = Vec::new();
     let mut from = 0;
     while let Some(at) = haystack[from..].find(&needle) {
         let start = from + at;
-        columns.push(haystack[..start].chars().count() as u32 + 1);
-        from = start + needle.len();
+        let end = start + needle.len();
+        let bounded =
+            !wordy(haystack[..start].chars().next_back()) && !wordy(haystack[end..].chars().next());
+        if extent == Extent::Anywhere || bounded {
+            columns.push(haystack[..start].chars().count() as u32 + 1);
+            from = end;
+        } else {
+            from = start + haystack[start..].chars().next().map_or(1, char::len_utf8);
+        }
     }
     columns
 }
 
 pub fn hit(query: &str, file: &str, line: u64, text: &str) -> Option<Hit> {
-    let &column = occurrences(query, text, Case::Smart).first()?;
+    let &column = occurrences(query, text, Case::Smart, Extent::Anywhere).first()?;
     Some(Hit {
         file: file.to_string(),
         line: line as u32,
@@ -303,8 +317,8 @@ pub fn completion(query: &str, results: &Results) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        completion, files, in_next_file, occurrences, rows, running, scan, Case, Hit, Request,
-        Results, Row,
+        completion, files, in_next_file, occurrences, rows, running, scan, Case, Extent, Hit,
+        Request, Results, Row,
     };
     use crate::{update, Direction, Effect, Event, Search, State};
     use std::path::PathBuf;
@@ -577,25 +591,61 @@ mod tests {
     #[test]
     fn every_occurrence_in_a_line_is_a_match() {
         assert_eq!(
-            occurrences("state", "state and state", Case::Smart),
+            occurrences("state", "state and state", Case::Smart, Extent::Anywhere),
             vec![1, 11]
         );
     }
 
     #[test]
     fn case_overrides_smart_case_either_way() {
-        assert_eq!(occurrences("State", "state State", Case::Smart), vec![7]);
         assert_eq!(
-            occurrences("State", "state State", Case::Ignore),
+            occurrences("State", "state State", Case::Smart, Extent::Anywhere),
+            vec![7]
+        );
+        assert_eq!(
+            occurrences("State", "state State", Case::Ignore, Extent::Anywhere),
             vec![1, 7]
         );
-        assert_eq!(occurrences("state", "state State", Case::Smart), vec![1, 7]);
-        assert_eq!(occurrences("state", "state State", Case::Exact), vec![1]);
+        assert_eq!(
+            occurrences("state", "state State", Case::Smart, Extent::Anywhere),
+            vec![1, 7]
+        );
+        assert_eq!(
+            occurrences("state", "state State", Case::Exact, Extent::Anywhere),
+            vec![1]
+        );
     }
 
     #[test]
     fn a_match_is_not_counted_twice_where_it_overlaps_itself() {
-        assert_eq!(occurrences("aa", "aaa", Case::Smart), vec![1]);
+        assert_eq!(
+            occurrences("aa", "aaa", Case::Smart, Extent::Anywhere),
+            vec![1]
+        );
+    }
+
+    #[test]
+    fn a_whole_word_is_bounded_by_anything_but_a_word_character() {
+        let word = |query, line| occurrences(query, line, Case::Smart, Extent::Word);
+        assert_eq!(word("state", "state state.x (state)"), vec![1, 7, 16]);
+        assert_eq!(
+            word("state", "states restate state_x _state"),
+            Vec::<u32>::new()
+        );
+        assert_eq!(word("state", "østate stateø"), Vec::<u32>::new());
+        assert_eq!(word("state", "ø state"), vec![3]);
+    }
+
+    #[test]
+    fn a_rejected_whole_word_candidate_resumes_one_character_on() {
+        assert_eq!(
+            occurrences("aa", "aaa aa", Case::Smart, Extent::Word),
+            vec![5]
+        );
+        assert_eq!(
+            occurrences("a a", "ba a a", Case::Smart, Extent::Word),
+            vec![4]
+        );
     }
 
     #[test]

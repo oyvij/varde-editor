@@ -6294,6 +6294,7 @@ fn find_keys(world: &VardeWorld) -> varde::FindKeys {
 fn find_icon(name: &str) -> varde::FindIcon {
     match name {
         "case" => varde::FindIcon::Case,
+        "word" => varde::FindIcon::Word,
         "replace" => varde::FindIcon::Replace,
         "replace all" => varde::FindIcon::ReplaceAll,
         other => panic!("no icon {other:?}"),
@@ -6315,11 +6316,23 @@ fn keyboard_not_in_find(world: &mut VardeWorld) {
     assert_eq!(find_keys(world), varde::FindKeys::Away);
 }
 
-#[then(expr = "the case toggle is {word}")]
-fn case_toggle_is(world: &mut VardeWorld, shown: String) {
+#[then(expr = "the {word} toggle is {word}")]
+fn toggle_is(world: &mut VardeWorld, icon: String, shown: String) {
     let find = world.state.find.as_ref().expect("a search that is on");
-    let lit = find.case.exact(find.query.shown());
+    let lit = find.lit(find_icon(&icon));
     assert_eq!(lit, shown == "lit", "the toggle is lit: {lit}");
+}
+
+#[when(expr = "I click the word toggle in the replace box")]
+fn click_replace_word(world: &mut VardeWorld) {
+    let spot = layout::replace_box(world.panes().editor);
+    let (_, _, at) = layout::replace_toggles(spot)
+        .into_iter()
+        .find(|(icon, _, _)| *icon == varde::FindIcon::Word)
+        .expect("a word toggle");
+    world.pointer = mouse::Pointer::default();
+    world.report(mouse::Kind::LeftDown, at.x, at.y);
+    world.report(mouse::Kind::LeftUp, at.x, at.y);
 }
 
 #[then(expr = "the replace box is open")]

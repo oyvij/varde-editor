@@ -417,6 +417,7 @@ pub enum Event {
     StepMatch(Direction),
     FindKeys(FindKeys),
     ToggleCase,
+    ToggleWord,
     ReplaceMatch,
     ReplaceAll,
     SearchQuery(String),
@@ -648,7 +649,18 @@ pub struct Find {
     pub query: Buffer,
     pub origin: Place,
     pub case: search::Case,
+    pub extent: search::Extent,
     pub keys: FindKeys,
+}
+
+impl Find {
+    pub fn lit(&self, icon: FindIcon) -> bool {
+        match icon {
+            FindIcon::Case => self.case.exact(self.query.shown()),
+            FindIcon::Word => self.extent == search::Extent::Word,
+            FindIcon::Replace | FindIcon::ReplaceAll => true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -662,12 +674,26 @@ pub enum FindKeys {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FindIcon {
     Case,
+    Word,
     Replace,
     ReplaceAll,
 }
 
-pub const FIND_ICONS: [(FindIcon, &str); 3] = [
+impl FindIcon {
+    pub fn pressed(self) -> Vec<Event> {
+        match self {
+            FindIcon::Case => vec![Event::ToggleCase],
+            FindIcon::Word => vec![Event::ToggleWord],
+            FindIcon::Replace | FindIcon::ReplaceAll => {
+                vec![Event::FindKeys(FindKeys::Replace(ReplaceField::With))]
+            }
+        }
+    }
+}
+
+pub const FIND_ICONS: [(FindIcon, &str); 4] = [
     (FindIcon::Case, "[Aa]"),
+    (FindIcon::Word, "[word]"),
     (FindIcon::Replace, "[replace]"),
     (FindIcon::ReplaceAll, "[replace all]"),
 ];
@@ -3303,6 +3329,7 @@ fn on_search_word_under_cursor(
                     query: Buffer::text_box(""),
                     origin,
                     case: search::Case::Smart,
+                    extent: search::Extent::Anywhere,
                     keys: FindKeys::Query,
                 },
             });
@@ -3351,6 +3378,16 @@ fn on_find_query(state: &State, mut next: State, event: Event, wheeled: bool) ->
                 find.case = match find.case.exact(find.query.shown()) {
                     true => search::Case::Ignore,
                     false => search::Case::Exact,
+                };
+            }
+            vec![]
+        }
+
+        Event::ToggleWord => {
+            if let Some(find) = next.find.as_mut() {
+                find.extent = match find.extent {
+                    search::Extent::Anywhere => search::Extent::Word,
+                    search::Extent::Word => search::Extent::Anywhere,
                 };
             }
             vec![]
@@ -7224,11 +7261,11 @@ pub fn word_occurrences(state: &State, lines: impl RangeBounds<usize>) -> Vec<Pl
 }
 
 pub fn matches(state: &State, lines: impl RangeBounds<usize>) -> Vec<Place> {
-    let Some((query, case)) = state
+    let Some((query, case, extent)) = state
         .find
         .as_ref()
-        .map(|find| (find.query.shown(), find.case))
-        .filter(|(query, _)| !query.is_empty())
+        .map(|find| (find.query.shown(), find.case, find.extent))
+        .filter(|(query, _, _)| !query.is_empty())
     else {
         return Vec::new();
     };
@@ -7238,7 +7275,7 @@ pub fn matches(state: &State, lines: impl RangeBounds<usize>) -> Vec<Place> {
             .enumerate()
             .filter(|(index, _)| lines.contains(&(index + 1)))
             .flat_map(|(index, row)| {
-                search::occurrences(query, &row.text(), case)
+                search::occurrences(query, &row.text(), case, extent)
                     .into_iter()
                     .map(move |column| Place {
                         line: index + 1,
@@ -7257,7 +7294,7 @@ pub fn matches(state: &State, lines: impl RangeBounds<usize>) -> Vec<Place> {
     buffer
         .lines_within(lines)
         .flat_map(|(number, line)| {
-            search::occurrences(query, line, case)
+            search::occurrences(query, line, case, extent)
                 .into_iter()
                 .map(move |column| Place {
                     line: number,
@@ -9134,6 +9171,7 @@ mod tests {
             query: Buffer::text_box(query),
             origin: Place { line: 1, column: 1 },
             case: search::Case::Smart,
+            extent: search::Extent::Anywhere,
             keys: FindKeys::Away,
         }
     }
