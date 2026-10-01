@@ -36,4 +36,5 @@ executable form and is the final word where the two disagree.
    (`Ctrl+Space v`); `install.sh` installs the package managers they need. Varde never installs anything silently.
 8. `:format` formats the text on screen, not the file on disk. `:w` writes.
 9. Config is layered: `~/.varde/config.toml`, then `<project>/.varde/config.toml`, key by key.
-10. `:update` rebuilds Varde from its checkout. The next launch is the new version.
+10. `:update` rebuilds Varde from its checkout, or replaces a binary install with the newer
+    Release. On a source install the next launch is the new version.
