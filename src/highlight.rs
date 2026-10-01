@@ -36,7 +36,8 @@ pub fn highlight(name: &str, source: &str) -> Vec<Vec<Token>> {
     let syntax = name
         .rsplit_once('.')
         .and_then(|(_, extension)| set.find_syntax_by_extension(extension))
-        .or_else(|| set.find_syntax_by_token(name));
+        .or_else(|| set.find_syntax_by_token(name))
+        .or_else(|| set.find_syntax_by_first_line(source.lines().next()?));
     let Some(syntax) = syntax else {
         return plain(source);
     };
@@ -190,6 +191,14 @@ fn scope_kind(name: &str) -> Kind {
 #[cfg(test)]
 mod tests {
     use super::{carried, highlight, plain, scope_kind, Kind, Token};
+
+    #[test]
+    fn an_unknown_extension_is_highlighted_by_its_first_line() {
+        let source = "<?xml version=\"1.0\"?>\n<bpmn:task id=\"a\" name=\"Pay\"/>";
+        let bpmn = highlight("process.bpmn", source);
+        assert_ne!(bpmn, plain(source));
+        assert_eq!(bpmn, highlight("process.xml", source));
+    }
 
     #[test]
     fn an_edit_keeps_the_colours_of_every_line_it_left_alone() {
