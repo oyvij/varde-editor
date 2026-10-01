@@ -13,7 +13,10 @@
 //! the wrong pane, a modal not claiming what belonged to it, or a modifier
 //! discarded on the way in.
 
-use crate::{debug, tree, Direction, Event, Modal, Pane, Resolution, Selection, State, Tap, View};
+use crate::{
+    debug, tree, Direction, Event, Find, FindIcon, FindKeys, Modal, Pane, ReplaceField, Resolution,
+    Selection, State, Tap, View, FIND_ICONS, REPLACE_FIELDS,
+};
 use terminput::{
     Encoding, Event as Input, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, ModifierKeyCode,
 };
@@ -56,10 +59,9 @@ pub struct Drafts {
 /// teaches them, and a key nobody can discover is a key nobody uses. The `:`
 /// commands that mean the same thing in every view — `:update`, `:tall`,
 /// `:help` — are the palette's now, as are the two that act on the whole
-/// workspace rather than on one thing, collapsing the tree: this
-/// box sits over the code being read, so a row it spends has to be about the
-/// view under it, and the palette draws its own letters where a cheatsheet row
-/// could only repeat them. What is left is what answers to what is in front of
+/// workspace rather than on one thing, collapsing the tree: a row it spends
+/// has to be about the view on screen, and the palette draws its own letters
+/// where a cheatsheet row could only repeat them. What is left is what answers to what is in front of
 /// you, `:submit` and `:w :q`. `C-space` is the
 /// palette gesture on every terminal and in every pane, hosted ones included;
 /// `Esc Esc` opens it from a hosted pane too, and is listed beside it because
@@ -72,7 +74,7 @@ pub struct Drafts {
 /// surface does not. It lives
 /// here rather than in the renderer so a test can hold it to the bindings
 /// above; `ui` only draws it, filtered to the view on screen.
-pub const CHEATSHEET: [(&str, &str, &[View]); 44] = [
+pub const CHEATSHEET: [(&str, &str, &[View]); 47] = [
     ("i a o O x", "edit", &[View::Edit]),
     ("w b e", "word", &[View::Edit]),
     ("gg G", "file ends", &[View::Edit]),
@@ -101,7 +103,9 @@ pub const CHEATSHEET: [(&str, &str, &[View]); 44] = [
         "copy / paste",
         &[View::Edit, View::Review, View::Story],
     ),
-    ("/ n N", "find", &[View::Edit]),
+    // Tab is the find line's, not the buffer's: it walks from the query onto
+    // `[Aa] [replace] [replace all]`, which Right does too at the query's end.
+    ("/ n N Tab", "find / its icons", &[View::Edit]),
     ("gt gT", "buffer", &[View::Edit]),
     // Two rows for one gesture, because the two spellings do not reach the
     // same views. The chord needs a buffer to hold the waiting `g`: Review
@@ -126,7 +130,7 @@ pub const CHEATSHEET: [(&str, &str, &[View]); 44] = [
         &[View::Review, View::Story],
     ),
     ("* gr", "project", &[View::Edit]),
-    ("u", "undo", &[View::Edit]),
+    ("u U C-z C-S-z", "undo / redo", &[View::Edit]),
     // The second `K` is on the row the first is on: it is the same question
     // read further, and a key nobody can discover is a key nobody uses.
     ("K K", "what is this / read it", &[View::Edit]),
@@ -206,7 +210,11 @@ pub const CHEATSHEET: [(&str, &str, &[View]); 44] = [
     // fires exactly when its key becomes the thing to press, which is a better
     // teacher than a standing row — the row is here so the key is on the
     // contract, not because this is where anybody learns it.
-    ("C-f", "project", &[View::Edit, View::Review, View::Story]),
+    (
+        "C-f D-f",
+        "project",
+        &[View::Edit, View::Review, View::Story],
+    ),
     ("D", "diverged from disk", &[View::Edit]),
     // The write key rides `:w`'s row rather than one of its own: Edit's rows
     // are at the limit a 26-row window has, and it is the same write.
@@ -228,6 +236,24 @@ pub const CHEATSHEET: [(&str, &str, &[View]); 44] = [
     (
         "C-space v",
         "tools",
+        &[View::Edit, View::Review, View::Story],
+    ),
+    // Inside a Conflict: current, incoming, both. Low, because a merge is
+    // the rare afternoon and the rows above are every day's.
+    ("cc ci cb", "accept conflict side", &[View::Edit]),
+    // The keys the Diagnostic list answers with the keyboard in it, from
+    // whichever view it was opened over. Last, because the palette's `i` that
+    // opens it is drawn in the palette itself, and a short window's rows go to
+    // what nothing else teaches.
+    (
+        "e w i h j k Enter",
+        "diagnostic list: severity, row, go",
+        &[View::Edit, View::Review, View::Story],
+    ),
+    // The Conflict list's, last for the Diagnostic list's reason.
+    (
+        "j k Enter",
+        "conflict list: row, go",
         &[View::Edit, View::Review, View::Story],
     ),
 ];
@@ -332,6 +358,20 @@ pub fn cheatsheet(
     debug.iter().chain(CHEATSHEET.iter()).chain(chords(state))
 }
 
+/// The Cheatsheet's rows for the view on screen: what `ui` draws and what
+/// `update` clamps the offset against, so the two count the same rows.
+/// Review's rows answer to `state.diff`, so a review whose diff has not
+/// landed yet lists none of them.
+pub fn cheatsheet_rows(state: &State) -> Vec<(&'static str, &'static str)> {
+    if state.view == View::Review && state.diff.is_none() {
+        return vec![];
+    }
+    cheatsheet(state)
+        .filter(|(_, _, views)| applies_to(views, state.view))
+        .map(|(keys, what, _)| (*keys, *what))
+        .collect()
+}
+
 /// The Chord hint as drawn, each row carrying the key it offers or nothing —
 /// the shape [`crate::palette_rows`] has, so the mouse hit-tests these same
 /// rows and a click is the keystroke.
@@ -356,18 +396,17 @@ pub fn chord_rows(state: &State) -> Vec<(Option<char>, String)> {
 /// beside the router that answers them, for the reason [`CHEATSHEET`] is here:
 /// `ui` may only draw the contract, so a test can hold the two together. They
 /// are not cheatsheet rows because they exist only while the list is up, and
-/// the box the cheatsheet draws sits over the code being read — the gesture
+/// a cheatsheet row is spent on the view on screen — the gesture
 /// that opens the list is what earns a row there. The arrows are deliberately
 /// absent for the reason `UNLISTED` gives for them everywhere else: every list
-/// in Varde moves on them, and the box already cannot spell one label twice.
+/// in Varde moves on them, and the Cheatsheet already cannot spell one label twice.
 pub const TOOL_LIST_KEYS: [(&str, &str); 3] =
     [("i", "install"), ("r", "re-check"), ("Esc", "close")];
 
 /// The keys the branch picker answers and the word its box says for each —
 /// here, beside the router that answers them, for the reason
 /// [`TOOL_LIST_KEYS`] is here. Not cheatsheet rows for the same reason
-/// either: the list exists only while it is up, and the box the cheatsheet
-/// draws sits over the code being read.
+/// either: the list exists only while it is up.
 ///
 /// The arrows are deliberately absent, as they are for Tools: every
 /// list in Varde moves on them, and the box cannot spell one label twice. Enter
@@ -405,8 +444,20 @@ pub const BRANCH_FILTER_HINT: &str = "type to filter";
 /// rather than a cheatsheet row: the box exists only while it is up, and the
 /// gesture that opens it (`c`, or a gutter drag) is what the cheatsheet spends
 /// a row on.
-pub const COMMENT_BOX_KEYS: [(&str, &str); 3] =
-    [("C-s", "file"), ("Esc", "discard"), ("C-z", "undo")];
+pub const COMMENT_BOX_KEYS: [(&str, &str); 4] = [
+    ("C-s", "file"),
+    ("Esc", "discard"),
+    ("C-z", "undo"),
+    ("C-S-z", "redo"),
+];
+
+/// The keys the replace box answers and the word it says for each, drawn in
+/// its bottom border for the reason [`COMMENT_BOX_KEYS`] is: the box exists
+/// only while it is up, and `[replace]` on the `/` line is what opens it.
+/// Enter replaces from either field or `[replace]`, and replaces every match
+/// from `[replace all]`.
+pub const REPLACE_BOX_KEYS: [(&str, &str); 3] =
+    [("Tab", "next"), ("Enter", "replace"), ("Esc", "close")];
 
 /// The keys the results box answers and the word it says for each — here for
 /// the reason [`TOOL_LIST_KEYS`] is here: the box exists only while a search
@@ -665,6 +716,9 @@ fn reserved(state: &State, drafts: &mut Drafts, event: KeyEvent, at_ms: u64) -> 
 /// The keys Varde answers whatever is on screen, once the child has not taken
 /// them.
 fn claimed_everywhere(state: &State, event: KeyEvent) -> Option<Vec<Event>> {
+    if event.modifiers.contains(KeyModifiers::SUPER) && event.code == KeyCode::Char('f') {
+        return Some(vec![Event::OpenSearch]);
+    }
     if event.modifiers.contains(KeyModifiers::CTRL) {
         match event.code {
             KeyCode::Char('q') => return Some(vec![Event::Quit]),
@@ -1008,7 +1062,10 @@ fn child_owns_keys(state: &State, drafts: &Drafts) -> bool {
             | Pane::History
             | Pane::Breakpoints
             | Pane::Frames
-            | Pane::Variables => false,
+            | Pane::Diagnostics
+            | Pane::Conflicts
+            | Pane::Variables
+            | Pane::Cheatsheet => false,
         }
 }
 
@@ -1018,7 +1075,10 @@ fn child_owns_keys(state: &State, drafts: &Drafts) -> bool {
 fn a_box_has_the_keys(state: &State, drafts: &Drafts) -> bool {
     !matches!(state.modal, Modal::None)
         || state.search.is_some()
-        || state.find.is_some()
+        || state
+            .find
+            .as_ref()
+            .is_some_and(|find| find.keys != FindKeys::Away)
         || drafts.command.is_some()
         || drafts.filter.is_some()
 }
@@ -1059,10 +1119,14 @@ fn buffer_takes_paste(state: &State, drafts: &Drafts) -> bool {
 /// two spellings of it, for the reason [`a_box_has_the_keys`] is one — two
 /// spellings of the same question are two answers waiting to disagree.
 fn the_buffer_takes_edits(state: &State) -> bool {
-    state.focus == Pane::Editor
-        && state.diff.is_none()
-        && state.walking.is_none()
-        && !crate::previewing(state)
+    // The Snippet is a buffer typed into on the same terms, and nothing
+    // read-only stands in front of it: the diff, the Site and the Preview are
+    // all the file's.
+    state.focus == Pane::Evaluator
+        || (state.focus == Pane::Editor
+            && state.diff.is_none()
+            && state.walking.is_none()
+            && !crate::previewing(state))
 }
 
 /// Whether the open buffer is the thing being *typed* into: the surface above,
@@ -1238,16 +1302,72 @@ fn searching(event: KeyEvent) -> Vec<Event> {
     }
 }
 
-/// `/` in the editor. The query is state rather than a draft because the cursor
-/// moves to the closest match on every keystroke.
-fn finding(event: KeyEvent) -> Vec<Event> {
-    if let Some(events) = query_key(event) {
-        return events;
-    }
-    match event.code {
-        KeyCode::Esc => vec![Event::CloseFind],
-        KeyCode::Enter => vec![Event::AcceptFind],
-        _ => vec![],
+/// `/` in the editor, while its search has the keyboard: the query, one of
+/// the icons after it, or the replace box. The query is state rather than a
+/// draft because the cursor moves to the closest match on every keystroke.
+fn finding(find: &Find, event: KeyEvent) -> Vec<Event> {
+    let keys = |keys| vec![Event::FindKeys(keys)];
+    let back = event.modifiers.contains(KeyModifiers::SHIFT);
+    match find.keys {
+        FindKeys::Away => vec![],
+        FindKeys::Query => {
+            let at_end = find.query.column > find.query.shown().chars().count();
+            match event.code {
+                KeyCode::Esc => vec![Event::CloseFind],
+                KeyCode::Enter => vec![Event::AcceptFind],
+                KeyCode::Tab => keys(FindKeys::Icon(FindIcon::Case)),
+                KeyCode::Right if at_end && event.modifiers.is_empty() => {
+                    keys(FindKeys::Icon(FindIcon::Case))
+                }
+                _ => query_key(event).unwrap_or_default(),
+            }
+        }
+        FindKeys::Icon(icon) => {
+            let at = FIND_ICONS.iter().position(|(each, _)| *each == icon);
+            let at = at.unwrap_or(0);
+            match event.code {
+                KeyCode::Left if at == 0 => vec![
+                    Event::FindKeys(FindKeys::Query),
+                    Event::QueryEnd(Direction::Right),
+                ],
+                KeyCode::Left => keys(FindKeys::Icon(FIND_ICONS[at - 1].0)),
+                KeyCode::Right => keys(FindKeys::Icon(
+                    FIND_ICONS[(at + 1).min(FIND_ICONS.len() - 1)].0,
+                )),
+                KeyCode::Up | KeyCode::Esc => keys(FindKeys::Query),
+                KeyCode::Enter => match icon {
+                    FindIcon::Case => vec![Event::ToggleCase],
+                    FindIcon::Replace | FindIcon::ReplaceAll => {
+                        keys(FindKeys::Replace(ReplaceField::With))
+                    }
+                },
+                _ => vec![],
+            }
+        }
+        FindKeys::Replace(field) => {
+            let at = REPLACE_FIELDS.iter().position(|each| *each == field);
+            let at = at.unwrap_or(0);
+            let count = REPLACE_FIELDS.len();
+            match event.code {
+                KeyCode::Esc => keys(FindKeys::Away),
+                KeyCode::Tab if back => {
+                    keys(FindKeys::Replace(REPLACE_FIELDS[(at + count - 1) % count]))
+                }
+                KeyCode::Tab => keys(FindKeys::Replace(REPLACE_FIELDS[(at + 1) % count])),
+                KeyCode::Enter if field == ReplaceField::ReplaceAll => vec![Event::ReplaceAll],
+                KeyCode::Enter => vec![Event::ReplaceMatch],
+                _ if matches!(field, ReplaceField::Find | ReplaceField::With) => {
+                    query_key(event).unwrap_or_default()
+                }
+                // On a button no letter is text, so `n` and `N` step past a
+                // match without replacing it.
+                _ => match typed(event) {
+                    Some('n') => vec![Event::StepMatch(Direction::Right)],
+                    Some('N') => vec![Event::StepMatch(Direction::Left)],
+                    _ => vec![],
+                },
+            }
+        }
     }
 }
 
@@ -1320,10 +1440,9 @@ fn comment_body(drafts: &mut Drafts, event: KeyEvent) -> Vec<Event> {
     }
     // The box's second Ctrl key, and for the first one's reason: every letter in
     // the body is text, so `u` is a letter of the comment and undo cannot have
-    // the key the editor gives it. The body is always inserting, so unlike the
-    // editor there is no mode this has to ask about.
-    if event.modifiers.contains(KeyModifiers::CTRL) && event.code == KeyCode::Char('z') {
-        return vec![Event::EditorUndo];
+    // the key the editor gives it.
+    if let Some(undo) = undo_key(event) {
+        return vec![undo];
     }
     // What Option+arrow actually sends on macOS — `^[b` and `^[f` — for the
     // reason [`word_motion_alias`] gives: Varde cannot ask for Option to be
@@ -1523,7 +1642,7 @@ fn jump_alias(event: KeyEvent) -> Option<Vec<Event>> {
 /// modifier but Ctrl and Command is inspected, so one that names no gesture of
 /// its own is folded into the key it triggers.
 fn occurrence_alias(state: &State, event: KeyEvent) -> Option<Vec<Event>> {
-    (state.focus == Pane::Editor
+    (matches!(state.focus, Pane::Editor | Pane::Evaluator)
         && state.diff.is_none()
         && state.walking.is_none()
         && ctrl_or_command(event)
@@ -1608,7 +1727,7 @@ fn tab_indent(state: &State, event: KeyEvent) -> Option<Vec<Event>> {
 /// keep every modifier they had — the pair below is read on an arrow and
 /// nowhere else, so a letter carrying Ctrl names no gesture of its own here.
 fn word_motion_alias(state: &State, event: KeyEvent, alt: bool, shift: bool) -> Option<Vec<Event>> {
-    if !(state.focus == Pane::Editor && alt) {
+    if !(matches!(state.focus, Pane::Editor | Pane::Evaluator) && alt) {
         return None;
     }
     match (arrow(event.code), shift) {
@@ -1661,8 +1780,12 @@ fn focus_alias(event: KeyEvent, alt: bool) -> Option<Vec<Event>> {
 /// open and gives them straight back when it closes, which is why `/` costs no
 /// motion.
 fn collecting(state: &State, drafts: &mut Drafts, event: KeyEvent) -> Option<Vec<Event>> {
-    if state.find.is_some() {
-        return Some(finding(event));
+    if let Some(find) = state
+        .find
+        .as_ref()
+        .filter(|find| find.keys != FindKeys::Away)
+    {
+        return Some(finding(find, event));
     }
     if drafts.command.is_some() {
         return Some(command_line(drafts, event));
@@ -1706,7 +1829,10 @@ fn claims_colon(state: &State) -> bool {
         | Pane::History
         | Pane::Breakpoints
         | Pane::Frames
-        | Pane::Variables => true,
+        | Pane::Diagnostics
+        | Pane::Conflicts
+        | Pane::Variables
+        | Pane::Cheatsheet => true,
         Pane::Ai | Pane::Terminal | Pane::Output => false,
     }
 }
@@ -1743,8 +1869,29 @@ fn arrow_event(state: &State, event: KeyEvent, alt: bool, shift: bool) -> Option
         // list as well, in the Strip rather than the corner: the arrows reach
         // a tree the same way they reach a flat list, because what they move
         // is the selection either way.
-        (Pane::Breakpoints | Pane::Frames | Pane::Variables, false) => list_arrow(direction),
-        (Pane::Breakpoints | Pane::Frames | Pane::Variables, true) => vec![],
+        (
+            Pane::Breakpoints
+            | Pane::Frames
+            | Pane::Diagnostics
+            | Pane::Conflicts
+            | Pane::Variables,
+            false,
+        ) => list_arrow(direction),
+        (
+            Pane::Breakpoints
+            | Pane::Frames
+            | Pane::Diagnostics
+            | Pane::Conflicts
+            | Pane::Variables,
+            true,
+        ) => vec![],
+        (Pane::Cheatsheet, false) => match direction {
+            Direction::Up | Direction::Down => {
+                vec![Event::ScrollCheatsheet { direction, rows: 1 }]
+            }
+            Direction::Left | Direction::Right => vec![],
+        },
+        (Pane::Cheatsheet, true) => vec![],
         // A hosted pane's arrows went to its child; see below.
         (Pane::Ai | Pane::Terminal | Pane::Output, _) => vec![],
     })
@@ -1782,6 +1929,10 @@ fn pane_key(state: &State, event: KeyEvent) -> Vec<Event> {
         {
             vec![Event::WriteBuffer]
         }
+        // Declined in the Snippet rather than typed: Command leaves the `s`
+        // alone, so falling through would substitute a character with the key
+        // that means "write".
+        Pane::Evaluator if event.code == KeyCode::Char('s') && ctrl_or_command(event) => vec![],
         Pane::Editor | Pane::Evaluator => editor_pane_key(event),
         Pane::Tree => tree_pane_key(event),
         // The corner's panes answer Enter — go to the code behind the figure,
@@ -1797,7 +1948,19 @@ fn pane_key(state: &State, event: KeyEvent) -> Vec<Event> {
         | Pane::History
         | Pane::Breakpoints
         | Pane::Frames
+        | Pane::Diagnostics
+        | Pane::Conflicts
         | Pane::Variables => list_pane_key(event),
+        Pane::Cheatsheet => {
+            let (direction, rows) = match (event.code, typed(event)) {
+                (_, Some('j')) => (Direction::Down, 1),
+                (_, Some('k')) => (Direction::Up, 1),
+                (KeyCode::PageDown, _) => (Direction::Down, crate::cheatsheet_fits(state)),
+                (KeyCode::PageUp, _) => (Direction::Up, crate::cheatsheet_fits(state)),
+                _ => return vec![],
+            };
+            vec![Event::ScrollCheatsheet { direction, rows }]
+        }
         // A hosted pane never arrives here: with nothing of Varde's own
         // collecting, `child_owns_keys` sent the key to `to_child`, and with
         // something collecting one of the returns above took it. Every pane is
@@ -1819,7 +1982,23 @@ fn ctrl_or_command(event: KeyEvent) -> bool {
         .intersects(KeyModifiers::CTRL | KeyModifiers::SUPER)
 }
 
+/// Undo and redo as every editor outside vim spells them, in either mode:
+/// `u` and `U` are letters while inserting. Ctrl and Command are aliases here
+/// too. Redo is Shift on top, which arrives as `Z` once [`shifted`] has run —
+/// and as plain `C-z` from a terminal that folds Shift away, where `U` is the
+/// way to redo.
+fn undo_key(event: KeyEvent) -> Option<Event> {
+    match event.code {
+        KeyCode::Char('z') if ctrl_or_command(event) => Some(Event::EditorUndo),
+        KeyCode::Char('Z') if ctrl_or_command(event) => Some(Event::EditorRedo),
+        _ => None,
+    }
+}
+
 fn editor_pane_key(event: KeyEvent) -> Vec<Event> {
+    if let Some(undo) = undo_key(event) {
+        return vec![undo];
+    }
     match event.code {
         // Not claimed globally: with a hosted pane focused Ctrl+C is the
         // child's interrupt, and reaches it as bytes.
@@ -2051,7 +2230,8 @@ fn filter_box(drafts: &mut Drafts, event: KeyEvent) -> Vec<Event> {
 mod tests {
     use super::{command, on_key_event, on_paste, Drafts, Pasted};
     use crate::{
-        story, DiffLine, Direction, Event, Modal, Pane, Place, Selection, State, Tap, View,
+        story, DiffLine, Direction, Event, Find, FindIcon, FindKeys, Modal, Pane, Place,
+        ReplaceField, Selection, State, Tap, View,
     };
     use terminput::{
         KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MediaKeyCode, ModifierDirection,
@@ -2062,6 +2242,34 @@ mod tests {
         State {
             focus: pane,
             ..State::default()
+        }
+    }
+
+    /// `keys::CHEATSHEET`'s order decides what a short window shows before
+    /// anyone scrolls: at 26 rows by 120 columns — the replay recipe's size and
+    /// `features/ai_pane.feature`'s — the AI pane's rectangle shows sixteen of
+    /// Edit view's rows. What is held is the two rows nothing else in Varde
+    /// teaches: the palette gesture, and `:format`, which is in no palette, has
+    /// no completion and is spelled nowhere else.
+    #[test]
+    fn the_rows_nothing_else_teaches_are_on_screen_before_scrolling() {
+        let state = State {
+            screen_width: 120,
+            screen_height: 26,
+            ..State::default()
+        };
+        let fits = crate::cheatsheet_fits(&state);
+        assert_eq!(fits, 16);
+        let shown: Vec<&str> = super::cheatsheet_rows(&state)
+            .into_iter()
+            .take(fits)
+            .map(|(keys, _)| keys)
+            .collect();
+        for keys in ["C-space Esc Esc", ":format"] {
+            assert!(
+                shown.iter().any(|row| row.starts_with(keys)),
+                "{keys:?} is below the fold at 26 rows: {shown:?}"
+            );
         }
     }
 
@@ -2135,6 +2343,20 @@ mod tests {
                 KeyCode::Tab
             ]
         );
+    }
+
+    #[test]
+    fn undo_and_redo_have_a_modifier_spelling_in_either_mode() {
+        let inserting = crate::update(&editing(), Event::EditorKey('i')).0;
+        let shift = |event: KeyEvent| event.modifiers(event.modifiers | KeyModifiers::SHIFT);
+        for state in [editing(), inserting.clone()] {
+            for undo in [ctrl('z'), cmd('z')] {
+                assert_eq!(press(&state, undo), vec![Event::EditorUndo]);
+                assert_eq!(press(&state, shift(undo)), vec![Event::EditorRedo]);
+            }
+        }
+        assert_eq!(press(&editing(), plain('U')), vec![Event::EditorKey('U')]);
+        assert_eq!(press(&inserting, plain('u')), vec![Event::EditorKey('u')]);
     }
 
     // A paste into the open buffer is one edit, not the keystrokes it is
@@ -2998,10 +3220,7 @@ mod tests {
     // into the query must still move back a word once the search has closed.
     #[test]
     fn the_in_file_search_claims_the_editors_keys_only_while_it_is_open() {
-        let finding = State {
-            find: Some(Place { line: 1, column: 1 }),
-            ..State::default()
-        };
+        let finding = typing_a_query("");
         assert_eq!(press(&finding, plain('b')), vec![Event::EditorKey('b')]);
         assert_eq!(
             press(&finding, KeyEvent::new(KeyCode::Backspace)),
@@ -3020,6 +3239,118 @@ mod tests {
             press(&focused(Pane::Editor), plain('b')),
             vec![Event::EditorKey('b')]
         );
+        // On, with the keyboard back in the buffer: the same.
+        let mut away = typing_a_query("b");
+        away.find.as_mut().expect("on").keys = FindKeys::Away;
+        assert_eq!(press(&away, plain('b')), vec![Event::EditorKey('b')]);
+    }
+
+    fn typing_a_query(query: &str) -> State {
+        State {
+            find: Some(Find {
+                query: crate::editor::Buffer::text_box(query),
+                origin: Place { line: 1, column: 1 },
+                case: crate::search::Case::Smart,
+                keys: FindKeys::Query,
+            }),
+            ..State::default()
+        }
+    }
+
+    fn with_find_keys(keys: FindKeys) -> State {
+        let mut state = typing_a_query("state");
+        state.find.as_mut().expect("on").keys = keys;
+        state
+    }
+
+    /// Right moves the caret until the query runs out, and then walks onto
+    /// the icons; Tab goes there from anywhere in it. Left off the first icon
+    /// puts the caret back at the end rather than wherever it was left.
+    #[test]
+    fn the_icons_are_walked_from_the_end_of_the_query() {
+        let right = KeyEvent::new(KeyCode::Right);
+        let left = KeyEvent::new(KeyCode::Left);
+        let icon = |icon| vec![Event::FindKeys(FindKeys::Icon(icon))];
+        let mut middle = typing_a_query("state");
+        middle
+            .find
+            .as_mut()
+            .expect("on")
+            .query
+            .arrow(Direction::Left);
+        assert_eq!(
+            press(&middle, right),
+            vec![Event::EditorArrow(Direction::Right)]
+        );
+        assert_eq!(
+            press(&middle, KeyEvent::new(KeyCode::Tab)),
+            icon(FindIcon::Case)
+        );
+        assert_eq!(press(&typing_a_query("state"), right), icon(FindIcon::Case));
+        let on_case = with_find_keys(FindKeys::Icon(FindIcon::Case));
+        assert_eq!(press(&on_case, right), icon(FindIcon::Replace));
+        assert_eq!(
+            press(&on_case, left),
+            vec![
+                Event::FindKeys(FindKeys::Query),
+                Event::QueryEnd(Direction::Right)
+            ]
+        );
+        assert_eq!(
+            press(&on_case, KeyEvent::new(KeyCode::Enter)),
+            vec![Event::ToggleCase]
+        );
+        let on_last = with_find_keys(FindKeys::Icon(FindIcon::ReplaceAll));
+        assert_eq!(press(&on_last, right), icon(FindIcon::ReplaceAll));
+        assert_eq!(press(&on_last, left), icon(FindIcon::Replace));
+        for back in [KeyCode::Up, KeyCode::Esc] {
+            assert_eq!(
+                press(&on_last, KeyEvent::new(back)),
+                vec![Event::FindKeys(FindKeys::Query)]
+            );
+        }
+        assert_eq!(
+            press(&on_last, KeyEvent::new(KeyCode::Enter)),
+            vec![Event::FindKeys(FindKeys::Replace(ReplaceField::With))]
+        );
+    }
+
+    /// What the replace box's footer names is what it answers, from the field
+    /// the box opens on.
+    #[test]
+    fn the_replace_box_answers_the_keys_its_footer_names() {
+        let with = with_find_keys(FindKeys::Replace(ReplaceField::With));
+        for (key, word) in super::REPLACE_BOX_KEYS {
+            let code = match key {
+                "Tab" => KeyCode::Tab,
+                "Enter" => KeyCode::Enter,
+                "Esc" => KeyCode::Esc,
+                other => panic!("no key spells {other}"),
+            };
+            assert!(
+                !press(&with, KeyEvent::new(code)).is_empty(),
+                "the box offers {key} for {word} and does nothing with it"
+            );
+        }
+        let shift_tab = KeyEvent::new(KeyCode::Tab).modifiers(KeyModifiers::SHIFT);
+        assert_eq!(
+            press(&with, shift_tab),
+            vec![Event::FindKeys(FindKeys::Replace(ReplaceField::Find))]
+        );
+        assert_eq!(press(&with, plain('n')), vec![Event::EditorKey('n')]);
+        let on_all = with_find_keys(FindKeys::Replace(ReplaceField::ReplaceAll));
+        assert_eq!(
+            press(&on_all, KeyEvent::new(KeyCode::Enter)),
+            vec![Event::ReplaceAll]
+        );
+        assert_eq!(
+            press(&on_all, plain('n')),
+            vec![Event::StepMatch(Direction::Right)]
+        );
+        assert_eq!(
+            press(&on_all, KeyEvent::new(KeyCode::Tab)),
+            vec![Event::FindKeys(FindKeys::Replace(ReplaceField::Find))]
+        );
     }
 
     /// Both queries are a buffer with a caret, so the keys that move through
@@ -3027,10 +3358,14 @@ mod tests {
     /// shape macOS sends it included. Up and down stay the results box's.
     #[test]
     fn a_search_query_answers_the_keys_that_move_through_text() {
-        let finding = State {
-            find: Some(Place { line: 1, column: 1 }),
-            ..State::default()
-        };
+        // Mid-query, since Right at the end of one walks onto its icons.
+        let mut finding = typing_a_query("ab");
+        finding
+            .find
+            .as_mut()
+            .expect("on")
+            .query
+            .arrow(Direction::Left);
         let searching = State {
             search: Some(crate::Search::default()),
             ..State::default()
@@ -3116,6 +3451,7 @@ mod tests {
     fn ctrl_f_opens_search_from_the_panes_varde_owns() {
         for pane in [Pane::Editor, Pane::Tree] {
             assert_eq!(press(&focused(pane), ctrl('f')), vec![Event::OpenSearch]);
+            assert_eq!(press(&focused(pane), cmd('f')), vec![Event::OpenSearch]);
             // `C-S-f` is not `C-f`. The shift a terminal reports separately is
             // applied on the way in, so a binding reads the key that was
             // pressed rather than the one underneath it.
@@ -3804,7 +4140,7 @@ mod tests {
     /// nobody noticed. Every entry is held to still doing something in every
     /// view it names, so the list cannot quietly outlive the binding it
     /// excuses.
-    const UNLISTED: [(&str, &str, &[View]); 27] = [
+    const UNLISTED: [(&str, &str, &[View]); 24] = [
         (
             "Ctrl",
             "the router still answers a bare Ctrl press with a tap, but no \
@@ -3813,15 +4149,15 @@ mod tests {
              Listing a gesture nobody can perform teaches the wrong key",
             &[View::Edit, View::Review, View::Story],
         ),
+        // `h`, `j` and `k` are cursor motion too, and listed: the Diagnostic
+        // list's row names them, since the cheatsheet is drawn per view and
+        // not per pane.
         (
-            "h",
+            "l",
             "cursor motion — the one thing nobody needs reminding of. Over a \
              Preview it is the same motion, run over the rendered row",
             &[View::Edit],
         ),
-        ("j", "cursor motion", &[View::Edit]),
-        ("k", "cursor motion", &[View::Edit]),
-        ("l", "cursor motion", &[View::Edit]),
         (
             "arr",
             "cursor motion, in every mode — and through a walked Site too, \
@@ -3916,9 +4252,10 @@ mod tests {
     /// One spelling per *gesture*, not per key event: the sweep drives all
     /// sixty-four modifier combinations of every code, and a modifier the router
     /// never inspects names no gesture of its own. `Super+x` types the `x` it
-    /// always typed, so it is spelled `x` — except on the four keys where the
-    /// router does inspect it, `D-c`, `D-v`, `D-s` and `D-d`, which are Command's
-    /// own spellings of copy, paste, write and the next occurrence and are folded
+    /// always typed, so it is spelled `x` — except on the five keys where the
+    /// router does inspect it, `D-c`, `D-v`, `D-s`, `D-d` and `D-f`, which are
+    /// Command's own spellings of copy, paste, write, the next occurrence and
+    /// project search and are folded
     /// onto no other row for the reason `M-Bksp` is not folded onto `Bksp`. Ctrl
     /// outranks Alt for the same reason — the Ctrl bindings ask `contains(CTRL)`
     /// and never look at Alt, so `C-M-q` is `C-q` carrying a modifier the
@@ -3951,8 +4288,13 @@ mod tests {
             // The cheatsheet spells Space as the glyph its chords are written
             // with, because a space cannot be a token of a row.
             KeyCode::Char(' ') => "␣".to_string(),
+            // Command is Ctrl's alias on undo and redo, so both fold into the
+            // Ctrl gesture, and redo's Shift is spelled rather than read off
+            // the `Z` it became.
+            KeyCode::Char('z') if ctrl || command => "C-z".to_string(),
+            KeyCode::Char('Z') if ctrl || command => "C-S-z".to_string(),
             KeyCode::Char(c) if ctrl => format!("C-{c}"),
-            KeyCode::Char(c @ ('c' | 'v' | 's' | 'd')) if command => format!("D-{c}"),
+            KeyCode::Char(c @ ('c' | 'v' | 's' | 'd' | 'f')) if command => format!("D-{c}"),
             KeyCode::Char(c) if alt => format!("M-{c}"),
             KeyCode::Char(c) => c.to_string(),
             // A gesture of its own since `backspace_word` inspects Alt on it:
@@ -4049,12 +4391,19 @@ mod tests {
             | KeyCode::KeypadBegin => KeyCode::CapsLock,
             code => code,
         };
+        // Command is Ctrl's alias on undo and redo, the claim `label` makes by
+        // spelling both `C-`.
+        if matches!(event.code, KeyCode::Char('z' | 'Z'))
+            && event.modifiers.contains(KeyModifiers::SUPER)
+        {
+            event.modifiers = (event.modifiers - KeyModifiers::SUPER) | KeyModifiers::CTRL;
+        }
         event.modifiers &= match event.code {
             KeyCode::Char(_) if event.modifiers.contains(KeyModifiers::CTRL) => KeyModifiers::CTRL,
-            // Command is a gesture of its own on these four and nowhere else,
+            // Command is a gesture of its own on these five and nowhere else,
             // which is the claim `label` makes about them and this is where it
             // is checked.
-            KeyCode::Char('c' | 'v' | 's' | 'd')
+            KeyCode::Char('c' | 'v' | 's' | 'd' | 'f')
                 if event.modifiers.contains(KeyModifiers::SUPER) =>
             {
                 KeyModifiers::SUPER
@@ -4515,6 +4864,205 @@ mod tests {
         }
     }
 
+    /// The editing gestures the Snippet declines, in the mode each is declined
+    /// in, with the reason. The gestures that act on the *file* — writing,
+    /// `gt`/`gT`, `gd`, `D`, the jumps, the searches — need no line here: they
+    /// leave the editor's buffer as it was, so the sweep below holds them to
+    /// leaving the Snippet and the file behind it as they were too, which is
+    /// what declining them means. What is named is what changes the text, the
+    /// cursor or the Selection on one side and deliberately not on the other;
+    /// a gesture that diverges without being named is the accident the sweep
+    /// catches.
+    const SNIPPET_DECLINES: [(&str, crate::editor::Mode, &str); 3] = [
+        (
+            "Enter",
+            crate::editor::Mode::Normal,
+            "runs the Snippet — the Selection if there is one — which is what \
+             the Evaluator is for. Inserting, it is the newline it is in the \
+             editor, and the sweep holds it to that",
+        ),
+        (
+            "C-Enter",
+            crate::editor::Mode::Normal,
+            "the alias of normal-mode Enter, which runs the Snippet",
+        ),
+        (
+            "C-Enter",
+            crate::editor::Mode::Insert,
+            "runs the Snippet while inserting, so a block need not be left to \
+             be run — the editor reads no Ctrl on Enter and types the newline",
+        ),
+    ];
+
+    /// A candidate's label, with the one modifier only the Evaluator reads:
+    /// [`label`] folds Ctrl on Enter away because the editor never inspects
+    /// it, and folded here it would decline plain Enter with it.
+    fn gesture(label: String, sequence: &[KeyEvent]) -> String {
+        match sequence {
+            [key] if key.code == KeyCode::Enter && key.modifiers.contains(KeyModifiers::CTRL) => {
+                "C-Enter".to_string()
+            }
+            _ => label,
+        }
+    }
+
+    /// What an editing key can change: the text, the cursor, the mode and the
+    /// Selection of whichever buffer the keyboard is in — the occurrences a
+    /// `C-d` takes are part of what is picked.
+    type Edit = (
+        String,
+        Place,
+        crate::editor::Mode,
+        Option<Selection>,
+        Vec<Place>,
+    );
+
+    fn edit_of(state: &State) -> Option<Edit> {
+        let buffer = state.edited()?;
+        Some((
+            buffer.shown().to_string(),
+            Place {
+                line: buffer.line,
+                column: buffer.column,
+            },
+            buffer.mode,
+            state.selection.clone(),
+            state.occurrences.clone(),
+        ))
+    }
+
+    /// The file behind the Evaluator's window, which no key typed into the
+    /// Snippet may reach.
+    fn behind(state: &State) -> Option<(String, Place)> {
+        let buffer = state.buffers.get(state.current_buffer.as_ref()?)?;
+        Some((
+            buffer.shown().to_string(),
+            Place {
+                line: buffer.line,
+                column: buffer.column,
+            },
+        ))
+    }
+
+    /// The editor and the Evaluator holding the same text with the cursor in
+    /// the same place, each driven on into the same starts: normal mode and
+    /// inserting, since Tab and Alt+Backspace are insert-mode keys; with
+    /// characters picked, since `d`, `y` and typing act on a Selection; and
+    /// with an occurrence taken, since typing then lands at every one. A sweep
+    /// of a bare cursor alone never drives the arms that read either.
+    fn snippet_pairs() -> Vec<(State, State)> {
+        let opened = crate::update(
+            &State::default(),
+            Event::BufferOpened {
+                path: std::path::PathBuf::from("/w/one.rs"),
+                contents: "one two one\ntwo one two\none two one\n".to_string(),
+                preview: false,
+                at: None,
+            },
+        )
+        .0;
+        let mut editor = crate::debug::paused(State {
+            focus: Pane::Editor,
+            ..opened
+        });
+        // Off the corner for the reason [`editing`] walks off it.
+        for direction in [Direction::Down, Direction::Right, Direction::Right] {
+            editor = crate::update(&editor, Event::EditorArrow(direction)).0;
+        }
+        let mut evaluator = editor.clone();
+        let text = editor
+            .edited()
+            .expect("a buffer is open")
+            .shown()
+            .to_string();
+        crate::debug::open_evaluator(&mut evaluator, text);
+        let at = edit_of(&editor).expect("a buffer is open").1;
+        if let Some(it) = evaluator.evaluator.as_mut() {
+            it.snippet.go_to_place(at);
+        }
+        let extend = KeyEvent::new(KeyCode::Right).modifiers(KeyModifiers::SHIFT);
+        let take = KeyEvent::new(KeyCode::Char('d')).modifiers(KeyModifiers::CTRL);
+        [
+            vec![],
+            vec![plain('i')],
+            vec![extend],
+            vec![plain('i'), extend],
+            vec![take, take],
+            vec![plain('i'), take, take],
+        ]
+        .into_iter()
+        .map(|start| (outcome(&editor, &start).0, outcome(&evaluator, &start).0))
+        .collect()
+    }
+
+    /// The Snippet is edited with the editor's own gestures: every key or chord
+    /// leaves the Snippet's text, cursor, mode and Selection as it leaves the
+    /// editor's, and the file behind the window alone — or is named in
+    /// [`SNIPPET_DECLINES`]. Every key, not only the editing ones: a key that
+    /// moves nothing in the editor and edits the Snippet is the same accident
+    /// the other way round, and `D-s` substituting a character was one. Measured rather than read off the Cheatsheet's
+    /// rows, for the reason [`answers`] is: Rust cannot reflect over a match,
+    /// and the gestures that went missing were aliases — Alt+arrow beside
+    /// `w`/`b`, Shift+arrow beside `W`/`B` — that only the editor answered.
+    #[test]
+    fn every_editing_key_does_to_the_snippet_what_it_does_in_the_editor() {
+        let mut diverged: Vec<String> = Vec::new();
+        for (editor, evaluator) in snippet_pairs() {
+            let before = edit_of(&editor);
+            assert_eq!(before, edit_of(&evaluator), "the pair starts equal");
+            let mode = before.expect("a buffer is open").2;
+            let file = behind(&evaluator);
+            for (label, sequence) in candidates(&editor) {
+                let label = gesture(label, &sequence);
+                if SNIPPET_DECLINES
+                    .iter()
+                    .any(|(declined, declined_in, _)| *declined == label && *declined_in == mode)
+                {
+                    continue;
+                }
+                let edited = drive(&editor, &mut Drafts::default(), &sequence).0;
+                let typed = drive(&evaluator, &mut Drafts::default(), &sequence).0;
+                if edit_of(&typed) != edit_of(&edited) || behind(&typed) != file {
+                    diverged.push(format!("{label} ({mode:?})"));
+                }
+            }
+        }
+        diverged.sort();
+        diverged.dedup();
+        assert!(
+            diverged.is_empty(),
+            "these editing keys do something else in the Snippet and are not \
+             declined: {diverged:?}"
+        );
+    }
+
+    /// A decline is only worth its line if the Snippet really does something
+    /// else there: one that has come to agree is a decision nobody is making
+    /// any more, and an Enter that stopped running the Snippet would read as
+    /// declined forever.
+    #[test]
+    fn every_declined_editing_key_still_differs_in_the_snippet() {
+        for (declined, mode, _) in SNIPPET_DECLINES {
+            let differs = snippet_pairs()
+                .into_iter()
+                .filter(|(editor, _)| edit_of(editor).map(|edit| edit.2) == Some(mode))
+                .any(|(editor, evaluator)| {
+                    candidates(&editor)
+                        .into_iter()
+                        .filter(|(label, sequence)| gesture(label.clone(), sequence) == declined)
+                        .any(|(_, sequence)| {
+                            let edited = drive(&editor, &mut Drafts::default(), &sequence);
+                            let typed = drive(&evaluator, &mut Drafts::default(), &sequence);
+                            edit_of(&edited.0) != edit_of(&typed.0)
+                        })
+                });
+            assert!(
+                differs,
+                "{declined} is declined in {mode:?} and does the same"
+            );
+        }
+    }
+
     /// The same contract [`CHEATSHEET`] is held to, for the keys that only exist
     /// while Tools is up: what the box names must answer, and what
     /// answers must be named. Without it the footer is a string in the
@@ -4586,8 +5134,7 @@ mod tests {
     /// The same contract [`CHEATSHEET`] is held to, for the keys that exist only
     /// while the branch picker is up: what the box names must answer, and what
     /// answers must be named. Held here rather than by a cheatsheet row for the
-    /// reason Tools is: the box exists only while it is up, and the
-    /// cheatsheet's own box sits over the code being read.
+    /// reason Tools is: the box exists only while it is up.
     #[test]
     fn the_branch_picker_answers_exactly_the_keys_its_box_names() {
         // A row to act on: Enter on a list of nothing is a key that does

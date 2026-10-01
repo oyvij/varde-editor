@@ -8,6 +8,12 @@ Feature: Configuration and state
   change and inherits the rest. A config file that does not parse stops Varde from starting,
   with an error precise enough to fix the file elsewhere.
 
+  Either file saved while Varde runs takes effect without a restart. What the config alone
+  decides is worked out again; what the session holds — its buffers, its view, the
+  preferences the project recorded — stays, and a child already running keeps the command it
+  was started with. An edit that would stop Varde starting is said out loud instead, and the
+  last configuration that worked stays in effect.
+
   Varde never writes git ignore rules. What ends up committed is the user's decision.
 
   Background:
@@ -167,3 +173,83 @@ Feature: Configuration and state
     And the error names the file "~/.varde/config.toml"
     And the error names line 2
     And the fault is "not-toml"
+
+  Scenario: A Launch configuration added while Varde runs is offered without a restart
+    Given Varde started in the project
+    When the project config is saved as:
+      """
+      [launch.server]
+      adapter = "rust"
+      request = "launch"
+      args = {}
+      """
+    Then the launch palette, opened without restarting, offers "server"
+
+  Scenario: A setting changed in the global config applies at once
+    Given Varde started in the project
+    When the global config is saved as:
+      """
+      [risk]
+      test_command = "make check"
+      """
+    Then the test command in effect is "make check"
+
+  Scenario: A config edit that does not parse keeps the last good configuration
+    Given the global config is:
+      """
+      [risk]
+      test_command = "make check"
+      """
+    And Varde started in the project
+    When the global config is saved as:
+      """
+      [risk
+      test_command = "make test"
+      """
+    Then the test command in effect is "make check"
+    And the notice is "broken-config"
+    And the message names the file "~/.varde/config.toml" at line 1
+
+  Scenario: A config file that cannot be read keeps the last good configuration
+    Given the global config is:
+      """
+      [risk]
+      test_command = "make check"
+      """
+    And Varde started in the project
+    When the global config can no longer be read
+    Then the test command in effect is "make check"
+    And the notice is "broken-config"
+    And the message names the file "~/.varde/config.toml" at line 1
+
+  Scenario: A changed language-server command leaves the running server alone
+    Given Varde started in the project
+    And a language server for "rust" is already running
+    When the global config is saved as:
+      """
+      [lsp.rust]
+      command = "ra-multiplex"
+      """
+    Then the language server for "rust" is configured as "ra-multiplex"
+    And the save asked for nothing to be started or stopped
+    And a language server for "rust" is still running
+
+  Scenario: A project that hid the minimap keeps it hidden when the config turns it on
+    Given the project ".varde/state.json" records the minimap as hidden
+    And Varde started in the project
+    When the global config is saved as:
+      """
+      [editor]
+      minimap = true
+      """
+    Then the minimap is hidden
+
+  Scenario: A Bare workspace ignores a config file saved in its folder
+    Given the workspace is a Bare workspace
+    And Varde started in the project
+    When the project config is saved as:
+      """
+      [risk]
+      test_command = "make check"
+      """
+    Then no test command is in effect

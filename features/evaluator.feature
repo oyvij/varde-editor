@@ -173,6 +173,38 @@ Feature: The Evaluator
       When I type "ggdd"
       Then the Snippet is "first * 2"
 
+    Scenario: The Snippet undoes and redoes with the modifier keys
+      Given I type "ggdd"
+      And I press "Ctrl+z"
+      When I press "Ctrl+Shift+z"
+      Then the Snippet is "first * 2"
+
+    Scenario Outline: The word motions jump between words in the Snippet, the arrow alias as well as the letter
+      Given I type "gg0"
+      When I press "<key>"
+      Then the cursor in the Snippet is at line 1 column 5
+
+      Examples:
+        | key       |
+        | w         |
+        | Alt+Right |
+
+    Scenario Outline: A word is selected in the Snippet as it is in the editor
+      Given I type "gg0w"
+      When I press "<key>"
+      Then the selection holds "first"
+
+      Examples:
+        | key             |
+        | W               |
+        | Shift+Alt+Right |
+        | Ctrl+d          |
+
+    Scenario: Shift with an arrow extends the Selection in the Snippet
+      Given I type "gg0"
+      When I press "Shift+Right"
+      Then the selection holds "le"
+
   Rule: The Evaluator output shows what was printed, then the value, and each run replaces it
 
     Background:

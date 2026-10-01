@@ -195,7 +195,11 @@ pub fn jumped(state: &State, event: &Event) -> Jump {
             at: None,
         },
         Event::StepMatch(_) => Jump::InFile,
-        Event::AcceptFind => match state.find.and_then(|origin| here(state, Some(origin))) {
+        Event::AcceptFind => match state
+            .find
+            .as_ref()
+            .and_then(|find| here(state, Some(find.origin)))
+        {
             Some(origin) => Jump::From(origin),
             None => Jump::No,
         },

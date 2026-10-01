@@ -6,8 +6,8 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
+use std::collections::HashMap;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
-use varde::editor::Mode;
 use varde::highlight::{self, Kind};
 use varde::layout::{self, Area};
 use varde::lsp;
@@ -101,9 +101,15 @@ pub struct Chrome<'a> {
     /// the reason the tokens are: a mermaid routing pass per frame is visible,
     /// not merely wasteful.
     pub preview: &'a [varde::preview::Row],
+    /// The debug panes' code, by its text — [`varde::debug::code`] — coloured
+    /// by the edge once as each text arrives rather than once per frame.
+    pub code: &'a Code,
     /// Mixed once, from the colours the terminal said it has: [`faint`].
     pub faint: Style,
 }
+
+/// Tokens by the text they colour, in the Paused Frame's language.
+pub type Code = HashMap<String, Vec<Vec<highlight::Token>>>;
 
 pub struct Areas {
     pub tree: Rect,
@@ -169,7 +175,13 @@ pub fn draw(
     draw_list_pane(frame, state, rows, &areas, &chrome);
     // Composed once: the renderer, the caret and the "is the caret free"
     // question all have to agree about whether a line is being typed.
-    let typing = command_line(state, chrome.command_draft);
+    let typing = chrome.command_draft.map(|draft| format!(":{draft}█"));
+    // The in-file search draws its own caret, and while it has the keyboard no
+    // pane's caret is free either.
+    let finding = state
+        .find
+        .as_ref()
+        .is_some_and(|find| find.keys != varde::FindKeys::Away);
     // The reading surface gets a field of its own: `Black` is the theme's
     // palette 0 rather than a hex that would fight whatever palette the
     // terminal is set to, and it lifts every foreground's contrast without
@@ -209,8 +221,10 @@ pub fn draw(
     // strip's columns out of the count the text is clamped against, so nothing
     // the text was allowed to reach is covered.
     minimap(frame, state, &areas, chrome.tokens);
-    cheatsheet(frame, state, areas.editor);
-    place_cursor(frame, state, &areas, typing.as_deref());
+    replace_box(frame, state, areas.panes.editor);
+    if !finding {
+        place_cursor(frame, state, &areas, typing.as_deref());
+    }
     // One occupant at a time, exhaustively: the Strip is one rectangle, and a
     // group drawn over the one beside it is two panes claiming the same rows.
     match state.strip {
@@ -229,7 +243,12 @@ pub fn draw(
         }
         layout::Group::Debug => {
             frame.render_widget(
-                variables_widget(state, areas.panes.terminal.width, chrome.name_draft),
+                variables_widget(
+                    state,
+                    areas.panes.terminal.width,
+                    chrome.name_draft,
+                    chrome.code,
+                ),
                 rect(areas.panes.terminal),
             );
             // Zero-width while it is hidden, so there is nothing to draw and
@@ -272,9 +291,16 @@ pub fn draw(
             layout::Corner::Frames => {
                 frame.render_widget(frames_widget(state, areas.corner.width), areas.corner)
             }
+            layout::Corner::Diagnostics(showing) => {
+                frame.render_widget(diagnostics_widget(state, areas.corner.width), areas.corner);
+                severity_labels(frame, state, showing, areas.panes.corner);
+            }
+            layout::Corner::Conflicts => {
+                frame.render_widget(conflicts_widget(state, areas.corner.width), areas.corner)
+            }
         }
     }
-    let caret_is_free = state.modal == Modal::None && typing.is_none();
+    let caret_is_free = state.modal == Modal::None && typing.is_none() && !finding;
     if let (Pane::Output, layout::Group::Debug, true, Some(output)) =
         (state.focus, state.strip, caret_is_free, output)
     {
@@ -288,7 +314,10 @@ pub fn draw(
     ) {
         place_pty_cursor(frame, *area, shell);
     }
-    draw_ai_pane(frame, state, &areas, ai, &chrome, caret_is_free);
+    match state.ai_slot {
+        layout::Slot::Ai => draw_ai_pane(frame, state, &areas, ai, &chrome, caret_is_free),
+        layout::Slot::Cheatsheet => frame.render_widget(cheatsheet_widget(state), areas.ai),
+    }
     draw_status(frame, state, &chrome);
     // On the editor's text, under everything that floats over it.
     if let Some((x, y)) = varde::debug::edit_chip(state, &areas.panes) {
@@ -308,7 +337,7 @@ pub fn draw(
     candidates(frame, state, &areas.panes);
     // Over the panes for the Hover's reason, and after it: the window is the
     // thing the reader is working in, so nothing floats above it but a modal.
-    evaluator(frame, state, &areas.panes);
+    evaluator(frame, state, &areas.panes, chrome.code);
 
     // Search floats over the panes rather than replacing them: you can still
     // see where you were.
@@ -670,14 +699,17 @@ fn border_colour(state: &State, pane: Pane) -> Color {
     }
 }
 
-/// The pane's name, and what Risk says about the workspace. One place on
-/// screen always answers the same question, so the figure lives on the border
-/// rather than in a pane of its own.
-fn tree_title(state: &State) -> String {
-    match varde::risk::border(state) {
-        Some(figure) => format!("tree  {figure}"),
-        None => "tree".to_string(),
+/// `tree::title`, and after it the project's error and warning totals in the
+/// colours the gutter marks them in — the strings `mouse::nudge_at` measures.
+fn tree_title(state: &State) -> Line<'static> {
+    let mut spans = vec![Span::raw(varde::tree::title(state))];
+    for (severity, label) in varde::lsp::nudge(state) {
+        spans.push(Span::styled(
+            label,
+            Style::default().fg(severity_colour(severity)),
+        ));
     }
+    Line::from(spans)
 }
 
 /// The Risk pane's name and what the figure is: `measuring` while nothing has
@@ -1029,8 +1061,8 @@ fn frames_lines(state: &State, width: u16) -> Vec<Line<'static>> {
 
 /// The Variables of the chosen Frame, in the Strip's Debug group. Its title
 /// says which of the two it is drawing: this pause, or the last one.
-fn variables_widget(state: &State, width: u16, draft: &str) -> Paragraph<'static> {
-    let widget = Paragraph::new(variables_lines(state, width, draft))
+fn variables_widget(state: &State, width: u16, draft: &str, code: &Code) -> Paragraph<'static> {
+    let widget = Paragraph::new(variables_lines(state, width, draft, code))
         .scroll((state.variables_scroll as u16, 0))
         .block(pane_block(
             varde::debug::title(state),
@@ -1043,9 +1075,11 @@ fn variables_widget(state: &State, width: u16, draft: &str) -> Paragraph<'static
 /// Split out of `variables_widget` for the reason `frames_lines` is. One row
 /// per member the tree has open: its depth as indentation, whether it opens,
 /// its name, what the adapter's presentation hint says about it, and its
-/// value.
-fn variables_lines(state: &State, width: u16, draft: &str) -> Vec<Line<'static>> {
+/// value — coloured on its own, out of context, the trade `history_lines`
+/// makes. A Watch that failed shows the adapter's reason, which is not code.
+fn variables_lines(state: &State, width: u16, draft: &str, code: &Code) -> Vec<Line<'static>> {
     let inner = width.saturating_sub(2) as usize;
+    let dark = state.editor_theme != "light";
     varde::debug::variables(state)
         .into_iter()
         .enumerate()
@@ -1099,21 +1133,23 @@ fn variables_lines(state: &State, width: u16, draft: &str) -> Vec<Line<'static>>
                 .saturating_sub(chips.len() * 2);
             let mut spans = vec![
                 Span::styled(truncate(&name, inner), style),
-                // Padded to the columns left over, so the Chips sit hard
-                // against the right-hand border — the very columns
-                // `mouse::icon_at` hit-tests them from.
-                Span::styled(
-                    format!(
-                        " {:<pad$}",
-                        truncate(&row.value, room.saturating_sub(1)),
-                        pad = room.saturating_sub(1)
-                    ),
-                    style.fg(match row.of {
-                        varde::debug::Of::Watch { failed: true, .. } => WARNING,
-                        _ => Color::DarkGray,
-                    }),
-                ),
+                Span::styled(" ", style),
             ];
+            // Padded to the columns left over, so the Chips sit hard against
+            // the right-hand border — the very columns `mouse::icon_at`
+            // hit-tests them from.
+            let pad = room.saturating_sub(1);
+            match (row.of, tokens_of(code, &row.value)) {
+                (varde::debug::Of::Watch { failed: true, .. }, _) => spans.push(Span::styled(
+                    format!("{:<pad$}", truncate(&row.value, pad)),
+                    style.fg(WARNING),
+                )),
+                (_, Some(lines)) => spans.extend(cut_spans(&one_row(lines), pad, style, dark)),
+                (_, None) => spans.push(Span::styled(
+                    format!("{:<pad$}", truncate(&row.value, pad)),
+                    style.fg(Color::DarkGray),
+                )),
+            }
             for (at, chip) in chips.iter().enumerate() {
                 spans.push(Span::styled(
                     chip.glyph.clone(),
@@ -1124,6 +1160,107 @@ fn variables_lines(state: &State, width: u16, draft: &str) -> Vec<Line<'static>>
             Line::from(spans)
         })
         .collect()
+}
+
+/// The Diagnostic list: its rows, and its name on the border while the
+/// Severity labels leave room for it.
+fn diagnostics_widget(state: &State, width: u16) -> Paragraph<'static> {
+    let labels = varde::lsp::severity_labels(state, width);
+    let title = match layout::strip_width(&labels) + layout::CORNER_TITLE <= width {
+        true => "diagnostics",
+        false => "",
+    };
+    Paragraph::new(diagnostics_lines(state, width))
+        .scroll((state.diagnostics_scroll as u16, 0))
+        .block(pane_block(title, state, Pane::Diagnostics))
+}
+
+/// A heading per file and a row per Diagnostic under it, cut to the pane with
+/// `…`. Split out of `diagnostics_widget` for the reason `risk_lines` is split
+/// out of `risk_widget`.
+fn diagnostics_lines(state: &State, width: u16) -> Vec<Line<'static>> {
+    let inner = width.saturating_sub(2) as usize;
+    varde::lsp::listed(state)
+        .into_iter()
+        .enumerate()
+        .map(|(index, (path, diagnostic))| {
+            let style = match index == state.diagnostics_selection {
+                true => Style::default().add_modifier(Modifier::REVERSED),
+                false => Style::default(),
+            };
+            match diagnostic {
+                // A path is a filename somebody chose, so it is untrusted too.
+                None => Line::from(Span::styled(
+                    truncate(
+                        &format!(" {}", varde::relative(state, path))
+                            .replace(|character: char| character.is_control(), ""),
+                        inner,
+                    ),
+                    style.add_modifier(Modifier::BOLD),
+                )),
+                Some(diagnostic) => Line::from(Span::styled(
+                    truncate(&format!("   {}", varde::lsp::row_text(diagnostic)), inner),
+                    style,
+                )),
+            }
+        })
+        .collect()
+}
+
+fn conflicts_widget(state: &State, width: u16) -> Paragraph<'static> {
+    Paragraph::new(conflicts_lines(state, width))
+        .scroll((state.conflicts_scroll as u16, 0))
+        .block(pane_block(
+            varde::conflict::title(state),
+            state,
+            Pane::Conflicts,
+        ))
+}
+
+/// A row per unmerged file and one per Conflict under it, cut to the pane.
+fn conflicts_lines(state: &State, width: u16) -> Vec<Line<'static>> {
+    let inner = width.saturating_sub(2) as usize;
+    varde::conflict::listed(state)
+        .into_iter()
+        .enumerate()
+        .map(|(index, (path, conflict))| {
+            let style = match (index == state.conflicts_selection, conflict) {
+                (true, _) => Style::default().add_modifier(Modifier::REVERSED),
+                (false, None) => Style::default().add_modifier(Modifier::BOLD),
+                (false, Some(_)) => Style::default(),
+            };
+            let text = varde::conflict::row_text(state, &path, conflict);
+            Line::from(Span::styled(truncate(&format!(" {text}"), inner), style))
+        })
+        .collect()
+}
+
+/// The Severity labels over the Diagnostic list's top border, right-aligned at
+/// the columns `mouse` hit-tests them from with `layout::strip_at`, the one
+/// showing lit — drawn the way the Strip's Group tabs are.
+fn severity_labels(frame: &mut Frame, state: &State, showing: lsp::Severity, corner: Area) {
+    let labels = varde::lsp::severity_labels(state, corner.width);
+    let Some(mut x) = corner
+        .right()
+        .saturating_sub(1)
+        .checked_sub(layout::strip_width(&labels))
+    else {
+        return;
+    };
+    for (severity, label) in lsp::Severity::ALL.into_iter().zip(labels) {
+        let style = match severity == showing {
+            true => Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::REVERSED),
+            false => Style::default().fg(Color::DarkGray),
+        };
+        let columns = label.width() as u16;
+        frame.render_widget(
+            Span::styled(label, style),
+            Rect::new(x, corner.y, columns, 1),
+        );
+        x += columns + 1;
+    }
 }
 
 /// One row per Visit: which file it was in, what the cursor was standing on,
@@ -2068,7 +2205,10 @@ fn source_lines(
     // Every match of what `/` looked for, not only the one the cursor is on, so
     // the count is visible without walking them. Under the selection, so the
     // match being stepped to still reads as picked.
-    let matched = state.find_query.shown().chars().count();
+    let matched = state
+        .find
+        .as_ref()
+        .map_or(0, |find| find.query.shown().chars().count());
     for at in varde::matches(state, first..=last) {
         let Some(line) = row(at.line).map(|index| &mut lines[index]) else {
             continue;
@@ -2100,13 +2240,18 @@ fn source_lines(
             );
         }
     }
-    paint_drag(
-        &mut lines,
-        &row,
-        state.selection.as_ref().and_then(Selection::buffer_span),
-        &state.occurrences,
-        true,
-    );
+    // A Selection made with the keyboard in the Evaluator is a span of the
+    // Snippet, drawn in its window: painted here it would land on the file at
+    // the Snippet's coordinates.
+    if state.focus != Pane::Evaluator {
+        paint_drag(
+            &mut lines,
+            &row,
+            state.selection.as_ref().and_then(Selection::buffer_span),
+            &state.occurrences,
+            true,
+        );
+    }
     // The whole affordance a link has: a terminal has no hand pointer to turn
     // the mouse into, so the underline is what says a click here jumps.
     if let Some((line, from, to)) = varde::link(state) {
@@ -2144,6 +2289,30 @@ fn source_lines(
         }
     }
     shift(&mut lines, state, 1);
+    // A Conflict's marker lines as bars and its sides tinted — after `shift`,
+    // so a bar is never scrolled sideways away from its buttons, and before
+    // the gutter's marks, which still count the line.
+    for (line, &number) in lines.iter_mut().zip(&shown) {
+        let Some(drawn) = varde::conflict::drawn(state, number) else {
+            continue;
+        };
+        *line = match drawn {
+            varde::conflict::Drawn::Bar(pieces) => {
+                let text: String = pieces.into_iter().map(|(piece, _)| piece).collect();
+                // The width `conflict::drawn` measured the bar against.
+                let run = varde::fits(state).2.saturating_sub(text.chars().count());
+                let mut bar = numbered(number, cursor_line(state));
+                bar.push_span(Span::styled(
+                    format!("{text}{}", "┄".repeat(run)),
+                    Style::default().add_modifier(Modifier::DIM),
+                ));
+                bar
+            }
+            varde::conflict::Drawn::Current => washed(line, change_colours(false, dark).2),
+            varde::conflict::Drawn::Incoming => washed(line, incoming_tint(dark)),
+            varde::conflict::Drawn::Ancestor => washed(line, word_tint(dark)),
+        };
+    }
     // Last, for the reason the Site's mark is last in `marked_code`: everything
     // above counts columns from the start of the line, and a barred line's
     // gutter is two spans rather than one.
@@ -2204,8 +2373,8 @@ fn source_lines(
         .collect()
 }
 
-/// The mirror of the file down the editor's right-hand edge, and the scrollbar
-/// over its last column.
+/// The mirror of the file down the editor's right-hand edge, the mark lane
+/// down its last column, and the scrollbar when there is no mirror.
 ///
 /// Four source columns and two source lines to a cell, drawn as a dot: a
 /// bullet where both lines hold ink, a middle dot where one does. Why a dot
@@ -2250,14 +2419,17 @@ fn minimap(frame: &mut Frame, state: &State, areas: &Areas, tokens: &[Vec<highli
         frame
             .buffer_mut()
             .set_style(area, Style::default().bg(field));
-        // The first column is the slider's, so the cells start one in.
+        // The first column is the slider's and the last the lane's, so the
+        // cells are the ones between.
         let (top, height) = minimap::slider(first - 1, state.editor_scroll, fits);
-        let cells = area.width.saturating_sub(1) as usize;
+        let cells = area.width.saturating_sub(2) as usize;
+        let lane = minimap::lane(state, first - 1, area.height as usize);
         let rows: Vec<Line<'static>> =
             minimap::cells(tokens, first - 1, area.height as usize, cells)
                 .into_iter()
+                .zip(lane)
                 .enumerate()
-                .map(|(row, cells)| {
+                .map(|(row, (cells, mark))| {
                     let inside = row >= top && row < top + height;
                     let mut spans = vec![Span::styled(
                         match inside {
@@ -2288,6 +2460,23 @@ fn minimap(frame: &mut Frame, state: &State, areas: &Areas, tokens: &[Vec<highli
                                 .add_modifier(Modifier::DIM),
                         )
                     }));
+                    // The gutter's own colours, so red on the strip means what
+                    // red beside a line does.
+                    spans.push(match mark {
+                        Some(mark) => Span::styled(
+                            "\u{2595}",
+                            Style::default()
+                                .fg(match mark {
+                                    minimap::Mark::Error => severity_colour(lsp::Severity::Error),
+                                    minimap::Mark::Warning => {
+                                        severity_colour(lsp::Severity::Warning)
+                                    }
+                                    minimap::Mark::Changed => Color::Green,
+                                })
+                                .bg(field),
+                        ),
+                        None => Span::raw(" "),
+                    });
                     Line::from(spans)
                 })
                 .collect();
@@ -2592,6 +2781,16 @@ fn word_tint(dark: bool) -> Color {
     }
 }
 
+/// The incoming side of a Conflict: a blue of the weight the diff's added
+/// green has, so neither side reads as the one that won.
+fn incoming_tint(dark: bool) -> Color {
+    if dark {
+        Color::Rgb(0x1b, 0x2a, 0x40)
+    } else {
+        Color::Indexed(189)
+    }
+}
+
 /// Per span rather than on the `Line`: a span carries its own background, so a
 /// style set above it would show through nothing.
 fn washed(line: &Line<'static>, colour: Color) -> Line<'static> {
@@ -2628,7 +2827,10 @@ fn preview_widget(
     // Every match of what `/` looked for, painted on the row it is in — the
     // same highlight Source draws, over rows rather than lines, since
     // `varde::matches` already answers in row coordinates while previewing.
-    let matched = state.find_query.shown().chars().count();
+    let matched = state
+        .find
+        .as_ref()
+        .map_or(0, |find| find.query.shown().chars().count());
     for at in varde::matches(state, ..) {
         let Some(line) = lines.get_mut(at.line - 1) else {
             continue;
@@ -3212,6 +3414,59 @@ fn spans(tokens: &[highlight::Token], dark: bool) -> Vec<Span<'static>> {
         .collect()
 }
 
+/// `text`'s tokens as the edge coloured them, and `None` where it did not or
+/// found nothing to colour — no Paused file, or a language with no grammar —
+/// which the caller draws exactly as it did before there was colour.
+fn tokens_of<'a>(code: &'a Code, text: &str) -> Option<&'a Vec<Vec<highlight::Token>>> {
+    code.get(text).filter(|lines| {
+        lines
+            .iter()
+            .flatten()
+            .any(|token| token.kind != Kind::Plain)
+    })
+}
+
+/// A value's lines as one row's tokens. The newline stays in, as it did when
+/// the value was drawn as one string.
+fn one_row(lines: &[Vec<highlight::Token>]) -> Vec<highlight::Token> {
+    lines.join(&highlight::Token {
+        text: "\n".to_string(),
+        kind: Kind::Plain,
+    })
+}
+
+/// Tokens on one row, cut to `width` with `…` and padded out to it, each in
+/// its kind's colour over `style` — so a selected row stays reversed.
+fn cut_spans(
+    tokens: &[highlight::Token],
+    width: usize,
+    style: Style,
+    dark: bool,
+) -> Vec<Span<'static>> {
+    let whole: String = tokens.iter().map(|token| token.text.as_str()).collect();
+    let shown = truncate(&whole, width);
+    let mut left = match shown == whole {
+        true => whole.chars().count(),
+        false => shown.chars().count() - 1,
+    };
+    let mut cut = Vec::new();
+    for token in tokens {
+        let text: String = token.text.chars().take(left).collect();
+        left -= text.chars().count();
+        if !text.is_empty() {
+            cut.push(Span::styled(text, style.fg(colour(token.kind, dark))));
+        }
+    }
+    if shown != whole {
+        cut.push(Span::styled("\u{2026}", style));
+    }
+    cut.push(Span::styled(
+        " ".repeat(width.saturating_sub(shown.width())),
+        style,
+    ));
+    cut
+}
+
 /// The buffer's text as numbered, syntax-coloured rows. Shared by Edit view
 /// and Story view's code surface, so the two cannot disagree about what a line
 /// of code looks like — only about what is drawn over it.
@@ -3470,90 +3725,85 @@ fn bar(kind: story::Kind) -> Color {
     }
 }
 
-/// A reminder of the keys, tucked into the editor's top-right. `:help` takes it
-/// down and puts it back — a terminal cell holds one character, so while it is
-/// up the code under it is gone and there is no opacity to give it. Hidden while
-/// Edit view is inserting, when you are typing rather than remembering, and
-/// hidden in Review view until a diff has actually landed — Review's rows
-/// answer to `state.diff`, and one that has not shown up yet claims nothing.
-/// There is no third arm for Edit view with a diff on screen:
-/// `move_to_view` clears `state.diff` on every
-/// way out of Review, so the two never coexist. The keys themselves live in
-/// `keys::CHEATSHEET`, one row per gesture tagged with the views it applies
-/// to; drawing only filters the table to `state.view` rather than deciding
-/// what belongs in it.
-/// Whether the view has keys to claim at all.
-fn showing_cheatsheet(state: &State) -> bool {
-    match state.view {
-        View::Edit => state
-            .current_buffer
-            .as_ref()
-            .and_then(|path| state.buffers.get(path))
-            .is_some_and(|buffer| buffer.mode != Mode::Insert),
-        // Review's rows only answer once a diff is on screen — `j k V c` and
-        // `e` are read from `state.diff` in `update`, and an empty review or
-        // one whose diff has not landed yet has none of them to claim.
-        View::Review => state.diff.is_some(),
-        // Nothing gates it: Story view has no content yet whose absence
-        // should hide the box, unlike Edit's insert mode or Review's diff.
-        View::Story => true,
-    }
-}
-
-/// The rows the box actually shows in a pane `height` rows tall: the table
-/// filtered to the view, and then cut to what
-/// there is room for — the pane's height less the border the box starts under
-/// and the one it stops above.
-///
-/// The cut is made here rather than left to `Paragraph`, which drops the
-/// surplus without a word. The box has no footer and nowhere to put a mark, so
-/// this cannot be announced the way `lsp::TALLEST` announces one; what it can
-/// be is *read*, which is what lets a test hold `keys::CHEATSHEET`'s order to
-/// the promise its own doc makes — the rows that survive a short window are the
-/// ones nothing else teaches you. Twenty-five Edit rows compete for sixteen on
-/// a 26-row screen, so the order is the whole of the answer.
-fn cheatsheet_rows(state: &State, height: u16) -> Vec<(String, Color)> {
-    let rows_for_view: Vec<(&str, &str)> = keys::cheatsheet(state)
-        .filter(|(_, _, views)| state.cheatsheet && keys::applies_to(views, state.view))
-        .map(|(keys, what, _)| (*keys, *what))
-        .collect();
-    let column = rows_for_view
-        .iter()
-        .map(|(keys, _)| keys.len())
-        .max()
-        .unwrap_or(0);
-    let mut rows: Vec<(String, Color)> = rows_for_view
-        .into_iter()
-        .map(|(keys, what)| (format!(" {keys:column$}  {what}"), Color::DarkGray))
-        .collect();
-    rows.truncate(height.saturating_sub(2) as usize);
-    rows
-}
-
-fn cheatsheet(frame: &mut Frame, state: &State, area: Rect) {
-    if !showing_cheatsheet(state) || state.focus != Pane::Editor {
+/// The replace box, while it has the keyboard: find, with, and the two
+/// buttons, at the rows and columns `mouse` hit-tests them by. `[Aa]` is the
+/// search's own toggle, drawn a second time rather than being a second
+/// setting. Its keys go in the bottom border, for the reason the comment box's
+/// do.
+fn replace_box(frame: &mut Frame, state: &State, editor: Area) {
+    let Some(find) = state.find.as_ref() else {
         return;
-    }
-    let rows = cheatsheet_rows(state, area.height);
-    let width = rows.iter().map(|(row, _)| row.len()).max().unwrap_or(0) as u16 + 1;
-    if area.width < width + 12 {
-        return;
-    }
-    let spot = Rect {
-        x: area.right().saturating_sub(width + 1),
-        y: area.y + 1,
-        width,
-        height: rows.len() as u16,
     };
-    frame.render_widget(Clear, spot);
+    let varde::FindKeys::Replace(field) = find.keys else {
+        return;
+    };
+    let spot = layout::replace_box(editor);
+    let on = |at| match at == field {
+        true => Style::default().add_modifier(Modifier::REVERSED),
+        false => Style::default(),
+    };
+    let text = |buffer: &varde::editor::Buffer, at| match at == field {
+        true => with_caret(buffer.shown(), buffer.column),
+        false => vec![Span::raw(buffer.shown().to_string())],
+    };
+    let mut find_row = vec![Span::raw(" find  ")];
+    find_row.extend(text(&find.query, varde::ReplaceField::Find));
+    let mut with_row = vec![Span::raw(" with  ")];
+    with_row.extend(text(&state.replace_with, varde::ReplaceField::With));
+    let footer = keys::REPLACE_BOX_KEYS
+        .iter()
+        .map(|(key, word)| format!("{key} {word}"))
+        .collect::<Vec<_>>()
+        .join(" · ");
+    let area = rect(spot);
+    frame.render_widget(Clear, area);
     frame.render_widget(
-        Paragraph::new(
-            rows.into_iter()
-                .map(|(row, color)| Line::from(Span::styled(row, Style::default().fg(color))))
-                .collect::<Vec<_>>(),
+        Paragraph::new(vec![Line::from(find_row), Line::from(with_row)]).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" replace ")
+                .title_bottom(Line::from(Span::styled(
+                    format!(" {footer} "),
+                    Style::default().fg(Color::DarkGray),
+                ))),
         ),
-        spot,
+        area,
     );
+    frame.render_widget(
+        Span::styled(
+            varde::FIND_ICONS[0].1,
+            match find.case.exact(find.query.shown()) {
+                true => Style::default().fg(Color::Yellow),
+                false => Style::default().fg(Color::DarkGray),
+            },
+        ),
+        rect(layout::replace_case(spot)),
+    );
+    for ((at, label), (_, spot)) in varde::REPLACE_BUTTONS
+        .iter()
+        .zip(layout::replace_buttons(spot))
+    {
+        frame.render_widget(Span::styled(*label, on(*at)), rect(spot));
+    }
+}
+
+/// The Cheatsheet, in the AI pane's rectangle: the rows `keys::cheatsheet_rows`
+/// lists for the view on screen, from the offset `update` clamped.
+fn cheatsheet_widget(state: &State) -> Paragraph<'static> {
+    let rows = keys::cheatsheet_rows(state);
+    let column = rows.iter().map(|(keys, _)| keys.len()).max().unwrap_or(0);
+    Paragraph::new(
+        rows.into_iter()
+            .skip(state.cheatsheet_scroll)
+            .map(|(keys, what)| {
+                Line::from(Span::styled(
+                    format!(" {keys:column$}  {what}"),
+                    Style::default().fg(Color::DarkGray),
+                ))
+            })
+            .collect::<Vec<_>>(),
+    )
+    .block(pane_block("keys", state, Pane::Cheatsheet))
 }
 
 /// The hover box, over the lines the core placed it on. The markdown is
@@ -3628,7 +3878,7 @@ fn breakpoint_reason(frame: &mut Frame, state: &State, panes: &layout::Layout) {
 /// The Evaluator: the Snippet above, the output below, and the Chips on the
 /// top border. Every rectangle here is `layout`'s — the mouse hit-tests the
 /// same ones — and every row of the output is `debug`'s, so this only draws.
-fn evaluator(frame: &mut Frame, state: &State, panes: &layout::Layout) {
+fn evaluator(frame: &mut Frame, state: &State, panes: &layout::Layout, code: &Code) {
     let Some(open) = state.evaluator.as_ref() else {
         return;
     };
@@ -3639,12 +3889,17 @@ fn evaluator(frame: &mut Frame, state: &State, panes: &layout::Layout) {
         Block::default().borders(Borders::ALL).title("EVALUATE"),
         rect(window),
     );
-    let lines: Vec<Line> = open
-        .snippet
-        .shown()
-        .split('\n')
-        .map(|row| Line::raw(row.to_string()))
-        .collect();
+    let dark = state.editor_theme != "light";
+    let mut lines = snippet_lines(open.snippet.shown(), code, dark);
+    if state.focus == Pane::Evaluator {
+        paint_drag(
+            &mut lines,
+            &|number| Some(number - 1),
+            state.selection.as_ref().and_then(Selection::buffer_span),
+            &state.occurrences,
+            false,
+        );
+    }
     frame.render_widget(Paragraph::new(lines), rect(snippet_area));
     // The rule between the two, on the row `layout` left for it.
     frame.render_widget(
@@ -3655,8 +3910,39 @@ fn evaluator(frame: &mut Frame, state: &State, panes: &layout::Layout) {
             ..output_area
         }),
     );
-    let output: Vec<Line> = varde::debug::evaluator_output(state)
-        .iter()
+    let output = output_lines(&varde::debug::evaluator_output(state), code, dark);
+    frame.render_widget(Paragraph::new(output), rect(output_area));
+    evaluator_chips(frame, state, window);
+    if state.focus == varde::Pane::Evaluator {
+        if let Some(buffer) = state.edited() {
+            frame.set_cursor_position((
+                snippet_area.x + buffer.column.saturating_sub(1) as u16,
+                snippet_area.y + buffer.line.saturating_sub(1) as u16,
+            ));
+        }
+    }
+}
+
+/// The Snippet's rows, coloured as the editor colours a buffer of the Paused
+/// Frame's language — parsed whole, so a string spanning lines colours the
+/// lines under it.
+fn snippet_lines(text: &str, code: &Code, dark: bool) -> Vec<Line<'static>> {
+    match tokens_of(code, text) {
+        Some(lines) => lines
+            .iter()
+            .map(|line| Line::from(spans(line, dark)))
+            .collect(),
+        None => text
+            .split('\n')
+            .map(|row| Line::raw(row.to_string()))
+            .collect(),
+    }
+}
+
+/// The Evaluator output's rows: what the program printed stays plain, being
+/// output and not code, and the value is coloured as a Variables value is.
+fn output_lines(said: &[varde::debug::Said], code: &Code, dark: bool) -> Vec<Line<'static>> {
+    said.iter()
         .map(|line| match line {
             varde::debug::Said::Printed(text) => Line::from(Span::styled(
                 text.clone(),
@@ -3672,8 +3958,8 @@ fn evaluator(frame: &mut Frame, state: &State, panes: &layout::Layout) {
                 why.clone(),
                 Style::default().fg(Color::LightRed),
             )),
-            varde::debug::Said::Value(row) => Line::from(vec![
-                Span::styled(
+            varde::debug::Said::Value(row) => {
+                let mut line = Line::from(Span::styled(
                     format!(
                         "{}{}{} ",
                         " ".repeat(row.depth * 2),
@@ -3685,21 +3971,19 @@ fn evaluator(frame: &mut Frame, state: &State, panes: &layout::Layout) {
                         row.name
                     ),
                     Style::default().fg(Color::DarkGray),
-                ),
-                Span::raw(row.value.clone()),
-            ]),
+                ));
+                match tokens_of(code, &row.value) {
+                    Some(lines) => {
+                        for span in spans(&one_row(lines), dark) {
+                            line.push_span(span);
+                        }
+                    }
+                    None => line.push_span(Span::raw(row.value.clone())),
+                }
+                line
+            }
         })
-        .collect();
-    frame.render_widget(Paragraph::new(output), rect(output_area));
-    evaluator_chips(frame, state, window);
-    if state.focus == varde::Pane::Evaluator {
-        if let Some(buffer) = state.edited() {
-            frame.set_cursor_position((
-                snippet_area.x + buffer.column.saturating_sub(1) as u16,
-                snippet_area.y + buffer.line.saturating_sub(1) as u16,
-            ));
-        }
-    }
+        .collect()
 }
 
 /// The Evaluator's Chips along its top border, at the columns
@@ -3797,18 +4081,33 @@ fn over_buffer_line(
 }
 
 /// What the editor's bottom-left line is showing, prefix and all: a `:` command
-/// being typed, or a `/` search of this file. One line, two prefixes — which is
-/// what keeps finding here looking different from finding everywhere. The caret
-/// is part of it, since the `/` query's can be anywhere in it.
-fn command_line(state: &State, command: Option<&str>) -> Option<String> {
-    match (command, state.find) {
-        (Some(draft), _) => Some(format!(":{draft}█")),
-        (None, Some(_)) => {
-            let (before, after) = at_caret(&state.find_query);
-            Some(format!("/{before}█{after}"))
-        }
-        (None, None) => None,
+/// being typed, or the `/` search of this file that is on. One line, two
+/// prefixes — which is what keeps finding here looking different from finding
+/// everywhere. The search's pieces are `varde::find_line`'s, which the mouse
+/// hit-tests too: `[Aa]` dim unless the search is exact, and the icon holding
+/// the keyboard reversed.
+fn command_line(state: &State, command: Option<&str>) -> Line<'static> {
+    let yellow = Style::default().fg(Color::Yellow);
+    if let Some(line) = command {
+        return Line::from(Span::styled(format!(" {line} "), yellow));
     }
+    let Some(find) = state.find.as_ref() else {
+        return Line::default();
+    };
+    let lit = find.case.exact(find.query.shown());
+    let pieces = varde::find_line(state).into_iter().map(|(text, icon)| {
+        let style = match icon {
+            Some(varde::FindIcon::Case) if !lit => Style::default().fg(Color::DarkGray),
+            _ => yellow,
+        };
+        match (icon, find.keys) {
+            (Some(icon), varde::FindKeys::Icon(on)) if icon == on => {
+                Span::styled(text, style.add_modifier(Modifier::REVERSED))
+            }
+            _ => Span::styled(text, style),
+        }
+    });
+    Line::from(pieces.collect::<Vec<_>>())
 }
 
 /// A search query either side of its caret.
@@ -3839,13 +4138,7 @@ fn editor_block(
     pane_block(title, state, Pane::Editor)
         .title(right_title(state, room, width))
         .title_bottom(Line::from(footer).right_aligned())
-        .title_bottom(
-            Line::from(Span::styled(
-                command.map(|line| format!(" {line} ")).unwrap_or_default(),
-                Style::default().fg(Color::Yellow),
-            ))
-            .left_aligned(),
-        )
+        .title_bottom(command_line(state, command).left_aligned())
 }
 
 /// The diff's rows, comments and all. Comments anchor to the new-file numbers
@@ -4955,12 +5248,13 @@ fn overlay(frame: &mut Frame, title: &str, lines: Vec<Line<'static>>) {
 #[cfg(test)]
 mod tests {
     use super::{
-        action_icon, authorship_clause, branch_lines, buffer_title, cheatsheet_rows, code_lines,
-        colour, diff_rows, editor_block, faint, guided, highlight, icon_colour, launch_lines,
-        layout, paint_drag, pane_actions_title, preview_line, right_title, risk_lines, risk_title,
-        shift, source_lines, status_line, story_title, title_room, tree_lines, truncate,
-        with_breakpoint, with_caret, Block, Borders, Color, Kind, Line, Modifier, Place, Selection,
-        Span, State, Style, Tone, UnicodeWidthStr, DIRTY, DOTS, WARNING,
+        action_icon, authorship_clause, branch_lines, buffer_title, code_lines, colour, diff_rows,
+        editor_block, faint, guided, highlight, icon_colour, launch_lines, layout, output_lines,
+        paint_drag, pane_actions_title, preview_line, right_title, risk_lines, risk_title, shift,
+        snippet_lines, source_lines, status_line, story_title, title_room, tree_lines, truncate,
+        variables_lines, with_breakpoint, with_caret, Block, Borders, Code, Color, Kind, Line,
+        Modifier, Place, Selection, Span, State, Style, Tone, UnicodeWidthStr, DIRTY, DOTS,
+        WARNING,
     };
     use varde::risk::{Figure, Figures, Function, Metrics};
 
@@ -5135,7 +5429,12 @@ mod tests {
             1,
             varde::authorship::traced(Some(&committed), &text).into(),
         ));
-        state.find_query = varde::editor::Buffer::text_box("step");
+        state.find = Some(varde::Find {
+            query: varde::editor::Buffer::text_box("step"),
+            origin: varde::Place { line: 1, column: 1 },
+            case: varde::search::Case::Smart,
+            keys: varde::FindKeys::Away,
+        });
         state.diagnostics.insert(
             path.clone(),
             [(
@@ -5215,7 +5514,10 @@ mod tests {
     ///
     /// Against that renderer's own output, taken at the commit before #101 and
     /// committed beside the suite: a comparison with a whole-file render of
-    /// today's code passes any regression the two paths share (#104).
+    /// today's code passes any regression the two paths share (#104). Its
+    /// bottom border was redrawn once, when the in-file search's line came to
+    /// stay on with its highlights (#79); every row of text inside it is still
+    /// that renderer's.
     #[test]
     fn a_scrolled_pane_draws_what_the_whole_file_renderer_drew() {
         let before = include_str!("../tests/snapshots/editor_before_101.txt");
@@ -5246,7 +5548,12 @@ mod tests {
         let path = std::path::PathBuf::from("/w/main.rs");
         let mut state = State::default();
         state.current_buffer = Some(path.clone());
-        state.find_query = varde::editor::Buffer::text_box("x");
+        state.find = Some(varde::Find {
+            query: varde::editor::Buffer::text_box("x"),
+            origin: varde::Place { line: 1, column: 1 },
+            case: varde::search::Case::Smart,
+            keys: varde::FindKeys::Away,
+        });
         state
             .buffers
             .insert(path.clone(), varde::editor::Buffer::open(&text, false, 4));
@@ -5786,6 +6093,40 @@ mod tests {
         assert!(text.starts_with("\u{2192}  3 x"), "{text:?}");
         assert_eq!(text.width(), 30 - 2);
         assert!(line.spans.iter().all(|span| span.style.bg.is_some()));
+    }
+
+    /// A Diagnostic's row is its start and the first line of its message, cut
+    /// with `…` to the pane, under a heading naming its file.
+    #[test]
+    fn a_diagnostic_row_is_cut_to_the_pane_under_its_file() {
+        let mut state = State::default();
+        state.root = std::path::PathBuf::from("/w");
+        state.corner = varde::layout::Corner::Diagnostics(varde::lsp::Severity::Error);
+        state.diagnostics.insert(
+            std::path::PathBuf::from("/w/src/a.rs"),
+            [(
+                "rust".to_string(),
+                vec![varde::lsp::Diagnostic {
+                    line: 12,
+                    column: 5,
+                    end_column: None,
+                    severity: varde::lsp::Severity::Error,
+                    message: "mismatched types: expected u8\nfound u16".to_string(),
+                }],
+            )]
+            .into_iter()
+            .collect(),
+        );
+        let text: Vec<String> = super::diagnostics_lines(&state, 24)
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect()
+            })
+            .collect();
+        assert_eq!(text, [" src/a.rs", "   12:5 mismatched ty…"]);
     }
 
     /// The Breakpoint list's row: its path and line, `stale` when it is, and
@@ -6748,47 +7089,6 @@ mod tests {
         assert_eq!(drawn("ab", 99), "ab[ ]");
     }
 
-    /// The key box truncates from the bottom, so `keys::CHEATSHEET`'s order is
-    /// what decides which rows exist on a short screen — and 26 rows by 120
-    /// columns leaves Edit view's twenty-five rows competing for sixteen. It is
-    /// the size the replay recipe in `AGENTS.md` uses and the size
-    /// `features/ai_pane.feature` drives, and it is where `:format` — the whole
-    /// of what makes the formatter discoverable, since it is in no palette, has
-    /// no completion and is spelled nowhere else — was drawn off the bottom
-    /// along with the gesture that opens the palette.
-    ///
-    /// Not pinned at every row the table claims: at this size that assertion
-    /// cannot pass, and rows are excused off the bottom on purpose. What is
-    /// held is the two rows nothing else in Varde teaches. `C-f`, `D` and
-    /// `:w :q` are what they displaced, each of which is said again somewhere
-    /// the reader is already looking: the palette lists `(f) Find`, and the
-    /// `buffer-diverged` and `unsaved-changes` notices name `D`, `:w` and `:q!`
-    /// in the sentence that reports the problem they answer.
-    ///
-    /// Not pinned at 100 columns either, which is the other size in the suite:
-    /// the editor pane is 42 wide there, the width guard returns before drawing
-    /// anything, and an assertion about rows in a box nobody drew cannot fail.
-    #[test]
-    fn the_rows_nothing_else_teaches_survive_a_short_window() {
-        let mut state = State::default();
-        state.cheatsheet = true;
-        let editor =
-            varde::layout::panes(120, 26, 30, None, 0, 0, varde::layout::Shapes::default()).editor;
-        assert_eq!(editor.height, 18, "the pane the box is drawn in");
-
-        let drawn: Vec<String> = cheatsheet_rows(&state, editor.height)
-            .into_iter()
-            .map(|(row, _)| row)
-            .collect();
-        assert_eq!(drawn.len(), 16);
-        for keys in ["C-space Esc Esc", ":format"] {
-            assert!(
-                drawn.iter().any(|row| row.trim_start().starts_with(keys)),
-                "{keys:?} is drawn off the bottom at 26 rows: {drawn:?}"
-            );
-        }
-    }
-
     fn text(line: Line) -> String {
         line.spans
             .iter()
@@ -6920,5 +7220,106 @@ mod tests {
                 "\u{2611} done",
             ]
         );
+    }
+
+    /// Code coloured in the Paused Frame's language, as the edge would.
+    fn coloured_rust(texts: &[&str]) -> Code {
+        texts
+            .iter()
+            .map(|text| (text.to_string(), highlight::highlight("one.rs", text)))
+            .collect()
+    }
+
+    fn colours(line: &Line) -> Vec<Option<Color>> {
+        line.spans.iter().map(|span| span.style.fg).collect()
+    }
+
+    /// #93: a Variables value is drawn in more than one token colour, and its
+    /// name — the tree's chrome — is not; with nothing coloured it is plain
+    /// and still padded out to the Chips' columns.
+    #[test]
+    fn a_variables_value_is_coloured_and_its_name_is_not() {
+        let value = "Order { name: \"Ann\", total: 42 }";
+        let mut state = State::default();
+        state.watches = vec![varde::debug::Watch {
+            expression: "order".to_string(),
+            answer: varde::debug::Answer::Value(value.to_string()),
+        }];
+        let line = &variables_lines(&state, 80, "", &coloured_rust(&[value]))[0];
+        assert!(line.spans[0].content.contains("order"));
+        assert_eq!(line.spans[0].style.fg, None);
+        let shown = colours(line);
+        assert!(
+            shown.contains(&Some(colour(Kind::String, true))),
+            "{shown:?}"
+        );
+        assert!(
+            shown.contains(&Some(colour(Kind::Number, true))),
+            "{shown:?}"
+        );
+
+        // Nothing coloured, or nothing to colour, is drawn as before colour.
+        let unknown: Code = [(value.to_string(), highlight::plain(value))].into();
+        for code in [Code::new(), unknown] {
+            let plain = &variables_lines(&state, 80, "", &code)[0];
+            assert_eq!(plain.width(), line.width());
+            assert_eq!(plain.spans[2].style.fg, Some(Color::DarkGray));
+        }
+    }
+
+    /// A value wider than its room is cut with `…`, not wrapped.
+    #[test]
+    fn a_coloured_value_is_cut_to_its_room() {
+        let tokens = highlight::highlight("one.rs", "\"Ann\", 42");
+        let cut = super::cut_spans(&tokens.concat(), 5, Style::default(), true);
+        let text: String = cut.iter().map(|span| span.content.as_ref()).collect();
+        assert_eq!(text, "\"Ann\u{2026}");
+    }
+
+    /// A value that spans lines keeps its newline when it is coloured.
+    #[test]
+    fn a_coloured_value_keeps_its_newlines() {
+        let value = "[\n    1,\n]";
+        let row = super::one_row(&highlight::highlight("one.rs", value));
+        let text: String = row.iter().map(|token| token.text.as_str()).collect();
+        assert_eq!(text, value);
+    }
+
+    /// The Snippet is parsed whole, so the second line of a string that
+    /// spans two is drawn as a string.
+    #[test]
+    fn the_snippet_colours_a_string_across_its_lines() {
+        let snippet = "let s = \"one\ntwo\";";
+        let lines = snippet_lines(snippet, &coloured_rust(&[snippet]), true);
+        assert_eq!(lines[1].spans[0].content, "two\"");
+        assert_eq!(lines[1].spans[0].style.fg, Some(colour(Kind::String, true)));
+        let plain = snippet_lines(snippet, &Code::new(), true);
+        assert!(plain
+            .iter()
+            .flat_map(|line| colours(line))
+            .all(|fg| fg.is_none()));
+    }
+
+    /// What the program printed is output, not code; the value is code.
+    #[test]
+    fn the_evaluator_colours_the_value_and_not_the_prints() {
+        let row = varde::debug::Row {
+            name: "total".to_string(),
+            value: "\"Ann\"".to_string(),
+            depth: 0,
+            hint: varde::debug::Hint::Plain,
+            open: false,
+            opens: varde::debug::Opens::Nothing,
+            expression: String::new(),
+            parent: 0,
+            of: varde::debug::Of::Member,
+        };
+        let said = [
+            varde::debug::Said::Printed("\"printed\" 7".to_string()),
+            varde::debug::Said::Value(row),
+        ];
+        let lines = output_lines(&said, &coloured_rust(&["\"printed\" 7", "\"Ann\""]), true);
+        assert_eq!(colours(&lines[0]), vec![Some(Color::DarkGray)]);
+        assert!(colours(&lines[1]).contains(&Some(colour(Kind::String, true))));
     }
 }

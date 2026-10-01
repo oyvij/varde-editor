@@ -209,6 +209,21 @@ Feature: Editing a file
       three
       """
 
+  # The modifier spellings, which reach a buffer while inserting too, where
+  # `u` and `U` are letters.
+  Scenario: Ctrl+Shift+z redoes what Ctrl+z undid while inserting
+    Given I press "i" in the editor
+    And I type "new" in the editor
+    And I press the key "Ctrl+z"
+    When I press the key "Ctrl+Shift+z"
+    Then the editor mode is insert
+    And the buffer holds:
+      """
+      newone
+      two
+      three
+      """
+
   Scenario: An edited buffer is dirty
     When I press "x" in the editor
     Then "src/tree.js" has unsaved edits

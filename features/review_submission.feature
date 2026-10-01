@@ -292,12 +292,21 @@ Feature: Submitting a review puts the AI to work
         one Xtwo
         """
 
-    Scenario: Ctrl+Z undoes the last edit in the body
-      Given I type "issue" in the comment body
+    Scenario: Ctrl+Z undoes the last word typed in the body
+      Given I type "an issue" in the comment body
       When I press Ctrl+z in the comment body
       Then the comment body holds:
         """
-        issu
+        an
+        """
+
+    Scenario: Ctrl+Shift+Z puts back what Ctrl+Z took from the body
+      Given I type "an issue" in the comment body
+      And I press Ctrl+z in the comment body
+      When I press Ctrl+Shift+z in the comment body
+      Then the comment body holds:
+        """
+        an issue
         """
 
     Scenario: A pasted stack trace undoes in one key

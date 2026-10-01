@@ -384,30 +384,26 @@ it still moves focus, since R6.7 would otherwise be a dead end for whoever is al
 the only way out of a hosted pane: `o` the editor, `d` the tree, `a` the AI pane and `t` the
 terminal. `o` and not `e`: the Edit view took the initial, and reaching the editor's rectangle must
 not cost a reviewer the diff they were reading.
-**R6.8** `(h)` keys takes the **key reminder** down or puts it back, the same toggle as `:help`. A
-terminal cell holds one character, so the box over the editor's top-right corner hides the code under
-it and there is no opacity to soften — taking it down is the only way to read what is behind it. It
-belongs here and not only on the `:` line because a box already down would hide the way to bring it
-back — and the palette, not the box, is now where a command that means the same thing in every view
-is advertised: `:update`, `:tall` and `:help` left the box, which sits over the code being read. The
-choice is remembered per project, like the last view and the tree divider (F9), so a dismissed
-reminder does not return on the next launch. An Update is not the box's to announce: the **version
-tag** at the right end of the bottom row names it in every view and focus — `v<running>` in green, or
+**R6.8** `(h)` keys shows the **Cheatsheet** in the AI pane's place or hides it, the same toggle as
+`:help`; the AI session keeps running behind it and comes back unchanged (#90). Toggling never moves
+focus: focus on that rectangle is focus on whichever pane is in it. It scrolls and takes focus like any
+pane, and nothing it is given reaches the session behind it; anything that starts the AI or sends text
+into it hides the Cheatsheet first. It belongs in the palette and not only on the `:` line because a
+Cheatsheet already hidden would hide the way to bring it back — and the palette is where a command
+that means the same thing in every view is advertised: `:update`, `:tall` and `:help` left the
+Cheatsheet. It starts hidden at every launch and is never saved. An Update is not the
+Cheatsheet's to announce: the **version tag** at the right end of the bottom row names it in every view and focus — `v<running>` in green, or
 `v<running> → v<newer>  C-space u to update` in blue — so it **names the gesture** without costing
-the box a row. A notice shares that row and is cut short before the tag; a row too narrow for both
+the Cheatsheet a row. A notice shares that row and is cut short before the tag; a row too narrow for both
 drops the tag's hint, then the tag, since a tag may take at most half the row.
-**R6.8a** **The key box's row order is what a short window gets, and it is not a preference.** The box
-truncates from the bottom and has no footer to say so, so a row placed below the fold does not exist
-for whoever has not resized their window: Edit view has twenty-five rows and a 26-row terminal — the
-default height of a macOS Terminal, and the size `AGENTS.md`'s replay recipe uses — draws sixteen.
-The rows that survive are **the ones nothing else in Varde teaches**: the palette gesture, and any
-`:` command that is in no palette group, has no completion on the `:` line and is named in no notice.
+**R6.8a** **The Cheatsheet's row order is what a short window shows first.** It scrolls (#90), so no
+row is unreachable, but a row below the fold is one nobody scrolls to: a 26-row terminal shows sixteen
+of Edit view's rows. The rows on top are **the ones nothing else in Varde teaches**: the palette
+gesture, and any `:` command that is in no palette group, has no completion on the `:` line and is named in no notice.
 `:format` (R32) was placed twenty-third and was therefore a feature nobody could find. What is
 excused off the bottom must be said again where the reader is already looking — the palette's own
 letters, or a notice that names the key in the sentence reporting what it answers (`unsaved-changes`
-names `:w` and `:q!`, `buffer-diverged` names `D`). Held by a unit test at 26 rows by 120 columns,
-which is where the box does draw; 100 columns is too narrow for it and an assertion there could not
-fail.
+names `:w` and `:q!`, `buffer-diverged` names `D`). Held by a unit test at 26 rows by 120 columns.
 **R6.9** **The palette fits the screen it is drawn on.** The box is sized from its row count and is
 drawn with no scroll offset, so a list longer than the box can draw loses its tail without a word —
 and the mouse hit-tests the same rows, so those entries are unclickable too. Two entries in the

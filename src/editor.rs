@@ -99,6 +99,29 @@ pub struct Buffer {
     /// The unnamed register. Vim has many; this has one.
     register: Vec<String>,
     undo: Vec<String>,
+    /// What an undo took back, and where it left the cursor, newest last.
+    /// Emptied by any edit, since what it holds was an edit to a text that is
+    /// no longer there.
+    redo: Vec<(String, crate::Place)>,
+    /// The kind of edit the newest undo step is still open to. Anything that
+    /// moves the cursor other than the edit itself closes it.
+    step: Step,
+}
+
+/// Which kind of edit the newest undo step holds, so the next edit can join it
+/// or start one of its own — the grouping VS Code does
+/// (`shouldPushStackElementBetween`), so a typed word is one press of undo
+/// rather than one per letter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Step {
+    Typing,
+    /// One space after a non-space: the next non-space still joins it.
+    Space,
+    /// Two or more: the next non-space starts a step of its own.
+    Spaces,
+    Deleting,
+    /// Closed: whatever comes next starts a step.
+    Other,
 }
 
 /// A place in a buffer named by the number of characters that *follow* it.
@@ -313,6 +336,8 @@ impl Buffer {
             anchor: 0,
             register: Vec::new(),
             undo: Vec::new(),
+            redo: Vec::new(),
+            step: Step::Other,
         }
     }
 
@@ -419,8 +444,45 @@ impl Buffer {
         &self.shape.indents
     }
 
-    fn remember(&mut self) {
-        self.undo.push(self.shown().to_string());
+    /// The Conflicts in the text, found with the revision.
+    pub fn conflicts(&self) -> &[crate::conflict::Conflict] {
+        &self.shape.conflicts
+    }
+
+    /// The Conflict the cursor is in, replaced — markers and all — by the side
+    /// asked for, as one undo step. Nothing outside one.
+    pub fn accept(&mut self, side: crate::conflict::Side) {
+        let Some(conflict) = self
+            .shape
+            .conflicts
+            .iter()
+            .find(|conflict| (conflict.start..=conflict.end).contains(&self.line))
+            .cloned()
+        else {
+            return;
+        };
+        let mut lines = self.lines();
+        let kept = crate::conflict::kept(&lines, &conflict, side);
+        self.remember(Step::Other);
+        lines.splice(conflict.start - 1..conflict.end, kept);
+        self.line = conflict.start;
+        self.column = 1;
+        self.set(&lines);
+        self.clamp();
+    }
+
+    fn remember(&mut self, kind: Step) {
+        let (joins, open) = match (self.step, kind) {
+            (Step::Typing | Step::Space, Step::Typing) => (true, Step::Typing),
+            (Step::Space | Step::Spaces, Step::Space) => (true, Step::Spaces),
+            (Step::Deleting, Step::Deleting) => (true, Step::Deleting),
+            _ => (false, kind),
+        };
+        if !joins {
+            self.undo.push(self.shown().to_string());
+        }
+        self.step = open;
+        self.redo.clear();
     }
 
     /// Keeps the cursor inside the text after any move or edit — and, while
@@ -525,6 +587,7 @@ impl Buffer {
             crate::Direction::Up => self.line = self.line.saturating_sub(1).max(1),
             crate::Direction::Down => self.line = self.past_fold(self.line) + 1,
         }
+        self.step = Step::Other;
         self.clamp();
     }
 
@@ -533,7 +596,7 @@ impl Buffer {
         let (left, right) = self.either_side();
         let mut lines = self.lines();
         if self.column > 1 {
-            self.remember();
+            self.remember(Step::Deleting);
             let line = &mut lines[self.line - 1];
             let at = byte_index(line, self.column - 2);
             line.remove(at);
@@ -549,7 +612,7 @@ impl Buffer {
                 line.remove(byte_index(line, self.column - 1));
             }
         } else if self.line > 1 {
-            self.remember();
+            self.remember(Step::Deleting);
             let removed = lines.remove(self.line - 1);
             self.line -= 1;
             self.column = lines[self.line - 1].chars().count() + 1;
@@ -664,7 +727,7 @@ impl Buffer {
     /// in one signature. A completion that names no stops — every plain-text
     /// one — leaves the cursor after the text and hands back nothing.
     pub fn complete(&mut self, text: &str, stops: &[usize]) -> Vec<Tail> {
-        self.remember();
+        self.remember(Step::Other);
         let start = self.word_start(self.line, self.column);
         let mut lines = self.lines();
         // Where the text is about to go, counted from the start of the buffer:
@@ -716,11 +779,13 @@ impl Buffer {
     pub fn go_to_place(&mut self, at: crate::Place) {
         self.line = at.line.max(1);
         self.column = at.column.max(1);
+        self.step = Step::Other;
         self.clamp();
     }
 
     pub fn escape(&mut self) {
         self.mode = Mode::Normal;
+        self.step = Step::Other;
         self.pending.clear();
         self.count = None;
         self.clamp();
@@ -783,7 +848,7 @@ impl Buffer {
         if from.line > lines.len() {
             return;
         }
-        self.remember();
+        self.remember(Step::Other);
         let head: String = lines[from.line - 1].chars().take(from.column - 1).collect();
         let tail: String = lines[last - 1].chars().skip(to.column).collect();
         lines.splice(from.line - 1..last, [format!("{head}{tail}")]);
@@ -816,7 +881,7 @@ impl Buffer {
         let mut landed = places.to_vec();
         let typed = text.chars().count();
         let (mut previous, mut shift) = (0usize, 0isize);
-        self.remember();
+        self.remember(Step::Other);
         for index in order {
             let place = places[index];
             if place.line != previous {
@@ -869,7 +934,10 @@ impl Buffer {
             self.new_line(left, right);
             return;
         }
-        self.remember();
+        self.remember(match key {
+            ' ' => Step::Space,
+            _ => Step::Typing,
+        });
         let mut lines = self.lines();
         let line = &mut lines[self.line - 1];
         let at = byte_index(line, self.column - 1);
@@ -896,7 +964,7 @@ impl Buffer {
     /// that — three lines of unterminated quote is not a block — and nothing
     /// here has to name a quote to say so.
     fn new_line(&mut self, left: Option<char>, right: Option<char>) {
-        self.remember();
+        self.remember(Step::Typing);
         let mut lines = self.lines();
         let line = &lines[self.line - 1];
         let at = byte_index(line, self.column - 1);
@@ -925,7 +993,7 @@ impl Buffer {
     /// character at a time it would pair every bracket in what was pasted, and
     /// it would take as many presses to undo as it had characters.
     pub fn paste(&mut self, text: &str) {
-        self.remember();
+        self.remember(Step::Other);
         let mut lines = self.lines();
         let line = &mut lines[self.line - 1];
         let at = byte_index(line, self.column - 1);
@@ -982,7 +1050,7 @@ impl Buffer {
                 column: self.column,
             },
         );
-        self.remember();
+        self.remember(Step::Other);
         for (from, until, replacement) in spans {
             let from = from.min(text.len());
             let until = until.clamp(from, text.len());
@@ -1027,7 +1095,7 @@ impl Buffer {
         if from.line > lines.len() {
             return;
         }
-        self.remember();
+        self.remember(Step::Other);
         let last = to.line.min(lines.len());
         let line = &mut lines[last - 1];
         line.insert(byte_index(line, to.column), close);
@@ -1071,7 +1139,7 @@ impl Buffer {
 
         // An operator must not consume the count: in `2dd` the 2 belongs to the
         // dd that follows, not to the first d.
-        if matches!(key, 'g' | 'd' | 'y') {
+        if matches!(key, 'g' | 'd' | 'y' | 'c') {
             self.pending.push(key);
             return None;
         }
@@ -1108,6 +1176,11 @@ impl Buffer {
             // `dgg` arrives with the `g` already in the chord, so the key that
             // completes it takes the lines back to where `gg` lands.
             ("dg", 'g') => self.delete_lines(1, self.line),
+            // Outside a Conflict these do nothing, and say nothing: they name
+            // a binding, only not one that applies here.
+            ("c", 'c') => self.accept(crate::conflict::Side::Current),
+            ("c", 'i') => self.accept(crate::conflict::Side::Incoming),
+            ("c", 'b') => self.accept(crate::conflict::Side::Both),
             ("d", key) => return self.delete_over(key, times),
             _ => return Some(format!("{chord}{key}")),
         }
@@ -1216,6 +1289,7 @@ impl Buffer {
             'O' => self.open_line(0),
             'x' => self.delete_char(),
             'u' => self.undo(),
+            'U' => self.redo(),
             _ => {}
         }
     }
@@ -1226,7 +1300,7 @@ impl Buffer {
         if line.is_empty() {
             return;
         }
-        self.remember();
+        self.remember(Step::Other);
         let at = byte_index(line, self.column - 1);
         line.remove(at);
         self.set(&lines);
@@ -1247,7 +1321,7 @@ impl Buffer {
         if from > to {
             return;
         }
-        self.remember();
+        self.remember(Step::Other);
         lines.drain(from - 1..to);
         // A buffer always holds a line, so taking every one of them leaves an
         // empty line rather than no line — as it does in vim.
@@ -1279,7 +1353,7 @@ impl Buffer {
         if unit.is_empty() {
             return;
         }
-        self.remember();
+        self.remember(Step::Other);
         for line in &mut lines[from - 1..to] {
             if deeper {
                 if !line.is_empty() {
@@ -1325,7 +1399,7 @@ impl Buffer {
             return;
         }
         self.register = taken.split('\n').map(str::to_string).collect();
-        self.remember();
+        self.remember(Step::Other);
         let kept: String = text
             .chars()
             .take(from)
@@ -1343,7 +1417,7 @@ impl Buffer {
     }
 
     fn open_line(&mut self, offset: usize) {
-        self.remember();
+        self.remember(Step::Other);
         let mut lines = self.lines();
         lines.insert(self.line - 1 + offset, String::new());
         self.line += offset;
@@ -1398,7 +1472,7 @@ impl Buffer {
         if self.register.is_empty() {
             return;
         }
-        self.remember();
+        self.remember(Step::Other);
         let mut lines = self.lines();
         let at = self.line.min(lines.len());
         for (offset, text) in self.register.clone().into_iter().enumerate() {
@@ -1407,14 +1481,29 @@ impl Buffer {
         self.set(&lines);
     }
 
-    /// Public for the comment box, which has no normal mode for `u` to be
-    /// pressed in: every letter in a body is text, so the gesture is a Ctrl key
-    /// the box's footer names and the event it sends arrives here. The editor
-    /// still reaches this through [`Buffer::key`].
+    /// Public for the Ctrl and Command spellings, which reach a buffer in
+    /// insert mode too, where `u` is a letter.
     pub fn undo(&mut self) {
         if let Some(previous) = self.undo.pop() {
+            let at = crate::Place {
+                line: self.line,
+                column: self.column,
+            };
+            self.redo.push((self.shown().to_string(), at));
             self.draft = (previous != self.disk).then_some(previous);
             self.changed();
+        }
+        self.step = Step::Other;
+    }
+
+    /// Puts back what the last undo took, cursor included, so `u` then `U`
+    /// leaves the buffer as it was before the `u`.
+    pub fn redo(&mut self) {
+        if let Some((next, at)) = self.redo.pop() {
+            self.undo.push(self.shown().to_string());
+            self.draft = (next != self.disk).then_some(next);
+            self.changed();
+            self.go_to_place(at);
         }
     }
 
@@ -1648,6 +1737,7 @@ struct Shape {
     /// it did — and which of these was still open around it. A mismatched
     /// closer is passed over rather than guessed at.
     brackets: Vec<(crate::Place, Option<crate::Place>, Option<usize>)>,
+    conflicts: Vec<crate::conflict::Conflict>,
 }
 
 impl Shape {
@@ -1679,6 +1769,7 @@ impl Shape {
             indents: lines.iter().map(|line| crate::fold::indent(line)).collect(),
             unit: indent_unit(&lines, tab_width),
             brackets,
+            conflicts: crate::conflict::find(lines.iter().copied()),
         }
     }
 }
@@ -1909,6 +2000,40 @@ mod tests {
         buffer.key('\n');
         assert_eq!(buffer.shown(), "one\n two");
         assert_eq!((buffer.line, buffer.column), (2, 1));
+    }
+
+    #[test]
+    fn cc_ci_cb_accept_a_side_as_one_undo_step() {
+        let text = "a\n<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> x\nz";
+        for (key, left) in [
+            ('c', "a\nours\nz"),
+            ('i', "a\ntheirs\nz"),
+            ('b', "a\nours\ntheirs\nz"),
+        ] {
+            let mut buffer = Buffer::open(text, false, 4);
+            buffer.key('j');
+            buffer.key('j');
+            buffer.key('c');
+            buffer.key(key);
+            assert_eq!(buffer.shown(), left, "c{key}");
+            assert!(buffer.conflicts().is_empty());
+            buffer.undo();
+            assert_eq!(buffer.shown(), text, "one undo puts c{key} back");
+        }
+    }
+
+    #[test]
+    fn cc_outside_a_conflict_changes_nothing() {
+        let mut buffer = Buffer::open(
+            "a\n<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> x",
+            false,
+            4,
+        );
+        let before = buffer.revision();
+        buffer.key('c');
+        assert_eq!(buffer.key('c'), None);
+        assert_eq!(buffer.revision(), before);
+        assert_eq!(buffer.pending(), "");
     }
 
     /// The Document version F31 sends is this number, and it counts from the
@@ -2645,6 +2770,129 @@ mod tests {
         buffer.escape();
         buffer.key('u');
         assert_eq!(buffer.shown(), "");
+    }
+
+    /// Every text each press of undo goes back through, from what `keys` typed
+    /// into an empty buffer while inserting.
+    fn undone(keys: impl FnOnce(&mut Buffer)) -> Vec<String> {
+        let mut buffer = Buffer::open("", false, 4);
+        buffer.key('i');
+        keys(&mut buffer);
+        let mut texts = vec![buffer.shown().to_string()];
+        while !buffer.undo.is_empty() {
+            buffer.undo();
+            texts.push(buffer.shown().to_string());
+        }
+        texts
+    }
+
+    fn type_in(buffer: &mut Buffer, text: &str) {
+        text.chars().for_each(|key| _ = buffer.key(key));
+    }
+
+    #[test]
+    fn redo_puts_back_the_text_and_the_cursor_an_undo_took() {
+        let mut buffer = Buffer::open("one\ntwo", false, 4);
+        buffer.key('j');
+        buffer.key('x');
+        buffer.key('k');
+        buffer.key('u');
+        buffer.key('U');
+        assert_eq!(buffer.shown(), "one\nwo");
+        assert_eq!(place(buffer.line, buffer.column), place(1, 1));
+    }
+
+    #[test]
+    fn an_edit_after_an_undo_leaves_nothing_to_redo() {
+        let mut buffer = Buffer::open("one", false, 4);
+        buffer.key('x');
+        buffer.key('u');
+        buffer.key('$');
+        buffer.key('x');
+        buffer.redo();
+        assert_eq!(buffer.shown(), "on");
+    }
+
+    #[test]
+    fn a_space_after_a_word_starts_an_undo_step() {
+        assert_eq!(
+            undone(|buffer| type_in(buffer, "hello world")),
+            ["hello world", "hello", ""]
+        );
+    }
+
+    // Monaco's rule: a non-space after one space still belongs to it, and
+    // after two it does not.
+    #[test]
+    fn a_run_of_spaces_is_a_step_of_its_own() {
+        assert_eq!(
+            undone(|buffer| type_in(buffer, "a  b")),
+            ["a  b", "a  ", "a", ""]
+        );
+    }
+
+    #[test]
+    fn switching_between_typing_and_deleting_starts_a_step() {
+        let steps = undone(|buffer| {
+            type_in(buffer, "abc");
+            (0..3).for_each(|_| buffer.backspace());
+            type_in(buffer, "x");
+        });
+        assert_eq!(steps, ["x", "", "abc", ""]);
+    }
+
+    #[test]
+    fn moving_the_cursor_between_keys_starts_a_step() {
+        let steps = undone(|buffer| {
+            type_in(buffer, "ab");
+            buffer.arrow(crate::Direction::Left);
+            type_in(buffer, "x");
+        });
+        assert_eq!(steps, ["axb", "ab", ""]);
+    }
+
+    #[test]
+    fn a_click_or_leaving_insert_mode_starts_a_step() {
+        let clicked = undone(|buffer| {
+            type_in(buffer, "ab");
+            buffer.go_to_place(place(1, 1));
+            type_in(buffer, "x");
+        });
+        assert_eq!(clicked, ["xab", "ab", ""]);
+        let left = undone(|buffer| {
+            type_in(buffer, "ab");
+            buffer.escape();
+            type_in(buffer, "ac");
+        });
+        assert_eq!(left, ["abc", "ab", ""]);
+    }
+
+    #[test]
+    fn typing_after_an_undo_starts_a_step() {
+        let steps = undone(|buffer| {
+            type_in(buffer, "ab");
+            buffer.undo();
+            type_in(buffer, "c");
+        });
+        assert_eq!(steps, ["c", ""]);
+    }
+
+    #[test]
+    fn enter_is_typing() {
+        assert_eq!(
+            undone(|buffer| type_in(buffer, "one\ntwo")),
+            ["one\ntwo", ""]
+        );
+    }
+
+    #[test]
+    fn a_paste_joins_no_typing_on_either_side() {
+        let steps = undone(|buffer| {
+            type_in(buffer, "a");
+            buffer.paste("b");
+            type_in(buffer, "c");
+        });
+        assert_eq!(steps, ["abc", "ab", "a", ""]);
     }
 
     // The span is the workspace's selection, so the arithmetic is the

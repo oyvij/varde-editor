@@ -13,6 +13,9 @@ pub enum GitStatus {
     Untracked,
     Committed,
     Ignored,
+    /// Unmerged: a merge or a rebase left Conflicts in it for somebody to
+    /// resolve.
+    Conflicted,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,7 +54,12 @@ pub fn list(state: &State) -> Vec<String> {
                 .filter(|file| {
                     matches!(
                         file.status,
-                        GitStatus::Modified | GitStatus::Staged | GitStatus::Untracked
+                        GitStatus::Modified
+                            | GitStatus::Staged
+                            | GitStatus::Untracked
+                            // It differs from HEAD, and resolving it is a
+                            // change like any other.
+                            | GitStatus::Conflicted
                     )
                 })
                 .map(|file| file.path.clone())

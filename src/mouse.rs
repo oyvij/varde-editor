@@ -5,8 +5,11 @@
 //! [`Selection`] request for the edge to fulfil.
 
 use crate::layout::{self, Area, Layout};
-use crate::{tree, Direction, Event, Modal, Pane, Place, Pointed, State};
+use crate::{
+    tree, Direction, Event, FindIcon, FindKeys, Modal, Pane, Place, Pointed, ReplaceField, State,
+};
 use terminput::KeyModifiers;
+use unicode_width::UnicodeWidthStr;
 
 /// Which mouse-report encoding the program in a hosted pane asked for, as the
 /// terminal model in front of its pty reports it. A report in any other
@@ -642,6 +645,9 @@ fn pressed(
     if let Some(events) = pressed_in_hover(state, panes, input) {
         return events;
     }
+    if let Some(events) = pressed_in_find(state, panes, input).filter(|_| pane == Pane::Editor) {
+        return events;
+    }
     if let Some(key) = palette_entry_at(state, panes, input.column, input.row) {
         return vec![Event::ClickPaletteEntry(key)];
     }
@@ -655,6 +661,11 @@ fn pressed(
             Some(path) => vec![Event::ShowBuffer(path.clone())],
             None => vec![],
         };
+    }
+    if pane == Pane::Tree && input.row == panes.tree.y {
+        if let Some(severity) = nudge_at(state, panes, input.column) {
+            return vec![Event::ShowDiagnostics(severity)];
+        }
     }
     let row_index = row_index(state, panes, input.row);
     match (pane, action_at(state, panes, input.column, input.row)) {
@@ -708,6 +719,16 @@ fn pressed(
             let at = place_in(state, panes, pane, (input.column, input.row));
             vec![Event::ClickText(at), Event::ToggleFold { all: false }]
         }
+        // A button on a Conflict's bar. The caret lands in the Conflict first,
+        // so which one it accepts is the one the cursor is in — the fold
+        // toggle's shape.
+        (Pane::Editor, _) if conflict_button(state, panes, input).is_some() => {
+            let at = place_in(state, panes, pane, (input.column, input.row));
+            conflict_button(state, panes, input)
+                .into_iter()
+                .flat_map(|side| [Event::ClickText(at), Event::AcceptConflict(side)])
+                .collect()
+        }
         // A diff is read-only and has no cursor to place.
         (Pane::Editor, _) if state.diff.is_none() && state.current_buffer.is_some() => {
             let at = place_in(state, panes, pane, (input.column, input.row));
@@ -733,6 +754,17 @@ fn pressed(
         (Pane::Buffers, _) => pressed_in_buffers(state, panes, input),
         (Pane::History, _) => pressed_in_history(state, panes, input),
         (Pane::Breakpoints, _) => pressed_in_breakpoints(state, panes, input),
+        (Pane::Diagnostics, _) => pressed_in_diagnostics(state, panes, input),
+        (Pane::Conflicts, _) => {
+            let index = list_row(panes.corner, input.row, state.conflicts_scroll);
+            let on_a_row = input.row > panes.corner.y
+                && input.row < panes.corner.bottom().saturating_sub(1)
+                && index < crate::conflict::listed(state).len();
+            match on_a_row {
+                true => vec![Event::ClickConflictRow(index)],
+                false => vec![Event::ClickPane(Pane::Conflicts)],
+            }
+        }
         (Pane::Frames, _) => {
             let index = list_row(panes.corner, input.row, state.frames_scroll);
             let on_a_row = input.row > panes.corner.y
@@ -938,6 +970,71 @@ fn moved_by(at: u16, by: i32) -> u16 {
     (i32::from(at) + by).clamp(0, i32::from(u16::MAX)) as u16
 }
 
+/// Which side the button under the pointer accepts, when it is on a Conflict's
+/// bar. Counted from where the text starts and never scrolled sideways, as the
+/// bar is drawn.
+fn conflict_button(state: &State, panes: &Layout, input: Input) -> Option<crate::conflict::Side> {
+    let text = text_area(state, panes, Pane::Editor);
+    if !text.holds(input.column, input.row) {
+        return None;
+    }
+    let line = place_in(state, panes, Pane::Editor, (input.column, input.row)).line;
+    let crate::conflict::Drawn::Bar(pieces) = crate::conflict::drawn(state, line)? else {
+        return None;
+    };
+    let mut from = usize::from(input.column - text.x);
+    pieces.into_iter().find_map(|(piece, side)| {
+        let width = piece.chars().count();
+        match from < width {
+            true => Some(side),
+            false => {
+                from -= width;
+                None
+            }
+        }
+    })?
+}
+
+/// A Severity label on the Diagnostic list's top border, at the columns `ui`
+/// draws them from the same labels, or one of its rows.
+fn pressed_in_diagnostics(state: &State, panes: &Layout, input: Input) -> Vec<Event> {
+    if input.row == panes.corner.y {
+        let labels = crate::lsp::severity_labels(state, panes.corner.width);
+        return match layout::strip_at(panes.corner, &labels, input.column) {
+            Some(at) => vec![Event::ShowDiagnostics(crate::lsp::Severity::ALL[at])],
+            None => vec![Event::ClickPane(Pane::Diagnostics)],
+        };
+    }
+    let index = list_row(panes.corner, input.row, state.diagnostics_scroll);
+    let on_a_row = input.row < panes.corner.bottom().saturating_sub(1)
+        && index < crate::lsp::listed(state).len();
+    match on_a_row {
+        true => vec![Event::ClickDiagnosticRow(index)],
+        false => vec![Event::ClickPane(Pane::Diagnostics)],
+    }
+}
+
+/// Which of the Diagnostic totals on the tree's top border is under a column,
+/// measured off the strings `ui` draws end to end after `tree::title` — the
+/// gap each one opens with is no part of it. Nothing past the border's last
+/// column, where a title too long for the pane has been cut off.
+fn nudge_at(state: &State, panes: &Layout, column: u16) -> Option<crate::lsp::Severity> {
+    if column + 1 >= panes.tree.right() {
+        return None;
+    }
+    let mut at = panes.tree.x + 1 + UnicodeWidthStr::width(tree::title(state).as_str()) as u16;
+    crate::lsp::nudge(state)
+        .into_iter()
+        .find_map(|(severity, label)| {
+            let count = label.trim_start();
+            at += (label.len() - count.len()) as u16;
+            let width = UnicodeWidthStr::width(count) as u16;
+            let hit = column >= at && column < at + width;
+            at += width;
+            hit.then_some(severity)
+        })
+}
+
 fn dragged(
     state: &State,
     panes: &Layout,
@@ -990,7 +1087,10 @@ fn dragged(
         | Pane::History
         | Pane::Breakpoints
         | Pane::Frames
-        | Pane::Variables => Outcome::default(),
+        | Pane::Diagnostics
+        | Pane::Conflicts
+        | Pane::Variables
+        | Pane::Cheatsheet => Outcome::default(),
         // Moving the window, resizing it and picking text in the Snippet are
         // all drags, and which one this is was decided at the press: the
         // window's chrome grabs, and everything inside it picks text.
@@ -1322,6 +1422,51 @@ fn pressed_in_hover(state: &State, panes: &Layout, input: Input) -> Option<Vec<E
     })
 }
 
+/// A press on the in-file search's icons or inside its replace box, whatever
+/// has the keyboard. The icons are the pieces `crate::find_line` gives `ui`,
+/// walked from the bottom border's first column; the box's rows are the ones
+/// [`layout::replace_box`] names. Anywhere else inside the box is swallowed
+/// rather than placing a caret in the text under it.
+fn pressed_in_find(state: &State, panes: &Layout, input: Input) -> Option<Vec<Event>> {
+    let find = state.find.as_ref()?;
+    let spot = layout::replace_box(panes.editor);
+    if matches!(find.keys, FindKeys::Replace(_)) && spot.holds(input.column, input.row) {
+        let field = |field| vec![Event::FindKeys(FindKeys::Replace(field))];
+        if layout::replace_case(spot).holds(input.column, input.row) {
+            return Some(vec![Event::ToggleCase]);
+        }
+        let button = layout::replace_buttons(spot)
+            .into_iter()
+            .find(|(_, at)| at.holds(input.column, input.row));
+        return Some(match (button, input.row - spot.y) {
+            (Some((ReplaceField::ReplaceAll, _)), _) => vec![Event::ReplaceAll],
+            (Some((ReplaceField::Replace | ReplaceField::Find | ReplaceField::With, _)), _) => {
+                vec![Event::ReplaceMatch]
+            }
+            (None, 1) => field(ReplaceField::Find),
+            (None, 2) => field(ReplaceField::With),
+            (None, _) => Vec::new(),
+        });
+    }
+    if input.row + 1 != panes.editor.bottom() {
+        return None;
+    }
+    let mut at = panes.editor.x + 1;
+    for (text, icon) in crate::find_line(state) {
+        let width = UnicodeWidthStr::width(text.as_str()) as u16;
+        if (at..at + width).contains(&input.column) {
+            return Some(match icon? {
+                FindIcon::Case => vec![Event::ToggleCase],
+                FindIcon::Replace | FindIcon::ReplaceAll => {
+                    vec![Event::FindKeys(FindKeys::Replace(ReplaceField::With))]
+                }
+            });
+        }
+        at += width;
+    }
+    None
+}
+
 /// Whether the pointer is on the Hover box, border and all, against the
 /// rectangle the renderer draws it in.
 fn on_hover(state: &State, panes: &Layout, input: Input) -> bool {
@@ -1358,7 +1503,10 @@ fn place_in(state: &State, panes: &Layout, pane: Pane, (column, row): (u16, u16)
         | Pane::History
         | Pane::Breakpoints
         | Pane::Frames
-        | Pane::Variables => (0, 0),
+        | Pane::Diagnostics
+        | Pane::Conflicts
+        | Pane::Variables
+        | Pane::Cheatsheet => (0, 0),
     };
     Place {
         // Through `line_at_row`, not straight off the row: Story view draws
@@ -1406,7 +1554,7 @@ fn text_area(state: &State, panes: &Layout, pane: Pane) -> Area {
             height: tree_rows as u16,
             ..interior(panes.tree)
         },
-        Pane::Ai => interior(panes.ai),
+        Pane::Ai | Pane::Cheatsheet => interior(panes.ai),
         // The split with the keyboard, which the press that began any drag
         // here has already chosen.
         Pane::Terminal => interior(crate::layout::split(
@@ -1414,9 +1562,13 @@ fn text_area(state: &State, panes: &Layout, pane: Pane) -> Area {
             state.terminals.len(),
             state.split(),
         )),
-        Pane::Risk | Pane::Buffers | Pane::History | Pane::Breakpoints | Pane::Frames => {
-            interior(panes.corner)
-        }
+        Pane::Risk
+        | Pane::Buffers
+        | Pane::History
+        | Pane::Breakpoints
+        | Pane::Frames
+        | Pane::Diagnostics
+        | Pane::Conflicts => interior(panes.corner),
         // The Strip's own rectangle less whatever the Program output beside it
         // is taking, which the Debug group has instead of the shells.
         Pane::Variables => interior(panes.terminal),
@@ -1766,6 +1918,44 @@ mod tests {
             },
         )
         .events
+    }
+
+    /// Each row of the replace box is where `ui` draws it: the fields on the
+    /// first two, `[Aa]` at the right of the first, the buttons on the third.
+    #[test]
+    fn a_press_in_the_replace_box_lands_on_what_is_drawn_there() {
+        let mut state = workspace();
+        state.find = Some(crate::Find {
+            query: crate::editor::Buffer::text_box("state"),
+            origin: Place { line: 1, column: 1 },
+            case: crate::search::Case::Smart,
+            keys: crate::FindKeys::Replace(crate::ReplaceField::With),
+        });
+        let editor = panes(120, 26, 30, None, 0, 0, Shapes::default()).editor;
+        let spot = crate::layout::replace_box(editor);
+        let field = |field| vec![Event::FindKeys(crate::FindKeys::Replace(field))];
+        assert_eq!(
+            click(&state, spot.x + 3, spot.y + 1),
+            field(crate::ReplaceField::Find)
+        );
+        assert_eq!(
+            click(&state, spot.x + 3, spot.y + 2),
+            field(crate::ReplaceField::With)
+        );
+        assert_eq!(
+            click(&state, spot.right() - 4, spot.y + 1),
+            vec![Event::ToggleCase]
+        );
+        assert_eq!(
+            click(&state, spot.x + 2, spot.y + 3),
+            vec![Event::ReplaceMatch]
+        );
+        assert_eq!(
+            click(&state, spot.x + 12, spot.y + 3),
+            vec![Event::ReplaceAll]
+        );
+        assert_eq!(click(&state, spot.x + 11, spot.y + 3), vec![]);
+        assert_eq!(click(&state, spot.x + 3, spot.y), vec![], "the border");
     }
 
     /// The cell the encoding tests report on, so each expectation reads as the

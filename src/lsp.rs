@@ -398,6 +398,169 @@ impl Severity {
     }
 }
 
+impl Severity {
+    /// Most severe first: the order the Diagnostic list opens by and draws
+    /// its Severity labels in.
+    pub const ALL: [Severity; 4] = [
+        Severity::Error,
+        Severity::Warning,
+        Severity::Information,
+        Severity::Hint,
+    ];
+}
+
+/// How many Diagnostics of a Severity the project holds, every file and every
+/// server. Read off the totals `recount` keeps as reports arrive, because the
+/// tree's border draws two of them every frame and the project can hold
+/// thousands.
+pub fn total(state: &State, severity: Severity) -> usize {
+    state.diagnostic_totals[severity as usize]
+}
+
+/// The totals, walked again after every change to `State::diagnostics` — once
+/// a report rather than once a frame.
+fn recount(state: &mut State) {
+    let mut totals = [0; 4];
+    for diagnostic in state
+        .diagnostics
+        .values()
+        .flat_map(|by| by.values().flatten())
+    {
+        totals[diagnostic.severity as usize] += 1;
+    }
+    state.diagnostic_totals = totals;
+}
+
+/// The Severity the Diagnostic list opens on: the most severe that has any,
+/// because that is what needs fixing first — and Errors when nothing does.
+pub fn opening(state: &State) -> Severity {
+    Severity::ALL
+        .into_iter()
+        .find(|severity| total(state, *severity) > 0)
+        .unwrap_or(Severity::Error)
+}
+
+/// Which Severity the Diagnostic list is showing, while it is in the Corner.
+pub fn showing(state: &State) -> Option<Severity> {
+    match state.corner {
+        crate::layout::Corner::Diagnostics(severity) => Some(severity),
+        _ => None,
+    }
+}
+
+/// The Diagnostic list's rows: a heading per file — `None` — and under it the
+/// file's Diagnostics of the Severity showing, by line and then column, every
+/// server's together. Files by path, which the map is already sorted by. Read
+/// by `ui` to draw, by `mouse` to hit-test and by `update` to act on, so the
+/// three cannot disagree about what a row is.
+pub fn listed(state: &State) -> Vec<(&Path, Option<&Diagnostic>)> {
+    let Some(severity) = showing(state) else {
+        return Vec::new();
+    };
+    let mut rows = Vec::new();
+    for (path, by_server) in &state.diagnostics {
+        let mut under: Vec<&Diagnostic> = by_server
+            .values()
+            .flatten()
+            .filter(|diagnostic| diagnostic.severity == severity)
+            .collect();
+        if under.is_empty() {
+            continue;
+        }
+        under.sort_by_key(|diagnostic| (diagnostic.line, diagnostic.column));
+        rows.push((path.as_path(), None));
+        rows.extend(
+            under
+                .into_iter()
+                .map(|diagnostic| (path.as_path(), Some(diagnostic))),
+        );
+    }
+    rows
+}
+
+/// Where the row at `index` lands: its Diagnostic's start, or — for a file
+/// heading — the start of the first Diagnostic under it.
+pub fn landing(state: &State, index: usize) -> Option<(PathBuf, Place)> {
+    listed(state)
+        .into_iter()
+        .skip(index)
+        .find_map(|(path, diagnostic)| {
+            diagnostic.map(|diagnostic| {
+                (
+                    path.to_path_buf(),
+                    Place {
+                        line: diagnostic.line,
+                        column: diagnostic.column,
+                    },
+                )
+            })
+        })
+}
+
+/// What a Diagnostic's row says: where it starts, and the first line of its
+/// message with every control character taken out — the message is a
+/// server's text, and an escape in it would drive the terminal it is drawn on.
+pub fn row_text(diagnostic: &Diagnostic) -> String {
+    format!(
+        "{}:{} {}",
+        diagnostic.line,
+        diagnostic.column,
+        crate::debug::printable(diagnostic.message.lines().next().unwrap_or_default())
+    )
+}
+
+/// The Severity labels on the Diagnostic list's top border, each with its
+/// count — the names whole while they fit beside the list's own title, and
+/// each Severity's letter otherwise, which is the key that shows it. The one
+/// derivation `ui` draws and `mouse` hit-tests with `layout::strip_at`.
+pub fn severity_labels(state: &State, width: u16) -> Vec<String> {
+    let whole: Vec<String> = Severity::ALL
+        .into_iter()
+        .map(|severity| {
+            let name = match severity {
+                Severity::Error => "Errors",
+                Severity::Warning => "Warnings",
+                Severity::Information => "Info",
+                Severity::Hint => "Hints",
+            };
+            format!(" {name} {} ", total(state, severity))
+        })
+        .collect();
+    match crate::layout::strip_width(&whole) <= width.saturating_sub(crate::layout::CORNER_TITLE) {
+        true => whole,
+        false => Severity::ALL
+            .into_iter()
+            .map(|severity| format!(" {} {} ", letter(severity), total(state, severity)))
+            .collect(),
+    }
+}
+
+/// The key that shows a Severity in the Diagnostic list.
+pub fn letter(severity: Severity) -> char {
+    match severity {
+        Severity::Error => 'e',
+        Severity::Warning => 'w',
+        Severity::Information => 'i',
+        Severity::Hint => 'h',
+    }
+}
+
+/// What the tree's border says about the project's errors and warnings: a
+/// count per Severity that has any, and nothing for information or a hint —
+/// a nudge that is always there is one nobody reads. Each opens with the two
+/// columns that part it from what precedes it, so `ui` draws these strings end
+/// to end after `tree::title` and `mouse` measures the same strings.
+pub fn nudge(state: &State) -> Vec<(Severity, String)> {
+    [
+        (Severity::Error, '\u{2716}'),
+        (Severity::Warning, '\u{25b2}'),
+    ]
+    .into_iter()
+    .filter(|(severity, _)| total(state, *severity) > 0)
+    .map(|(severity, glyph)| (severity, format!("  {glyph} {}", total(state, severity))))
+    .collect()
+}
+
 /// One thing a server says about one line. Not `lsp_types::Diagnostic`: that
 /// carries a dozen fields nothing here reads, and its severity is optional,
 /// which is a decision this type has already made.
@@ -918,6 +1081,7 @@ fn closed(state: &mut State) -> Vec<Effect> {
         // carrying the last version's errors.
         if !state.buffers.contains_key(&path) {
             state.diagnostics.remove(&path);
+            recount(state);
         }
         let Some(uri) = uri(&path) else { continue };
         // Only a server still listening is told: one that is gone has no view
@@ -2603,6 +2767,7 @@ fn published(state: &mut State, language: &str, params: Value) {
             })
             .collect(),
     );
+    recount(state);
 }
 
 /// What the gutter marks one line of one file with — the worst of whatever sits
@@ -2801,6 +2966,7 @@ pub fn gone(state: &mut State, language: &str, why: Gone) -> Vec<Effect> {
         by_language.remove(language);
         !by_language.is_empty()
     });
+    recount(state);
     // And so does anything it said about a symbol. ADR 0011 asks for exactly
     // this: a server that stops invalidates the state the core is holding *on
     // screen*, and a box quoting a conversation that ended is the same claim
@@ -5265,6 +5431,55 @@ mod tests {
         assert_eq!(
             state.buffers[&state.root.join("src/lib.rs")].shown(),
             "fn main() {\n    let x = 1;\n        }"
+        );
+    }
+
+    /// A server's message is drawn on the terminal, so nothing in it may drive
+    /// the terminal: the escape and every other control character are taken
+    /// out, and only the first line is the row's.
+    #[test]
+    fn a_diagnostic_row_says_where_and_the_first_line_stripped() {
+        let diagnostic = Diagnostic {
+            line: 3,
+            column: 7,
+            end_column: None,
+            severity: Severity::Error,
+            message: "\u{1b}[2Jbad\u{7} thing\nsecond line".to_string(),
+        };
+        assert_eq!(row_text(&diagnostic), "3:7 [2Jbad thing");
+    }
+
+    /// Whole names while they fit beside the list's title, each Severity's
+    /// letter — its key — when they do not; and the totals are counted across
+    /// files and servers as a report lands.
+    #[test]
+    fn the_severity_labels_shed_their_names_before_they_overflow() {
+        let mut state = workspace("rust", "rust-analyzer");
+        let root = state.root.clone();
+        let publish = |file: &str, severity: u8| {
+            json!({
+                "uri": format!("file://{}", root.join(file).display()),
+                "diagnostics": [{
+                    "range": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 1}},
+                    "severity": severity,
+                    "message": "m",
+                }],
+            })
+        };
+        published(&mut state, "rust", publish("a.rs", 1));
+        published(&mut state, "rust", publish("b.rs", 4));
+        assert_eq!(opening(&state), Severity::Error);
+        assert_eq!(
+            severity_labels(&state, 60),
+            [" Errors 1 ", " Warnings 0 ", " Info 0 ", " Hints 1 "]
+        );
+        assert_eq!(
+            severity_labels(&state, 30),
+            [" e 1 ", " w 0 ", " i 0 ", " h 1 "]
+        );
+        assert_eq!(
+            nudge(&state),
+            [(Severity::Error, "  \u{2716} 1".to_string())]
         );
     }
 }

@@ -192,6 +192,10 @@ pub enum Corner {
     History,
     Breakpoints,
     Frames,
+    /// The Diagnostic list, and which Severity it is showing — held here so
+    /// the list and the Severity cannot be out of step with the slot.
+    Diagnostics(crate::lsp::Severity),
+    Conflicts,
 }
 
 impl Corner {
@@ -208,6 +212,29 @@ impl Corner {
             Corner::History => Some(Pane::History),
             Corner::Breakpoints => Some(Pane::Breakpoints),
             Corner::Frames => Some(Pane::Frames),
+            Corner::Diagnostics(_) => Some(Pane::Diagnostics),
+            Corner::Conflicts => Some(Pane::Conflicts),
+        }
+    }
+}
+
+/// Which pane is in the AI pane's rectangle: the AI session (or the box that
+/// starts one), or the Cheatsheet over it. One slot naming its occupant for
+/// the reason [`Corner`] is one. The session keeps running behind the
+/// Cheatsheet — this changes what is drawn there, never where, and never the
+/// size of the pty, so hiding it again brings the session back unchanged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Slot {
+    #[default]
+    Ai,
+    Cheatsheet,
+}
+
+impl Slot {
+    pub fn pane(self) -> Pane {
+        match self {
+            Slot::Ai => Pane::Ai,
+            Slot::Cheatsheet => Pane::Cheatsheet,
         }
     }
 }
@@ -300,6 +327,8 @@ pub fn strip_height(screen_height: u16, asked: u16) -> u16 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Shapes {
     pub ai: AiPane,
+    /// Who is in the AI pane's rectangle, carried for the reason `corner` is.
+    pub slot: Slot,
     pub corner: Corner,
     /// Which group the Strip is showing, carried here for the reason
     /// `corner` is: the rectangle is the same either way, and what is in it
@@ -462,6 +491,8 @@ pub struct Layout {
     /// from the layout alone — the alternative is every hit-test taking the
     /// occupant as a second argument and one of them forgetting.
     pub occupant: Corner,
+    /// The same for the AI pane's rectangle.
+    pub slot: Slot,
     /// The same for the Strip, whose one rectangle is the shells or the Debug
     /// group: `terminal` is where it is, and this is whose it is.
     pub group: Group,
@@ -604,6 +635,7 @@ pub fn panes(
             height: terminal_height,
         },
         occupant: shapes.corner,
+        slot: shapes.slot,
         group: shapes.group,
         band: Area {
             x: tree_width + step_menu_width,
@@ -674,6 +706,52 @@ pub fn search_box(width: u16, height: u16) -> Area {
     inset(width, height, 8, 3)
 }
 
+/// The replace box: floating in the editor's top-right corner, inside its
+/// border, so the text it covers is the text furthest from the `/` line.
+/// Three rows inside — find, with, and the two buttons — which `ui` draws and
+/// `mouse` hit-tests by their offset from `y + 1`.
+pub fn replace_box(editor: Area) -> Area {
+    let width = editor.width.saturating_sub(2).min(44);
+    Area {
+        x: (editor.x + editor.width).saturating_sub(1 + width),
+        y: editor.y + 1,
+        width,
+        height: editor.height.saturating_sub(2).min(5),
+    }
+}
+
+/// Where the replace box draws `[Aa]` — against its right border on the
+/// "find" row — and each of its buttons on the third row, a column apart.
+/// `ui` renders into these rectangles and `mouse` hit-tests them, so neither
+/// works out a column of its own.
+pub fn replace_case(spot: Area) -> Area {
+    let width = crate::FIND_ICONS[0].1.len() as u16;
+    Area {
+        x: spot.right().saturating_sub(2 + width),
+        y: spot.y + 1,
+        width,
+        height: 1,
+    }
+}
+
+pub fn replace_buttons(spot: Area) -> Vec<(crate::ReplaceField, Area)> {
+    let mut x = spot.x + 2;
+    crate::REPLACE_BUTTONS
+        .iter()
+        .map(|(field, label)| {
+            let width = label.len() as u16;
+            let at = Area {
+                x,
+                y: spot.y + 3,
+                width,
+                height: 1,
+            };
+            x += width + 1;
+            (*field, at)
+        })
+        .collect()
+}
+
 pub fn search_hit_rows(width: u16, height: u16) -> usize {
     search_box(width, height)
         .height
@@ -725,7 +803,7 @@ pub fn pane_at(layout: &Layout, column: u16, row: u16) -> Option<Pane> {
     } else if layout.editor.holds(column, row) || layout.band.holds(column, row) {
         Some(Pane::Editor)
     } else if layout.ai.holds(column, row) {
-        Some(Pane::Ai)
+        Some(layout.slot.pane())
     } else if layout.terminal.holds(column, row) {
         Some(layout.group.pane())
     } else {
@@ -981,7 +1059,7 @@ mod frame_tests {
 mod tests {
     use super::{
         chip_labels, inset, pane_at, panes, strip_at, strip_height, strip_width, AiPane, Area,
-        Corner, Group, Output, Shapes, EDITOR_TITLE, STEP_MENU_WIDTH, STRIP_LEAST, TOP_LEAST,
+        Corner, Group, Output, Shapes, Slot, EDITOR_TITLE, STEP_MENU_WIDTH, STRIP_LEAST, TOP_LEAST,
     };
 
     /// Nine columns, the Breakpoint column leftmost and the fold toggle right
@@ -1202,6 +1280,50 @@ mod tests {
         assert_eq!(tall.terminal.height, beside.terminal.height);
     }
 
+    /// The Cheatsheet is the AI pane's rectangle in either shape — nothing
+    /// moves when it is shown, so the session behind it keeps its pty size —
+    /// and the hit-test answers for whoever is in it.
+    #[test]
+    fn the_cheatsheet_takes_the_ai_panes_rectangle_beside_and_tall() {
+        for (ai, at) in [(AiPane::Beside, (100, 5)), (AiPane::Tall, (100, 20))] {
+            let shapes = Shapes {
+                ai,
+                ..Shapes::default()
+            };
+            let session = panes(120, 26, 30, None, 0, 0, shapes);
+            let cheatsheet = panes(
+                120,
+                26,
+                30,
+                None,
+                0,
+                0,
+                Shapes {
+                    slot: Slot::Cheatsheet,
+                    ..shapes
+                },
+            );
+            let expected = match ai {
+                AiPane::Beside => Area {
+                    x: 84,
+                    y: 0,
+                    width: 36,
+                    height: 18,
+                },
+                AiPane::Tall => Area {
+                    x: 84,
+                    y: 0,
+                    width: 36,
+                    height: 26,
+                },
+            };
+            assert_eq!(cheatsheet.ai, expected);
+            assert_eq!(cheatsheet.ai, session.ai);
+            assert_eq!(pane_at(&cheatsheet, at.0, at.1), Some(Pane::Cheatsheet));
+            assert_eq!(pane_at(&session, at.0, at.1), Some(Pane::Ai));
+        }
+    }
+
     #[test]
     fn a_tall_pane_still_tiles_without_gaps_or_overlap() {
         let layout = panes(
@@ -1341,6 +1463,7 @@ mod tests {
             Shapes {
                 group: Group::Shells,
                 ai: AiPane::Tall,
+                slot: Slot::Ai,
                 corner: Corner::Risk,
                 strip: None,
                 output: Output::Away,
@@ -1371,6 +1494,7 @@ mod tests {
                 Shapes {
                     group: Group::Shells,
                     ai,
+                    slot: Slot::Ai,
                     corner: Corner::Risk,
                     strip: None,
                     output: Output::Away,
@@ -1474,6 +1598,46 @@ mod tests {
         assert_eq!(super::search_hit_rows(20, 4), 0);
     }
 
+    /// Inside the editor's border at its top-right, and never wider or taller
+    /// than the pane has room for.
+    #[test]
+    fn the_replace_box_sits_inside_the_editors_top_right_corner() {
+        let editor = Area {
+            x: 30,
+            y: 0,
+            width: 60,
+            height: 20,
+        };
+        let spot = super::replace_box(editor);
+        assert_eq!((spot.x, spot.y, spot.width, spot.height), (45, 1, 44, 5));
+        let narrow = Area {
+            width: 20,
+            height: 4,
+            ..editor
+        };
+        let spot = super::replace_box(narrow);
+        assert_eq!((spot.x, spot.y, spot.width, spot.height), (31, 1, 18, 2));
+    }
+
+    /// `[Aa]` ends a column short of the right border, and the buttons start a
+    /// column in from the left one with a column between them.
+    #[test]
+    fn the_replace_boxs_toggle_and_buttons_have_one_place_each() {
+        let spot = Area {
+            x: 45,
+            y: 1,
+            width: 44,
+            height: 5,
+        };
+        let case = super::replace_case(spot);
+        assert_eq!((case.x, case.y, case.width), (83, 2, 4));
+        let buttons: Vec<(u16, u16, u16)> = super::replace_buttons(spot)
+            .iter()
+            .map(|(_, at)| (at.x, at.y, at.width))
+            .collect();
+        assert_eq!(buttons, vec![(47, 4, 9), (57, 4, 13)]);
+    }
+
     #[test]
     fn a_small_terminal_gives_up_the_margin_before_the_box() {
         // 44 columns leaves room for 2 either side, not 8.
@@ -1502,6 +1666,7 @@ mod tests {
                 (Shapes {
                     group: Group::Shells,
                     ai: AiPane::Tall,
+                    slot: Slot::Ai,
                     corner: Corner::Risk,
                     strip: None,
                     output: Output::Away,

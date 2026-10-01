@@ -49,6 +49,9 @@ pub struct VardeWorld {
     /// only named — never started — is an assertion about this list.
     startup_effects: Vec<Effect>,
     error: Option<StartupError>,
+    /// What saving a config file while Varde runs asked the edge to do — the
+    /// list "nothing is started or stopped" is a statement about.
+    config_effects: Vec<Effect>,
     dirs: BTreeSet<PathBuf>,
     files: BTreeMap<PathBuf, String>,
     /// Every path a write reached, in order. What "unchanged" is a statement
@@ -610,8 +613,11 @@ impl VardeWorld {
             | Pane::History
             | Pane::Breakpoints
             | Pane::Frames
+            | Pane::Diagnostics
+            | Pane::Conflicts
             | Pane::Variables
             | Pane::Output
+            | Pane::Cheatsheet
             | Pane::Terminal => self.screen.clone(),
         }
     }
@@ -1522,6 +1528,84 @@ fn project_config(world: &mut VardeWorld, step: &Step) {
     world.startup.project_config = Some(step.docstring().expect("docstring").trim().to_string());
 }
 
+/// What the edge sends when either file changes on disk: both layers as they
+/// now are, the one that was not saved read as it stands.
+fn config_edited(world: &mut VardeWorld, global: Option<startup::OnDisk>) {
+    let layer = |text: &Option<String>| match text {
+        Some(text) => startup::OnDisk::Text(text.clone()),
+        None => startup::OnDisk::Missing,
+    };
+    let event = Event::ConfigEdited {
+        global: global.unwrap_or_else(|| layer(&world.startup.global_config)),
+        project: layer(&world.startup.project_config),
+    };
+    let (state, effects) = update(&world.state, event);
+    world.state = state;
+    world.config_effects = effects.clone();
+    world.apply(effects);
+    world.tell_core();
+}
+
+#[when("the global config is saved as:")]
+fn global_config_saved(world: &mut VardeWorld, step: &Step) {
+    global_config(world, step);
+    config_edited(world, None);
+}
+
+#[when("the project config is saved as:")]
+fn project_config_saved(world: &mut VardeWorld, step: &Step) {
+    project_config(world, step);
+    config_edited(world, None);
+}
+
+#[when("the global config can no longer be read")]
+fn global_config_unreadable(world: &mut VardeWorld) {
+    config_edited(world, Some(startup::OnDisk::Unreadable));
+}
+
+#[then(expr = "the test command in effect is {string}")]
+fn test_command_in_effect(world: &mut VardeWorld, command: String) {
+    assert_eq!(world.state.test_command, Some(command));
+}
+
+#[then(expr = "no test command is in effect")]
+fn no_test_command_in_effect(world: &mut VardeWorld) {
+    assert_eq!(world.state.test_command, None);
+}
+
+#[then(expr = "the language server for {string} is configured as {string}")]
+fn server_configured_as(world: &mut VardeWorld, language: String, command: String) {
+    let server = world.state.servers.get(&language);
+    assert_eq!(
+        server.map(|server| server.command.as_str()),
+        Some(command.as_str())
+    );
+}
+
+#[then(expr = "the save asked for nothing to be started or stopped")]
+fn save_asked_for_nothing(world: &mut VardeWorld) {
+    assert!(
+        world.config_effects.is_empty(),
+        "asked for: {:?}",
+        world.config_effects
+    );
+}
+
+#[then(expr = "a language server for {string} is still running")]
+fn server_still_running(world: &mut VardeWorld, language: String) {
+    assert!(
+        world.state.lsp_running.contains(&language),
+        "running: {:?}",
+        world.state.lsp_running
+    );
+}
+
+#[given(expr = "the project {string} records the minimap as hidden")]
+fn state_records_minimap_hidden(world: &mut VardeWorld, path: String) {
+    assert_eq!(path, ".varde/state.json");
+    world.startup.state_json = Some(r#"{"minimap": false}"#.to_string());
+}
+
 #[given(expr = "the global config is empty")]
 fn global_config_empty(world: &mut VardeWorld) {
     world.startup.global_config = Some(String::new());
@@ -1751,38 +1835,81 @@ fn ask_to_update(world: &mut VardeWorld) {
     world.send(Event::Rebuild);
 }
 
+#[given(expr = "I ask Varde for help from the command line")]
 #[when(expr = "I ask Varde for help from the command line")]
 fn ask_for_help(world: &mut VardeWorld) {
     world.send(Event::ToggleCheatsheet);
 }
 
-#[given(expr = "the key reminder is hidden")]
+#[given(expr = "the Cheatsheet is hidden")]
 fn reminder_hidden(world: &mut VardeWorld) {
-    world.state.cheatsheet = false;
+    world.state.ai_slot = layout::Slot::Ai;
 }
 
-#[given(expr = "the key reminder is shown")]
+#[given(expr = "the Cheatsheet is shown")]
 fn reminder_up(world: &mut VardeWorld) {
-    world.state.cheatsheet = true;
+    world.state.ai_slot = layout::Slot::Cheatsheet;
 }
 
-#[given(expr = "the project {string} records the key reminder as shown")]
+#[given(expr = "the project {string} records the Cheatsheet as shown")]
 fn state_records_reminder(world: &mut VardeWorld, path: String) {
     assert_eq!(path, ".varde/state.json");
     world.startup.state_json = Some("{\"cheatsheet\": true}".to_string());
 }
 
-#[then(expr = "the key reminder is shown")]
+#[then(expr = "the Cheatsheet is shown")]
 fn reminder_shown(world: &mut VardeWorld) {
-    assert!(world.state.cheatsheet);
+    assert_eq!(world.state.ai_slot, layout::Slot::Cheatsheet);
 }
 
-#[then(expr = "the key reminder is not shown")]
+#[then(expr = "the Cheatsheet is not shown")]
 fn reminder_not_shown(world: &mut VardeWorld) {
-    assert!(!world.state.cheatsheet);
+    assert_eq!(world.state.ai_slot, layout::Slot::Ai);
 }
 
-#[then(expr = "the saved project state does not mention the key reminder")]
+/// Through the mouse router at a screen cell, not as an event naming the
+/// pane: which pane the wheel is over is the hit-test's answer, and that is
+/// what puts the Cheatsheet rather than the session behind it under the wheel.
+#[when(expr = "I turn the wheel {word} over the AI pane's rectangle")]
+fn wheel_over_ai_rectangle(world: &mut VardeWorld, direction: String) {
+    let ai = world.panes().ai;
+    let kind = match parse_direction(&direction) {
+        Direction::Down => mouse::Kind::ScrollDown,
+        _ => mouse::Kind::ScrollUp,
+    };
+    world.report(kind, ai.x + ai.width / 2, ai.y + ai.height / 2);
+}
+
+#[then(expr = "the Cheatsheet is scrolled {int} rows down")]
+fn cheatsheet_scrolled(world: &mut VardeWorld, rows: usize) {
+    assert_eq!(world.state.cheatsheet_scroll, rows);
+}
+
+/// Against the rows `ui` draws and the rows the pane fits, so a list that
+/// already fits — which proves nothing about scrolling — fails here too.
+#[then(expr = "the Cheatsheet's last row is on screen")]
+fn cheatsheet_at_its_end(world: &mut VardeWorld) {
+    let rows = keys::cheatsheet_rows(&world.state).len();
+    let fits = varde::cheatsheet_fits(&world.state);
+    assert!(rows > fits, "{rows} rows fit in {fits}");
+    assert_eq!(world.state.cheatsheet_scroll, rows - fits);
+}
+
+#[then(expr = "the Cheatsheet lists the keys of the view on screen")]
+fn cheatsheet_lists_the_view(world: &mut VardeWorld) {
+    assert_eq!(world.state.ai_slot, layout::Slot::Cheatsheet);
+    assert!(!keys::cheatsheet_rows(&world.state).is_empty());
+}
+
+#[then(expr = "nothing was asked of the AI session")]
+fn nothing_asked_of_ai(world: &mut VardeWorld) {
+    assert!(world.ai_spawned.is_empty(), "{:?}", world.ai_spawned);
+    assert!(!world.ai_stopped);
+    assert!(ai_sends(world).is_empty(), "{:?}", world.keys_sent);
+    assert!(world.state.ai_running);
+}
+
+#[then(expr = "the saved project state does not mention the Cheatsheet")]
 fn reminder_not_remembered(world: &mut VardeWorld) {
     let saved = world
         .startup
@@ -2285,11 +2412,15 @@ fn pointer_at(
     let (area, gutter, scroll) = match pane {
         Pane::Editor => (panes.editor, varde::gutter(state), state.editor_scroll),
         Pane::Tree => (panes.tree, 0, state.tree_scroll),
-        Pane::Ai => (panes.ai, 0, 0),
+        Pane::Ai | Pane::Cheatsheet => (panes.ai, 0, 0),
         Pane::Output => (panes.output, 0, 0),
-        Pane::Risk | Pane::Buffers | Pane::History | Pane::Breakpoints | Pane::Frames => {
-            (panes.corner, 0, 0)
-        }
+        Pane::Risk
+        | Pane::Buffers
+        | Pane::History
+        | Pane::Breakpoints
+        | Pane::Frames
+        | Pane::Diagnostics
+        | Pane::Conflicts => (panes.corner, 0, 0),
         Pane::Terminal | Pane::Variables => (panes.terminal, 0, 0),
         // The window itself, not the Snippet's own rectangle: the `+ 1` below
         // is the border every other pane's rectangle carries.
@@ -2837,6 +2968,9 @@ fn named_key(key: &str) -> Option<terminput::KeyEvent> {
         "Ctrl+Alt+Right" => plain(terminput::KeyCode::Right)
             .modifiers(terminput::KeyModifiers::ALT | terminput::KeyModifiers::CTRL),
         "Alt+Right" => alt(terminput::KeyCode::Right),
+        "Shift+Right" => plain(terminput::KeyCode::Right).modifiers(terminput::KeyModifiers::SHIFT),
+        "Shift+Alt+Right" => plain(terminput::KeyCode::Right)
+            .modifiers(terminput::KeyModifiers::SHIFT | terminput::KeyModifiers::ALT),
         "Left" => plain(terminput::KeyCode::Left),
         "Right" => plain(terminput::KeyCode::Right),
         "Ctrl+c" => plain(terminput::KeyCode::Char('c')).modifiers(terminput::KeyModifiers::CTRL),
@@ -2848,10 +2982,15 @@ fn named_key(key: &str) -> Option<terminput::KeyEvent> {
         "Cmd+c" => plain(terminput::KeyCode::Char('c')).modifiers(terminput::KeyModifiers::SUPER),
         "Cmd+v" => plain(terminput::KeyCode::Char('v')).modifiers(terminput::KeyModifiers::SUPER),
         "Ctrl+d" => plain(terminput::KeyCode::Char('d')).modifiers(terminput::KeyModifiers::CTRL),
+        "Ctrl+f" => plain(terminput::KeyCode::Char('f')).modifiers(terminput::KeyModifiers::CTRL),
         "Ctrl+n" => plain(terminput::KeyCode::Char('n')).modifiers(terminput::KeyModifiers::CTRL),
         "Ctrl+p" => plain(terminput::KeyCode::Char('p')).modifiers(terminput::KeyModifiers::CTRL),
         "Ctrl+s" => plain(terminput::KeyCode::Char('s')).modifiers(terminput::KeyModifiers::CTRL),
         "Ctrl+z" => plain(terminput::KeyCode::Char('z')).modifiers(terminput::KeyModifiers::CTRL),
+        // The base key and Shift as separate facts, the way the Kitty protocol
+        // reports it: the router applies the shift on the way in.
+        "Ctrl+Shift+z" => plain(terminput::KeyCode::Char('z'))
+            .modifiers(terminput::KeyModifiers::CTRL | terminput::KeyModifiers::SHIFT),
         "Escape" => plain(terminput::KeyCode::Esc),
         "Enter" => plain(terminput::KeyCode::Enter),
         "Backspace" => plain(terminput::KeyCode::Backspace),
@@ -2862,6 +3001,8 @@ fn named_key(key: &str) -> Option<terminput::KeyEvent> {
         "Shift+Tab" => plain(terminput::KeyCode::Tab).modifiers(terminput::KeyModifiers::SHIFT),
         "Up" => plain(terminput::KeyCode::Up),
         "Down" => plain(terminput::KeyCode::Down),
+        "PageUp" => plain(terminput::KeyCode::PageUp),
+        "PageDown" => plain(terminput::KeyCode::PageDown),
         "Ctrl+Space" => {
             plain(terminput::KeyCode::Char(' ')).modifiers(terminput::KeyModifiers::CTRL)
         }
@@ -3772,6 +3913,9 @@ fn parse_pane(name: &str) -> Pane {
         "risk" => Pane::Risk,
         "buffers" => Pane::Buffers,
         "history" => Pane::History,
+        "diagnostics" => Pane::Diagnostics,
+        "conflicts" => Pane::Conflicts,
+        "Cheatsheet" => Pane::Cheatsheet,
         other => panic!("unknown pane {other:?}"),
     }
 }
@@ -3791,6 +3935,7 @@ fn pane_still_has_focus(world: &mut VardeWorld, pane: String) {
     assert_eq!(world.state.focus, parse_pane(&pane));
 }
 
+#[given(expr = "I click in the {word} pane")]
 #[when(expr = "I click in the {word} pane")]
 fn click_pane(world: &mut VardeWorld, pane: String) {
     // A click is a press and a release: the press is ours, and the release is
@@ -5212,6 +5357,7 @@ fn give_tree_pane_focus(world: &mut VardeWorld) {
 
 // ---- F11 / F12: keyboard and row actions ----
 
+#[given(expr = "I type {string}")]
 #[when(expr = "I type {string}")]
 fn type_text(world: &mut VardeWorld, text: String) {
     // Bytes are what a hosted pane's child receives. The Snippet is Varde's
@@ -5946,12 +6092,16 @@ fn drag_past(world: &mut VardeWorld, side: String, pane: String) {
     let area = match parse_pane(&pane) {
         Pane::Tree => world.panes().tree,
         Pane::Editor => world.panes().editor,
-        Pane::Ai => world.panes().ai,
+        Pane::Ai | Pane::Cheatsheet => world.panes().ai,
         Pane::Output => world.panes().output,
         Pane::Terminal | Pane::Variables => world.panes().terminal,
-        Pane::Risk | Pane::Buffers | Pane::History | Pane::Breakpoints | Pane::Frames => {
-            world.panes().corner
-        }
+        Pane::Risk
+        | Pane::Buffers
+        | Pane::History
+        | Pane::Breakpoints
+        | Pane::Frames
+        | Pane::Diagnostics
+        | Pane::Conflicts => world.panes().corner,
         Pane::Evaluator => world.panes().evaluator,
     };
     // Straight out from where the button went down, which is the gesture a
@@ -6872,6 +7022,8 @@ fn there_are_no_matches(world: &mut VardeWorld) {
 /// nothing — and a key lands wherever the query's caret is.
 #[given(expr = "I type {string} into the in-file search")]
 #[when(expr = "I type {string} into the in-file search")]
+#[given(expr = "I type {string} into the replace box")]
+#[when(expr = "I type {string} into the replace box")]
 fn type_into_find(world: &mut VardeWorld, query: String) {
     for key in query.chars() {
         route_key(world, &key.to_string(), 0);
@@ -6880,7 +7032,73 @@ fn type_into_find(world: &mut VardeWorld, query: String) {
 
 #[then(expr = "the in-file search query is {string}")]
 fn find_query_is(world: &mut VardeWorld, expected: String) {
-    assert_eq!(world.state.find_query.shown(), expected);
+    let find = world.state.find.as_ref().expect("a search that is on");
+    assert_eq!(find.query.shown(), expected);
+}
+
+fn find_keys(world: &VardeWorld) -> varde::FindKeys {
+    world.state.find.as_ref().expect("a search that is on").keys
+}
+
+fn find_icon(name: &str) -> varde::FindIcon {
+    match name {
+        "case" => varde::FindIcon::Case,
+        "replace" => varde::FindIcon::Replace,
+        "replace all" => varde::FindIcon::ReplaceAll,
+        other => panic!("no icon {other:?}"),
+    }
+}
+
+#[then(expr = "the keyboard is in the in-file search query")]
+fn keyboard_in_query(world: &mut VardeWorld) {
+    assert_eq!(find_keys(world), varde::FindKeys::Query);
+}
+
+#[then(expr = "the keyboard is on the in-file search's {string} icon")]
+fn keyboard_on_icon(world: &mut VardeWorld, icon: String) {
+    assert_eq!(find_keys(world), varde::FindKeys::Icon(find_icon(&icon)));
+}
+
+#[then(expr = "the keyboard is not in the in-file search")]
+fn keyboard_not_in_find(world: &mut VardeWorld) {
+    assert_eq!(find_keys(world), varde::FindKeys::Away);
+}
+
+#[then(expr = "the case toggle is {word}")]
+fn case_toggle_is(world: &mut VardeWorld, shown: String) {
+    let find = world.state.find.as_ref().expect("a search that is on");
+    let lit = find.case.exact(find.query.shown());
+    assert_eq!(lit, shown == "lit", "the toggle is lit: {lit}");
+}
+
+#[then(expr = "the replace box is open")]
+fn replace_box_open(world: &mut VardeWorld) {
+    assert!(matches!(find_keys(world), varde::FindKeys::Replace(_)));
+}
+
+#[then(expr = "the replace box is not open")]
+fn replace_box_closed(world: &mut VardeWorld) {
+    assert!(!matches!(find_keys(world), varde::FindKeys::Replace(_)));
+}
+
+/// Through the mouse, at the column `find_line` draws the icon in — the pieces
+/// the renderer draws and the hit-test walks.
+#[given(expr = "I click the {string} icon on the in-file search line")]
+#[when(expr = "I click the {string} icon on the in-file search line")]
+fn click_find_icon(world: &mut VardeWorld, icon: String) {
+    let icon = find_icon(&icon);
+    let editor = world.panes().editor;
+    let mut column = editor.x + 1;
+    for (text, piece) in varde::find_line(&world.state) {
+        if piece == Some(icon) {
+            break;
+        }
+        column += UnicodeWidthStr::width(text.as_str()) as u16;
+    }
+    let row = editor.bottom() - 1;
+    world.pointer = mouse::Pointer::default();
+    world.report(mouse::Kind::LeftDown, column, row);
+    world.report(mouse::Kind::LeftUp, column, row);
 }
 
 #[when(expr = "I press Escape during the in-file search")]
@@ -12366,6 +12584,18 @@ fn editor_never_said(world: &mut VardeWorld, notice: String) {
     );
 }
 
+/// The prefix `ConfigError`'s `Display` puts first, pinned beside it: the
+/// fault's own words are copy, and the file and line are what fix it.
+#[then(expr = "the message names the file {string} at line {int}")]
+fn message_names_file_and_line(world: &mut VardeWorld, file: String, line: usize) {
+    let prefix = format!("{file}:{line}: ");
+    assert!(
+        world.named.iter().any(|named| named.starts_with(&prefix)),
+        "the messages named: {:?}",
+        world.named
+    );
+}
+
 #[then(expr = "the message names {string}")]
 fn message_names(world: &mut VardeWorld, name: String) {
     assert!(
@@ -14734,6 +14964,15 @@ fn open_launch_palette(world: &mut VardeWorld) {
     load_debug_config(world);
     world.send(Event::FallbackBinding);
     route_key(world, &palette_key("Launch").to_string(), 0);
+}
+
+/// The palette over whatever the running Varde holds, not a fresh read of the
+/// scenario's config: what is offered has to have arrived without a restart.
+#[then(expr = "the launch palette, opened without restarting, offers {string}")]
+fn launch_palette_without_restarting_offers(world: &mut VardeWorld, name: String) {
+    world.send(Event::FallbackBinding);
+    route_key(world, &palette_key("Launch").to_string(), 0);
+    launch_palette_offers(world, name);
 }
 
 /// Through the palette the way a person goes: its Launch face, the arrows down
@@ -17306,6 +17545,13 @@ fn the_snippet_is(world: &mut VardeWorld, expected: String) {
     assert_eq!(snippet(world), expected);
 }
 
+/// The Snippet's own cursor, never the one in the file behind the window.
+#[then(expr = "the cursor in the Snippet is at line {int} column {int}")]
+fn cursor_in_the_snippet(world: &mut VardeWorld, line: usize, column: usize) {
+    let snippet = &evaluator(world).snippet;
+    assert_eq!((snippet.line, snippet.column), (line, column));
+}
+
 #[then("the Snippet is:")]
 fn the_snippet_is_block(world: &mut VardeWorld, step: &Step) {
     let expected = step.docstring().expect("docstring").trim_matches('\n');
@@ -17736,4 +17982,404 @@ fn adapter_sent_naming(world: &mut VardeWorld, command: String, class: String) {
         last_request(world, &command)["arguments"]["exceptionOptions"][0]["path"][0]["names"],
         json!([class])
     );
+}
+
+// ---- The Diagnostic list ----
+
+/// A Severity as the Scenarios name it: the protocol's own word, which is
+/// `lsp::Severity::as_str`, never a label's copy.
+fn severity_named(name: &str) -> lsp::Severity {
+    lsp::Severity::ALL
+        .into_iter()
+        .find(|severity| severity.as_str() == name)
+        .unwrap_or_else(|| panic!("no such severity: {name}"))
+}
+
+/// Through the palette's event, as every other Corner occupant's is: the only
+/// way the list comes to be on screen is being asked for.
+#[given("the Diagnostic list is shown")]
+fn diagnostic_list_is_shown(world: &mut VardeWorld) {
+    if lsp::showing(&world.state).is_none() {
+        world.send(Event::ToggleDiagnosticList);
+    }
+    assert_eq!(world.state.focus, Pane::Diagnostics);
+}
+
+#[when("I show the Diagnostic list")]
+fn show_diagnostic_list(world: &mut VardeWorld) {
+    assert_eq!(lsp::showing(&world.state), None);
+    world.send(Event::ToggleDiagnosticList);
+}
+
+#[then("the Corner holds the Diagnostic list")]
+fn corner_holds_diagnostic_list(world: &mut VardeWorld) {
+    assert!(
+        matches!(world.state.corner, layout::Corner::Diagnostics(_)),
+        "{:?}",
+        world.state.corner
+    );
+}
+
+#[then(expr = "the Diagnostic list shows {string}")]
+fn diagnostic_list_shows(world: &mut VardeWorld, severity: String) {
+    assert_eq!(lsp::showing(&world.state), Some(severity_named(&severity)));
+}
+
+#[then("the Diagnostic list has no rows")]
+fn diagnostic_list_is_empty(world: &mut VardeWorld) {
+    assert!(lsp::listed(&world.state).is_empty());
+}
+
+/// With a header row: a file heading has neither line nor column.
+#[then("the Diagnostic list rows are:")]
+fn diagnostic_list_rows(world: &mut VardeWorld, step: &Step) {
+    let expected: Vec<(String, Option<(usize, usize)>)> = step
+        .table()
+        .expect("table")
+        .rows
+        .iter()
+        .skip(1)
+        .map(|row| {
+            let at = match row[1].trim() {
+                "" => None,
+                line => Some((
+                    line.parse().expect("a line"),
+                    row[2].trim().parse().expect("a column"),
+                )),
+            };
+            (row[0].clone(), at)
+        })
+        .collect();
+    let listed: Vec<(String, Option<(usize, usize)>)> = lsp::listed(&world.state)
+        .into_iter()
+        .map(|(path, diagnostic)| {
+            (
+                varde::relative(&world.state, path),
+                diagnostic.map(|diagnostic| (diagnostic.line, diagnostic.column)),
+            )
+        })
+        .collect();
+    assert_eq!(listed, expected);
+}
+
+/// The index of the row naming a file's Diagnostic on a line, or its heading.
+fn diagnostic_row(world: &VardeWorld, file: &str, line: Option<usize>) -> usize {
+    let path = abs(world, file);
+    lsp::listed(&world.state)
+        .iter()
+        .position(|(at, diagnostic)| {
+            *at == path.as_path() && diagnostic.map(|diagnostic| diagnostic.line) == line
+        })
+        .unwrap_or_else(|| panic!("no row for {file} {line:?}"))
+}
+
+/// Moved to with the keyboard, the way a reader gets there.
+fn select_diagnostic_row(world: &mut VardeWorld, index: usize) {
+    world.state.focus = Pane::Diagnostics;
+    while world.state.diagnostics_selection > index {
+        world.send(Event::Key('k'));
+    }
+    while world.state.diagnostics_selection < index {
+        world.send(Event::Key('j'));
+    }
+}
+
+#[given(expr = "the Diagnostic list selection is on {string} line {int}")]
+fn diagnostic_selection_on(world: &mut VardeWorld, file: String, line: usize) {
+    let index = diagnostic_row(world, &file, Some(line));
+    select_diagnostic_row(world, index);
+}
+
+#[given(expr = "the Diagnostic list selection is on the heading for {string}")]
+fn diagnostic_selection_on_heading(world: &mut VardeWorld, file: String) {
+    let index = diagnostic_row(world, &file, None);
+    select_diagnostic_row(world, index);
+}
+
+#[then(expr = "the Diagnostic list selection is on {string} line {int}")]
+fn diagnostic_selection_should_be_on(world: &mut VardeWorld, file: String, line: usize) {
+    assert_eq!(
+        world.state.diagnostics_selection,
+        diagnostic_row(world, &file, Some(line))
+    );
+}
+
+/// Through the hit-test, a press and a release on the row's text.
+#[when(expr = "I click the Diagnostic list row for {string} line {int}")]
+fn click_diagnostic_row(world: &mut VardeWorld, file: String, line: usize) {
+    let index = diagnostic_row(world, &file, Some(line));
+    let corner = world.panes().corner;
+    let row = corner.y + 1 + (index - world.state.diagnostics_scroll) as u16;
+    world.report(mouse::Kind::LeftDown, corner.x + 2, row);
+    world.report(mouse::Kind::LeftUp, corner.x + 2, row);
+}
+
+/// On the label's first column, found the way `ui` right-aligns them.
+#[when(expr = "I click the Severity label for {string}")]
+fn click_severity_label(world: &mut VardeWorld, severity: String) {
+    let corner = world.panes().corner;
+    let labels = lsp::severity_labels(&world.state, corner.width);
+    let at = lsp::Severity::ALL
+        .iter()
+        .position(|each| *each == severity_named(&severity))
+        .expect("a label");
+    let column =
+        corner.right() - 1 - layout::strip_width(&labels) + layout::strip_width(&labels[..at]) + 1;
+    world.report(mouse::Kind::LeftDown, column, corner.y);
+    world.report(mouse::Kind::LeftUp, column, corner.y);
+}
+
+/// Headerless: a Severity and its count, every one of the four.
+#[then("the Severity labels count:")]
+fn severity_labels_count(world: &mut VardeWorld, step: &Step) {
+    for row in &step.table().expect("table").rows {
+        assert_eq!(
+            lsp::total(&world.state, severity_named(row[0].trim())),
+            row[1].trim().parse::<usize>().expect("a count"),
+            "{}",
+            row[0]
+        );
+    }
+}
+
+/// Headerless: the Severities the tree's border counts, in the order drawn.
+#[then("the tree's border counts:")]
+fn tree_border_counts(world: &mut VardeWorld, step: &Step) {
+    let expected: Vec<(lsp::Severity, usize)> = step
+        .table()
+        .expect("table")
+        .rows
+        .iter()
+        .map(|row| {
+            (
+                severity_named(row[0].trim()),
+                row[1].trim().parse().expect("a count"),
+            )
+        })
+        .collect();
+    let drawn: Vec<(lsp::Severity, usize)> = lsp::nudge(&world.state)
+        .into_iter()
+        .map(|(severity, _)| (severity, lsp::total(&world.state, severity)))
+        .collect();
+    assert_eq!(drawn, expected);
+}
+
+#[then("the tree's border counts nothing")]
+fn tree_border_counts_nothing(world: &mut VardeWorld) {
+    assert_eq!(lsp::nudge(&world.state), vec![]);
+}
+
+/// On the count's first column: the title and every string before it, then
+/// the gap its own string opens with.
+#[when(expr = "I click the tree's {word} count")]
+fn click_tree_count(world: &mut VardeWorld, severity: String) {
+    let tree = world.panes().tree;
+    let mut column = tree.x + 1 + tree::title(&world.state).width() as u16;
+    for (each, label) in lsp::nudge(&world.state) {
+        if each == severity_named(&severity) {
+            column += (label.len() - label.trim_start().len()) as u16;
+            break;
+        }
+        column += label.width() as u16;
+    }
+    world.report(mouse::Kind::LeftDown, column, tree.y);
+    world.report(mouse::Kind::LeftUp, column, tree.y);
+}
+
+// ---- Conflicts ----
+
+/// What the edge's git poll tells the core: the files as unmerged, and the
+/// Conflicts in each as it read them off the disk — the project's contents.
+#[given("git reports as unmerged:")]
+#[when("git reports as unmerged:")]
+fn git_reports_unmerged(world: &mut VardeWorld, step: &Step) {
+    let files: Vec<String> = step
+        .table()
+        .expect("table")
+        .rows
+        .iter()
+        .map(|row| row[0].trim().to_string())
+        .collect();
+    world.state.repo = Some(
+        files
+            .iter()
+            .map(|path| GitFile {
+                path: path.clone(),
+                status: GitStatus::Conflicted,
+            })
+            .collect(),
+    );
+    world.state.conflicts_on_disk = files
+        .iter()
+        .map(|file| {
+            let text = world
+                .project
+                .iter()
+                .find(|(name, _)| name == file)
+                .map(|(_, contents)| contents.clone())
+                .unwrap_or_default();
+            (abs(world, file), varde::conflict::find(text.split('\n')))
+        })
+        .collect();
+}
+
+/// A drawing as the Scenarios name it: the kind of thing drawn, never its copy.
+fn drawn_as(world: &VardeWorld, line: usize) -> &'static str {
+    use varde::conflict::Drawn;
+    match varde::conflict::drawn(&world.state, line) {
+        None => "text",
+        Some(Drawn::Current) => "current",
+        Some(Drawn::Ancestor) => "ancestor",
+        Some(Drawn::Incoming) => "incoming",
+        Some(Drawn::Bar(pieces)) if pieces.is_empty() => "separator",
+        Some(Drawn::Bar(pieces)) if pieces.iter().any(|(_, side)| side.is_some()) => "buttons",
+        Some(Drawn::Bar(_)) => "bar",
+    }
+}
+
+#[then("the editor draws the lines as:")]
+fn editor_draws_lines(world: &mut VardeWorld, step: &Step) {
+    for row in step.table().expect("table").rows.iter().skip(1) {
+        let line: usize = row[0].trim().parse().expect("a line");
+        assert_eq!(drawn_as(world, line), row[1].trim(), "line {line}");
+    }
+}
+
+#[then(expr = "the editor draws line {int} as {string}")]
+fn editor_draws_line(world: &mut VardeWorld, line: usize, drawn: String) {
+    assert_eq!(drawn_as(world, line), drawn);
+}
+
+#[then(expr = "the Conflict at line {int} is between {string} and {string}")]
+fn conflict_between(world: &mut VardeWorld, line: usize, current: String, incoming: String) {
+    let conflict = current_buffer(world)
+        .conflicts()
+        .iter()
+        .find(|conflict| conflict.start == line)
+        .expect("a Conflict there")
+        .clone();
+    assert_eq!((conflict.current, conflict.incoming), (current, incoming));
+}
+
+#[then(expr = "the buffer holds {string}")]
+fn buffer_holds_inline(world: &mut VardeWorld, text: String) {
+    assert_eq!(current_buffer(world).shown(), text.replace("\\n", "\n"));
+}
+
+/// On the button's first column, through the hit-test: the pieces are laid
+/// from where the text starts, and the bar is the first Conflict's.
+#[when(expr = "I click the {string} button on the Conflict's bar")]
+fn click_conflict_button(world: &mut VardeWorld, side: String) {
+    let side = match side.as_str() {
+        "current" => varde::conflict::Side::Current,
+        "incoming" => varde::conflict::Side::Incoming,
+        "both" => varde::conflict::Side::Both,
+        other => panic!("no such side: {other}"),
+    };
+    let line = current_buffer(world).conflicts()[0].start;
+    let Some(varde::conflict::Drawn::Bar(pieces)) = varde::conflict::drawn(&world.state, line)
+    else {
+        panic!("line {line} is not drawn as a bar");
+    };
+    let column = 1 + pieces
+        .iter()
+        .take_while(|(_, button)| *button != Some(side))
+        .map(|(piece, _)| piece.chars().count())
+        .sum::<usize>();
+    let (x, y) = pointer_at(&world.state, &world.panes(), Pane::Editor, (line, column));
+    world.report(mouse::Kind::LeftDown, x, y);
+    world.report(mouse::Kind::LeftUp, x, y);
+}
+
+#[given("the Conflict list is shown")]
+#[when("I show the Conflict list")]
+fn conflict_list_is_shown(world: &mut VardeWorld) {
+    if world.state.corner != layout::Corner::Conflicts {
+        world.send(Event::ToggleConflictList);
+    }
+    assert_eq!(world.state.focus, Pane::Conflicts);
+}
+
+#[then("the Corner holds the Conflict list")]
+fn corner_holds_conflict_list(world: &mut VardeWorld) {
+    assert_eq!(world.state.corner, layout::Corner::Conflicts);
+}
+
+/// With a header row: a file row has no line.
+#[then("the Conflict list rows are:")]
+fn conflict_list_rows(world: &mut VardeWorld, step: &Step) {
+    let expected: Vec<(String, Option<usize>)> = step
+        .table()
+        .expect("table")
+        .rows
+        .iter()
+        .skip(1)
+        .map(|row| {
+            let line = match row[1].trim() {
+                "" => None,
+                line => Some(line.parse().expect("a line")),
+            };
+            (row[0].trim().to_string(), line)
+        })
+        .collect();
+    let listed: Vec<(String, Option<usize>)> = varde::conflict::listed(&world.state)
+        .into_iter()
+        .map(|(path, conflict)| {
+            (
+                varde::relative(&world.state, &path),
+                conflict.map(|conflict| conflict.start),
+            )
+        })
+        .collect();
+    assert_eq!(listed, expected);
+}
+
+/// The index of the row naming a file's Conflict at a line, or the file's own.
+fn conflict_row(world: &VardeWorld, file: &str, line: Option<usize>) -> usize {
+    let path = abs(world, file);
+    varde::conflict::listed(&world.state)
+        .iter()
+        .position(|(at, conflict)| *at == path && conflict.map(|conflict| conflict.start) == line)
+        .unwrap_or_else(|| panic!("no row for {file} {line:?}"))
+}
+
+/// Moved to with the keyboard, the way a reader gets there.
+fn select_conflict_row(world: &mut VardeWorld, index: usize) {
+    world.state.focus = Pane::Conflicts;
+    while world.state.conflicts_selection > index {
+        world.send(Event::Key('k'));
+    }
+    while world.state.conflicts_selection < index {
+        world.send(Event::Key('j'));
+    }
+}
+
+#[given(expr = "the Conflict list selection is on {string} line {int}")]
+fn conflict_selection_on(world: &mut VardeWorld, file: String, line: usize) {
+    let index = conflict_row(world, &file, Some(line));
+    select_conflict_row(world, index);
+}
+
+#[given(expr = "the Conflict list selection is on the row for {string}")]
+fn conflict_selection_on_file(world: &mut VardeWorld, file: String) {
+    let index = conflict_row(world, &file, None);
+    select_conflict_row(world, index);
+}
+
+#[then(expr = "the Conflict list selection is on {string} line {int}")]
+fn conflict_selection_should_be_on(world: &mut VardeWorld, file: String, line: usize) {
+    assert_eq!(
+        world.state.conflicts_selection,
+        conflict_row(world, &file, Some(line))
+    );
+}
+
+/// Through the hit-test, a press and a release on the row's text.
+#[when(expr = "I click the Conflict list row for {string} line {int}")]
+fn click_conflict_row(world: &mut VardeWorld, file: String, line: usize) {
+    let index = conflict_row(world, &file, Some(line));
+    let corner = world.panes().corner;
+    let row = corner.y + 1 + (index - world.state.conflicts_scroll) as u16;
+    world.report(mouse::Kind::LeftDown, corner.x + 2, row);
+    world.report(mouse::Kind::LeftUp, corner.x + 2, row);
 }

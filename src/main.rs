@@ -321,7 +321,11 @@ fn git_status(root: &Path) -> Option<Vec<GitFile>> {
             .filter_map(|entry| {
                 let path = entry.path().ok()?.to_string();
                 let flags = entry.status();
-                let status = if flags.is_wt_new() {
+                // First: an unmerged file is also modified in the index and
+                // the tree, and what it needs is resolving.
+                let status = if flags.is_conflicted() {
+                    GitStatus::Conflicted
+                } else if flags.is_wt_new() {
                     GitStatus::Untracked
                 } else if flags.is_index_new() || flags.is_index_modified() {
                     GitStatus::Staged
@@ -334,6 +338,21 @@ fn git_status(root: &Path) -> Option<Vec<GitFile>> {
             })
             .collect(),
     )
+}
+
+/// The Conflicts in each unmerged file's text as it is on disk. A file that
+/// cannot be read as text is left out rather than read as having none, which
+/// would tick it resolved: a binary file's Conflict is not one Varde can draw.
+fn unmerged(root: &Path, files: &[GitFile]) -> BTreeMap<PathBuf, Vec<varde::conflict::Conflict>> {
+    files
+        .iter()
+        .filter(|file| file.status == GitStatus::Conflicted)
+        .filter_map(|file| {
+            let path = root.join(&file.path);
+            let text = std::fs::read_to_string(&path).ok()?;
+            Some((path, varde::conflict::find(text.split('\n'))))
+        })
+        .collect()
 }
 
 /// The hunks the range under the spine is made of, at Varde's pinned diff
@@ -628,6 +647,9 @@ struct Edge {
     /// two widths is two different answers. "Never parse per frame" is sharper
     /// here than for tokens — a diagram is routed, not merely scanned.
     previewed: (PathBuf, u64, usize, Vec<varde::preview::Row>),
+    /// The debug panes' code by its text, and the Paused file name it was
+    /// coloured in: [`cache_code`].
+    code: (String, ui::Code),
     faint: ratatui::style::Style,
     /// A query waiting for typing to settle.
     pending_search: Option<(String, Instant)>,
@@ -766,6 +788,8 @@ struct Edge {
 /// a walk without opening the repository on the main loop.
 struct Polled {
     repo: Option<Vec<GitFile>>,
+    /// The Conflicts in each file `repo` names unmerged, read off the disk.
+    conflicts: BTreeMap<PathBuf, Vec<varde::conflict::Conflict>>,
     file_hunks: Arc<[story::FileHunks]>,
     ignored: BTreeSet<PathBuf>,
     branch: Option<String>,
@@ -895,6 +919,7 @@ fn run(
         trace_committed: None,
         diff_sides: (Vec::new(), Vec::new()),
         previewed: (PathBuf::new(), u64::MAX, 0, Vec::new()),
+        code: (String::new(), ui::Code::new()),
         faint: ui::faint(palette),
         pending_search: None,
         candidates_due: None,
@@ -1026,6 +1051,7 @@ fn run(
             continue;
         }
         dirty = false;
+        cache_code(&state, &mut edge);
         render(&mut terminal, &state, &mut edge)?;
     };
 
@@ -1594,11 +1620,13 @@ fn refresh_git(
             || answer.ignored != state.ignored
             || answer.branch != state.branch
             || answer.committed != state.committed
+            || answer.conflicts != state.conflicts_on_disk
             || fresh_authorship != state.authorship;
         state.repo = answer.repo;
         state.file_hunks = answer.file_hunks;
         state.ignored = answer.ignored;
         state.committed = answer.committed;
+        state.conflicts_on_disk = answer.conflicts;
         state.authorship = fresh_authorship;
         // A commit that moved is what makes the figure worth recomputing, so the
         // core is told on the same poll rather than remembering the commit it
@@ -1658,8 +1686,10 @@ fn refresh_git(
         // they are compared here and an unchanged read hands back the very
         // `Arc` the core holds: the loop tells the two apart by pointer.
         let fresh = file_hunks(&repo, inventory, &named);
+        let status = git_status(&root);
         let _ = answer.send(Polled {
-            repo: git_status(&root),
+            conflicts: unmerged(&root, status.as_deref().unwrap_or_default()),
+            repo: status,
             file_hunks: if *fresh == *told { told } else { fresh.into() },
             ignored: ignored(&root, &contents),
             branch: head_branch(&repo),
@@ -1949,6 +1979,29 @@ fn cache_preview(state: &State, edge: &mut Edge) {
     }
 }
 
+/// Colour each of the debug panes' texts once, when it arrives — a pause, an
+/// opened row, a finished run, an edit to the Snippet — and keep only the
+/// ones still on screen. Short texts, so on the loop. Before a frame rather
+/// than every pass of the loop: asking which texts are shown is not free.
+fn cache_code(state: &State, edge: &mut Edge) {
+    let language = varde::debug::paused_in(state);
+    if edge.code.0 != language {
+        edge.code = (language, ui::Code::new());
+    }
+    let mut kept = ui::Code::new();
+    for text in varde::debug::code(state) {
+        if let std::collections::hash_map::Entry::Vacant(entry) = kept.entry(text) {
+            let tokens = edge
+                .code
+                .1
+                .remove(entry.key())
+                .unwrap_or_else(|| varde::highlight::highlight(&edge.code.0, entry.key()));
+            entry.insert(tokens);
+        }
+    }
+    edge.code.1 = kept;
+}
+
 fn render(terminal: &mut Screen, state: &State, edge: &mut Edge) -> Result<()> {
     let rows = tree::visible_rows(state);
     terminal.draw(|frame| {
@@ -1980,6 +2033,7 @@ fn render(terminal: &mut Screen, state: &State, edge: &mut Edge) -> Result<()> {
                 diff_new: &edge.diff_sides.0,
                 diff_old: &edge.diff_sides.1,
                 preview: &edge.previewed.3,
+                code: &edge.code.1,
                 faint: edge.faint,
             },
         );
@@ -2857,7 +2911,10 @@ fn grid_lines(edge: &Edge, pane: Pane, split: usize, upto: usize) -> Option<Vec<
         | Pane::History
         | Pane::Breakpoints
         | Pane::Frames
-        | Pane::Variables => return None,
+        | Pane::Diagnostics
+        | Pane::Conflicts
+        | Pane::Variables
+        | Pane::Cheatsheet => return None,
     };
     let (rows, columns) = screen.size();
     // Absolutely indexed from the grid's first row, because that is what the
@@ -2973,7 +3030,10 @@ fn perform_terminal(effect: Effect, split: usize, edge: &mut Edge) -> Option<Eff
             | Pane::History
             | Pane::Breakpoints
             | Pane::Frames
-            | Pane::Variables => {}
+            | Pane::Diagnostics
+            | Pane::Conflicts
+            | Pane::Variables
+            | Pane::Cheatsheet => {}
         },
         other => return Some(other),
     }
@@ -4468,6 +4528,11 @@ fn diff_lines(root: &Path, path: &Path) -> Diff {
 /// Gate and "the loop gave up" is the report nobody can act on.
 const NOTICES: &[(&str, &str, ui::Tone)] = &[
     (
+        "broken-config",
+        "Config not applied — still running on the last one that worked",
+        ui::Tone::Warning,
+    ),
+    (
         "checkout-failed",
         "Could not check that branch out — you are still on the branch you were on",
         ui::Tone::Warning,
@@ -4780,10 +4845,41 @@ fn collect_watch_events(
 ) {
     let git_dir = state.root.join(".git");
     let stories_dir = varde_dir(&state.root, state.sidecar.as_deref()).join("stories");
+    let global = state.varde_home.join(startup::CONFIG_FILE);
+    let project = varde_dir(&state.root, state.sidecar.as_deref()).join(startup::CONFIG_FILE);
+    let mut edited = false;
     while let Ok(Ok(event)) = receiver.try_recv() {
         let notify::Event { kind, paths, .. } = event;
         for path in paths {
+            // Not `Access`: inotify reports an open, and reading the layers
+            // below opens them — counting it would reload once per batch forever.
+            edited |= !matches!(kind, notify::EventKind::Access(_))
+                && (path == global || path == project);
+            // `~/.varde` is watched for its config alone: nothing else in it
+            // is the workspace's.
+            if path.parent() == Some(state.varde_home.as_path()) && !path.starts_with(&state.root) {
+                continue;
+            }
             watched_path(&kind, path, state, &git_dir, &stories_dir, queue);
+        }
+    }
+    // Both layers, once per batch however many events a save made: the merge
+    // needs the one that did not change as much as the one that did.
+    if edited {
+        queue.push_back(Event::ConfigEdited {
+            global: on_disk(&global),
+            project: on_disk(&project),
+        });
+    }
+}
+
+fn on_disk(path: &Path) -> startup::OnDisk {
+    match std::fs::read_to_string(path) {
+        Ok(text) => startup::OnDisk::Text(text),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => startup::OnDisk::Missing,
+        Err(error) => {
+            eprintln!("varde: cannot read {}: {error}", path.display());
+            startup::OnDisk::Unreadable
         }
     }
 }
