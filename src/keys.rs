@@ -1424,6 +1424,8 @@ fn filter_box(drafts: &mut Drafts, event: KeyEvent) -> Vec<Event> {
             drafts.filter = None;
             vec![Event::AcceptFilter]
         }
+        KeyCode::Down => vec![Event::StepFilter(Direction::Down)],
+        KeyCode::Up => vec![Event::StepFilter(Direction::Up)],
         KeyCode::Backspace => {
             let draft = drafts.filter.as_mut().expect("open");
             draft.pop();
@@ -2250,6 +2252,24 @@ mod tests {
             Some("n"),
             "not a new-file shortcut"
         );
+    }
+
+    #[test]
+    fn the_arrows_step_through_the_filter_and_leave_the_box_open() {
+        let mut drafts = Drafts::default();
+        let state = focused(Pane::Tree);
+        on_key_event(&state, &mut drafts, plain('/'), 0);
+        on_key_event(&state, &mut drafts, plain('n'), 0);
+        for (code, direction) in [
+            (KeyCode::Down, Direction::Down),
+            (KeyCode::Up, Direction::Up),
+        ] {
+            assert_eq!(
+                on_key_event(&state, &mut drafts, KeyEvent::new(code), 0),
+                vec![Event::StepFilter(direction)]
+            );
+        }
+        assert_eq!(drafts.filter.as_deref(), Some("n"));
     }
 
     #[test]

@@ -53,6 +53,13 @@ fn changed_files(state: &State) -> Vec<Row> {
         .collect()
 }
 
+pub fn highlighted(state: &State) -> Option<PathBuf> {
+    match state.filter.is_empty() {
+        true => state.tree_selection.clone(),
+        false => filter::chosen(state).map(|path| state.root.join(path)),
+    }
+}
+
 pub fn filter_rows(view: View) -> usize {
     match view {
         View::Edit => 2,
