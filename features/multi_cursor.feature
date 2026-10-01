@@ -142,6 +142,54 @@ Feature: Editing every occurrence of a word at once
       ab and ab
       """
 
+  Scenario: Backspace removes every occurrence picked
+    Given "src/tree.js" is open in the editor holding:
+      """
+      one two
+      three one
+      """
+    And I press "W" in the editor
+    And I press "Ctrl+d" in the editor
+    When I press Backspace in the editor
+    Then the buffer holds:
+      """
+       two
+      three 
+      """
+    And the cursor is at line 1 column 1
+    And the selection holds nothing
+
+  Scenario: Every cursor moves with what Backspace removed
+    Given "src/tree.js" is open in the editor holding:
+      """
+      one and one
+      """
+    And I press "W" in the editor
+    And I press "Ctrl+d" in the editor
+    And I type "xy" in the editor
+    And I press Backspace in the editor
+    When I type "z" in the editor
+    Then the buffer holds:
+      """
+      xz and xz
+      """
+
+  Scenario: A cursor at the start of its line erases nothing
+    Given "src/tree.js" is open in the editor holding:
+      """
+      one x
+      z one
+      """
+    And I press "W" in the editor
+    And I press "Ctrl+d" in the editor
+    And I press Backspace in the editor
+    When I press Backspace in the editor
+    Then the buffer holds:
+      """
+       x
+      z
+      """
+
   Scenario: Taking occurrences while inserting needs no mode key first
     Given "src/tree.js" is open in the editor holding:
       """

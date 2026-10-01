@@ -64,6 +64,38 @@ Feature: More of vim
       one two three
       """
 
+  Scenario: Alt with an arrow stops after the last word of a line
+    Given "src/words.js" is open in the editor holding:
+      """
+      one two
+      three
+      """
+    And I press "wi" in the editor
+    When I hold alt and press the Right arrow in the editor
+    Then the cursor is at line 1 column 8
+
+  Scenario: From the end of a line Alt with an arrow goes on to the next
+    Given "src/words.js" is open in the editor holding:
+      """
+      one two
+      three
+      """
+    And I press "wi" in the editor
+    And I hold alt and press the Right arrow in the editor
+    When I hold alt and press the Right arrow in the editor
+    Then the cursor is at line 2 column 1
+
+  Scenario: In normal mode Alt with an arrow leaves the last word's end for the next line
+    Given "src/words.js" is open in the editor holding:
+      """
+      one two
+      three
+      """
+    And I press "w" in the editor
+    And I hold alt and press the Right arrow in the editor
+    When I hold alt and press the Right arrow in the editor
+    Then the cursor is at line 2 column 1
+
   Scenario: Alt with the back arrow moves by word while inserting
     Given "src/words.js" is open in the editor holding:
       """

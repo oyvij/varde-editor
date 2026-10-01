@@ -6421,6 +6421,7 @@ fn extend_selection_times(world: &mut VardeWorld, direction: String, times: usiz
     }
 }
 
+#[given(expr = "I press Backspace in the editor")]
 #[when(expr = "I press Backspace in the editor")]
 fn press_backspace(world: &mut VardeWorld) {
     world.send(Event::EditorBackspace);
