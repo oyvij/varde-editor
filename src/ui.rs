@@ -2895,16 +2895,13 @@ fn replace_box(frame: &mut Frame, state: &State, editor: Area) {
         ),
         area,
     );
-    frame.render_widget(
-        Span::styled(
-            varde::FIND_ICONS[0].1,
-            match find.case.exact(find.query.shown()) {
-                true => Style::default().fg(Color::Yellow),
-                false => Style::default().fg(Color::DarkGray),
-            },
-        ),
-        rect(layout::replace_case(spot)),
-    );
+    for (icon, label, at) in layout::replace_toggles(spot) {
+        let style = match find.lit(icon) {
+            true => Style::default().fg(Color::Yellow),
+            false => Style::default().fg(Color::DarkGray),
+        };
+        frame.render_widget(Span::styled(label, style), rect(at));
+    }
     for ((at, label), (_, spot)) in varde::REPLACE_BUTTONS
         .iter()
         .zip(layout::replace_buttons(spot))
@@ -3171,10 +3168,9 @@ fn command_line(state: &State, command: Option<&str>) -> Line<'static> {
     let Some(find) = state.find.as_ref() else {
         return Line::default();
     };
-    let lit = find.case.exact(find.query.shown());
     let pieces = varde::find_line(state).into_iter().map(|(text, icon)| {
         let style = match icon {
-            Some(varde::FindIcon::Case) if !lit => Style::default().fg(Color::DarkGray),
+            Some(icon) if !find.lit(icon) => Style::default().fg(Color::DarkGray),
             _ => yellow,
         };
         match (icon, find.keys) {
@@ -4228,6 +4224,7 @@ mod tests {
             query: varde::editor::Buffer::text_box("step"),
             origin: varde::Place { line: 1, column: 1 },
             case: varde::search::Case::Smart,
+            extent: varde::search::Extent::Anywhere,
             keys: varde::FindKeys::Away,
         });
         state.diagnostics.insert(
@@ -4329,6 +4326,7 @@ mod tests {
             query: varde::editor::Buffer::text_box("x"),
             origin: varde::Place { line: 1, column: 1 },
             case: varde::search::Case::Smart,
+            extent: varde::search::Extent::Anywhere,
             keys: varde::FindKeys::Away,
         });
         state

@@ -786,12 +786,7 @@ fn finding(find: &Find, event: KeyEvent) -> Vec<Event> {
                     FIND_ICONS[(at + 1).min(FIND_ICONS.len() - 1)].0,
                 )),
                 KeyCode::Up | KeyCode::Esc => keys(FindKeys::Query),
-                KeyCode::Enter => match icon {
-                    FindIcon::Case => vec![Event::ToggleCase],
-                    FindIcon::Replace | FindIcon::ReplaceAll => {
-                        keys(FindKeys::Replace(ReplaceField::With))
-                    }
-                },
+                KeyCode::Enter => icon.pressed(),
                 _ => vec![],
             }
         }
@@ -2334,6 +2329,7 @@ mod tests {
                 query: crate::editor::Buffer::text_box(query),
                 origin: Place { line: 1, column: 1 },
                 case: crate::search::Case::Smart,
+                extent: crate::search::Extent::Anywhere,
                 keys: FindKeys::Query,
             }),
             ..State::default()
@@ -2368,7 +2364,7 @@ mod tests {
         );
         assert_eq!(press(&typing_a_query("state"), right), icon(FindIcon::Case));
         let on_case = with_find_keys(FindKeys::Icon(FindIcon::Case));
-        assert_eq!(press(&on_case, right), icon(FindIcon::Replace));
+        assert_eq!(press(&on_case, right), icon(FindIcon::Word));
         assert_eq!(
             press(&on_case, left),
             vec![
@@ -2379,6 +2375,12 @@ mod tests {
         assert_eq!(
             press(&on_case, KeyEvent::new(KeyCode::Enter)),
             vec![Event::ToggleCase]
+        );
+        let on_word = with_find_keys(FindKeys::Icon(FindIcon::Word));
+        assert_eq!(press(&on_word, right), icon(FindIcon::Replace));
+        assert_eq!(
+            press(&on_word, KeyEvent::new(KeyCode::Enter)),
+            vec![Event::ToggleWord]
         );
         let on_last = with_find_keys(FindKeys::Icon(FindIcon::ReplaceAll));
         assert_eq!(press(&on_last, right), icon(FindIcon::ReplaceAll));

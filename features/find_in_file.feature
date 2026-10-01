@@ -16,7 +16,9 @@ Feature: Finding inside the buffer
   Matching is the project searcher's, handed a single file rather than the whole
   workspace, so a lowercase query ignores case and a capital makes it exact —
   one rule, not two — until `[Aa]` is pressed, which then stays where it was put
-  for the rest of this search.
+  for the rest of this search. `[word]` counts a match only where it is a whole
+  word, so `state` stops finding `states` and `restate`; a new search starts
+  with it off.
 
   `[replace]` and `[replace all]` open the replace box. Replacing edits the
   buffer and nothing else: it is written when it is saved, like any other edit.
@@ -243,7 +245,7 @@ Feature: Finding inside the buffer
     And I press the key "Right"
     And I press the key "Right"
     When I press the key "Left"
-    Then the keyboard is on the in-file search's "replace" icon
+    Then the keyboard is on the in-file search's "word" icon
 
   Scenario: Left from the case icon returns to the end of the query
     Given I press "/" in the editor
@@ -299,6 +301,66 @@ Feature: Finding inside the buffer
     And the highlighted matches are:
       | 1 | 4 |
       | 2 | 5 |
+
+  Scenario: Whole word skips a match inside a longer word
+    Given "src/words.rs" is open in the editor holding:
+      """
+      states = restate(state)
+      state_x = state.x
+      """
+    And I press "/" in the editor
+    And I type "state" into the in-file search
+    When I click the "word" icon on the in-file search line
+    Then the word toggle is lit
+    And the highlighted matches are:
+      | 1 | 18 |
+      | 2 | 11 |
+
+  Scenario: Whole word is toggled from the keyboard
+    Given "src/words.rs" is open in the editor holding:
+      """
+      states = restate(state)
+      """
+    And I press "/" in the editor
+    And I type "state" into the in-file search
+    And I press the key "Tab"
+    And I press the key "Right"
+    When I press the key "Enter"
+    Then the word toggle is lit
+    And the highlighted matches are:
+      | 1 | 18 |
+
+  Scenario: Pressing whole word again finds the match inside a longer word
+    Given "src/words.rs" is open in the editor holding:
+      """
+      states = restate(state)
+      """
+    And I press "/" in the editor
+    And I type "state" into the in-file search
+    And I click the "word" icon on the in-file search line
+    When I click the "word" icon on the in-file search line
+    Then the word toggle is dim
+    And the highlighted matches are:
+      | 1 | 1  |
+      | 1 | 12 |
+      | 1 | 18 |
+
+  Scenario: A new search after Escape starts with whole word off
+    Given "src/words.rs" is open in the editor holding:
+      """
+      states = restate(state)
+      """
+    And I press "/" in the editor
+    And I type "state" into the in-file search
+    And I click the "word" icon on the in-file search line
+    And I press the key "Escape"
+    And I press "/" in the editor
+    When I type "state" into the in-file search
+    Then the word toggle is dim
+    And the highlighted matches are:
+      | 1 | 1  |
+      | 1 | 12 |
+      | 1 | 18 |
 
   Scenario: Replace takes the match at the cursor and lands on the next
     Given I press "/" in the editor
@@ -367,6 +429,41 @@ Feature: Finding inside the buffer
       let Upgrade = 1
       fn other(state)
       """
+
+  Scenario: Replace all honours whole word
+    Given "src/words.rs" is open in the editor holding:
+      """
+      states = restate(state)
+      state_x = state.x
+      """
+    And I press "/" in the editor
+    And I type "state" into the in-file search
+    And I press the key "Enter"
+    And I click the "word" icon on the in-file search line
+    And I click the "replace all" icon on the in-file search line
+    And I type "status" into the replace box
+    And I press the key "Tab"
+    And I press the key "Tab"
+    When I press the key "Enter"
+    Then the buffer holds:
+      """
+      states = restate(status)
+      state_x = status.x
+      """
+
+  Scenario: The replace box has its own whole word toggle
+    Given "src/words.rs" is open in the editor holding:
+      """
+      states = restate(state)
+      """
+    And I press "/" in the editor
+    And I type "state" into the in-file search
+    And I press the key "Enter"
+    And I click the "replace" icon on the in-file search line
+    When I click the word toggle in the replace box
+    Then the word toggle is lit
+    And the highlighted matches are:
+      | 1 | 18 |
 
   Scenario: Escape closes the replace box and the search stays on
     Given I press "/" in the editor
