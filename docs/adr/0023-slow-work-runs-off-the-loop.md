@@ -88,6 +88,7 @@ felt first by the user, on the input they happen to have, and a feature's own te
 
 - A feature that reads files, git, a process or the network ships with its work off the loop. The
   code review asks where its work runs, not only what it does.
-- Synchronous effects remain, such as indexing the project, reading stories and branches, and
-  checking out a branch. They move when a measurement or a new feature gives a reason to, and the
-  rule says which way they move.
+- Synchronous effects remain, such as reading stories and branches, and checking out a branch.
+  They move when a measurement or a new feature gives a reason to, and the rule says which way
+  they move. The tree filter's walk and find moved off the loop in #109. Both stream their
+  answer in batches, each tagged with the generation that asked for it.

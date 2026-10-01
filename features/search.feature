@@ -15,8 +15,11 @@ Feature: Searching file contents
   independently: the box covers every pane, so while it is up the wheel is its
   own.
 
-  Files are scanned in alphabetical order, so the same query gives the same
-  results every run rather than whatever order the filesystem offered.
+  The search runs in the background on every core and hits arrive as they are
+  found, so the box never waits for the whole project. They are shown in
+  alphabetical order of file, then line, so the list reads the same however
+  the files happened to be searched. A spinner turns while the search is still
+  running.
 
   The search icon on a folder in the tree opens the same box confined to that
   folder. The scope belongs to the box, not to one query: it survives every
@@ -112,6 +115,20 @@ Feature: Searching file contents
     Given I open search
     When I search for "update(s)"
     Then 1 hits were found
+
+  Scenario: The spinner turns while a search runs
+    Given I open search
+    And searching does not finish yet
+    When I search for "update"
+    Then the search spinner shows
+
+  Scenario: The spinner is gone when the search finishes
+    Given I open search
+    And searching does not finish yet
+    And I search for "update"
+    When the search finishes
+    Then the search spinner is gone
+    And 4 hits were found
 
   Scenario: Moving through the hits
     Given I open search

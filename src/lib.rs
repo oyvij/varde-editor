@@ -419,7 +419,11 @@ pub enum Event {
     ReplaceMatch,
     ReplaceAll,
     SearchQuery(String),
-    Searched(Results),
+    Searched {
+        generation: u64,
+        hits: Vec<search::Hit>,
+        done: bool,
+    },
     MoveHit(Direction),
     MoveHitFile(Direction),
     SelectHit(usize),
@@ -427,7 +431,11 @@ pub enum Event {
     OpenEveryHit,
     CompleteSearch,
     JumpTo(Place),
-    Indexed(Vec<String>),
+    Indexed {
+        walk: u64,
+        files: Vec<String>,
+        done: bool,
+    },
     AcceptFilter,
     BufferOpened {
         path: PathBuf,
@@ -618,6 +626,7 @@ pub struct Search {
     pub results: Results,
     pub selected: usize,
     pub scroll: usize,
+    pub asked: u64,
 }
 
 impl Default for Search {
@@ -628,6 +637,7 @@ impl Default for Search {
             results: Results::default(),
             selected: 0,
             scroll: 0,
+            asked: 0,
         }
     }
 }
@@ -770,12 +780,14 @@ pub enum Effect {
     },
     StopAi,
     ReadDiff(PathBuf),
-    RunSearch(String),
+    RunSearch(search::Request),
     OpenAt {
         path: PathBuf,
         at: Place,
     },
-    IndexProject,
+    IndexProject {
+        walk: u64,
+    },
     ClipboardViaTerminal(String),
     ReadClipboard,
     ReadStories {
@@ -936,7 +948,7 @@ pub struct State {
     pub expanded: BTreeSet<PathBuf>,
     pub ignored: BTreeSet<PathBuf>,
     pub filter: String,
-    pub indexed: Vec<String>,
+    pub index: filter::Index,
     pub buffers: BTreeMap<PathBuf, Buffer>,
     pub current_buffer: Option<PathBuf>,
     pub view_buffers: BTreeMap<View, PathBuf>,
@@ -959,6 +971,7 @@ pub struct State {
     pub cheatsheet_scroll: usize,
     pub system_clipboard: bool,
     pub search: Option<Search>,
+    pub searches_asked: u64,
     pub find: Option<Find>,
     pub replace_with: Buffer,
     pub diff: Option<Vec<DiffLine>>,
@@ -1161,7 +1174,7 @@ impl Default for State {
             expanded: BTreeSet::new(),
             ignored: BTreeSet::new(),
             filter: String::new(),
-            indexed: Vec::new(),
+            index: filter::Index::default(),
             buffers: BTreeMap::new(),
             current_buffer: None,
             view_buffers: BTreeMap::new(),
@@ -1180,6 +1193,7 @@ impl Default for State {
             cheatsheet_scroll: 0,
             system_clipboard: true,
             search: None,
+            searches_asked: 0,
             find: None,
             replace_with: Buffer::text_box(""),
             diff: None,
@@ -1810,7 +1824,7 @@ fn on_query(mut next: State, event: Event, wheeled: bool) -> Answered {
         (Some(search), _) => {
             search.selected = 0;
             search.scroll = 0;
-            vec![Effect::RunSearch(search.query.shown().to_string())]
+            search::ask(&mut next)
         }
         (None, Some((FindKeys::Replace(ReplaceField::With), _))) | (None, None) => vec![],
         (None, Some((_, origin))) => {
@@ -3215,8 +3229,8 @@ fn on_step_buffer(state: &State, mut next: State, event: Event, wheeled: bool) -
             reveal_in_tree(&mut next, &path)
         }
 
-        Event::Indexed(files) => {
-            next.indexed = files;
+        Event::Indexed { walk, files, done } => {
+            filter::indexed(&mut next, walk, files, done);
             vec![]
         }
 
@@ -3424,14 +3438,15 @@ fn on_search_query(state: &State, mut next: State, event: Event, wheeled: bool) 
             search.query = Buffer::text_box(&query);
             search.selected = 0;
             search.scroll = 0;
-            vec![Effect::RunSearch(query)]
+            search::ask(&mut next)
         }
 
-        Event::Searched(results) => {
-            if let Some(search) = next.search.as_mut() {
-                search.selected = search.selected.min(results.hits.len().saturating_sub(1));
-                search.results = results;
-            }
+        Event::Searched {
+            generation,
+            hits,
+            done,
+        } => {
+            search::arrived(&mut next, generation, hits, done);
             vec![]
         }
 
@@ -3519,15 +3534,7 @@ fn on_complete_search(state: &State, mut next: State, event: Event, wheeled: boo
             vec![]
         }
 
-        Event::Filter(text) => {
-            let opening = state.filter.is_empty() && !text.is_empty();
-            next.filter = text;
-            if opening {
-                vec![Effect::IndexProject]
-            } else {
-                vec![]
-            }
-        }
+        Event::Filter(text) => filter::narrow(&mut next, text),
 
         other => return Err((next, other)),
     };
@@ -3537,8 +3544,8 @@ fn on_complete_search(state: &State, mut next: State, event: Event, wheeled: boo
 fn on_accept_filter(state: &State, mut next: State, event: Event, wheeled: bool) -> Answered {
     let effects = match event {
         Event::AcceptFilter => {
-            let best = filter::best(&next);
-            next.filter.clear();
+            let best = filter::best(&next).map(str::to_string);
+            filter::narrow(&mut next, String::new());
             match best {
                 Some(relative) => {
                     next.tree_selection = Some(state.root.join(&relative));
@@ -7089,6 +7096,12 @@ fn word_under_cursor(state: &State) -> Option<String> {
     state.buffers.get(path)?.word_at_cursor()
 }
 
+const SPINNER: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+
+pub fn spinner(tick: u64) -> char {
+    SPINNER[(tick % SPINNER.len() as u64) as usize]
+}
+
 pub fn link(state: &State) -> Option<(usize, usize, usize)> {
     let at = state.link?;
     let buffer = state.buffers.get(state.current_buffer.as_ref()?)?;
@@ -9694,7 +9707,9 @@ mod tests {
         assert!(effects.is_empty(), "moving the caret searched again");
         assert_eq!(home.search.as_ref().unwrap().selected, 2);
         let (typed, effects) = update(&home, Event::EditorKey('u'));
-        assert_eq!(effects, vec![Effect::RunSearch("update".to_string())]);
+        assert!(
+            matches!(effects.as_slice(), [Effect::RunSearch(request)] if request.query == "update")
+        );
         let (end, _) = update(&typed, Event::QueryEnd(Direction::Right));
         let (bracket, _) = update(&end, Event::EditorKey('('));
         assert_eq!(
@@ -10140,7 +10155,7 @@ mod tests {
                             text: "update".to_string(),
                         })
                         .collect(),
-                    truncated: false,
+                    ..Default::default()
                 },
                 ..Search::default()
             }),

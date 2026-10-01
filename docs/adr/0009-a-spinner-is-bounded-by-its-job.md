@@ -72,6 +72,16 @@ step at the end of a buffer lands where the drag already is and nothing is held 
 cannot move. Named here for the reason the Reading is: the rule reads "a job in flight", and a drag
 is no more a job than a player is.
 
+**The tree filter's walk and find stream their answers, and that narrows the progress rule rather
+than breaking it (#109).** Find over tens of thousands of files is slow enough that waiting for
+completion leaves the box empty for the whole search, and the issue asked for hits to appear as they
+are found. What the progress rule turned down was a message per file, each one arguably a frame. The
+edge still sends no such message. It drains whatever a job has produced since the last pass of the
+loop into one `Event::Indexed` or `Event::Searched`, so a job adds at most one event per pass. That
+event is batched with the input like every other, and the frame count is the one the batching rule
+already allows. Both jobs spin while, and only while, they are in flight: the walk until its walker
+is done, and the search until it is done, cut short at the cap, or superseded by a newer query.
+
 **Never parse per frame still holds too, and harder.** The analysis is cached against the commit it
 was computed at, and a save marks the figure stale rather than starting a job. Re-analysing a
 workspace per keystroke-batch is the failure mode this rule was written for, and a figure that churns
