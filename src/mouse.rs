@@ -1652,7 +1652,7 @@ mod tests {
         searching.search = Some(crate::Search {
             results: crate::search::Results {
                 hits: vec![hit("a.rs"), hit("a.rs"), hit("b.rs")],
-                truncated: false,
+                ..Default::default()
             },
             ..crate::Search::default()
         });

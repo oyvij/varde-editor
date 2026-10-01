@@ -445,18 +445,26 @@ mod tests {
 
     #[test]
     fn a_broad_match_over_a_big_project_is_not_quadratic() {
-        let mut state = State {
-            root: PathBuf::from("/w"),
-            filter: "c".to_string(),
-            ..State::default()
-        };
-        state.indexed = (0..40)
+        let files = (0..40)
             .flat_map(|a| {
                 (0..40).flat_map(move |b| {
                     (0..20).map(move |c| format!("pkg{a}/src/mod{b}/component_{c}.tsx"))
                 })
             })
             .collect();
+        let state = State {
+            root: PathBuf::from("/w"),
+            ..State::default()
+        };
+        let (state, _) = crate::update(&state, crate::Event::Filter("c".to_string()));
+        let (state, _) = crate::update(
+            &state,
+            crate::Event::Indexed {
+                walk: state.index.walk,
+                files,
+                done: true,
+            },
+        );
         let started = std::time::Instant::now();
         let rows = visible_rows(&state);
         assert_eq!(rows.len(), 32_000 + 40 + 40 + 1_600);

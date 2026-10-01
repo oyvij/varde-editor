@@ -771,8 +771,6 @@ pub fn job(state: &State) -> Option<(&'static str, &'static str)> {
     })
 }
 
-const FRAMES: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Shown {
     Count(usize),
@@ -816,12 +814,8 @@ pub fn border(state: &State) -> Option<String> {
             Figure::Current(_) | Figure::None => said,
         }
     });
-    let spinning = job(state).map(|(_, caption)| {
-        format!(
-            "{} {caption}",
-            FRAMES[(state.tick % FRAMES.len() as u64) as usize]
-        )
-    });
+    let spinning =
+        job(state).map(|(_, caption)| format!("{} {caption}", crate::spinner(state.tick)));
     match (figure, spinning) {
         (Some(figure), Some(spinning)) => Some(format!("{figure} · {spinning}")),
         (figure, spinning) => figure.or(spinning),
@@ -1020,7 +1014,7 @@ mod tests {
         };
         let _ = analyse(&mut state, Scope::Workspace);
         assert_eq!(job(&state), Some(("workspace-analysis", "measuring Risk")));
-        let frames: Vec<String> = (0..FRAMES.len() as u64 + 1)
+        let frames: Vec<String> = (0..crate::SPINNER.len() as u64 + 1)
             .map(|tick| {
                 state.tick = tick;
                 border(&state).expect("a border while the job runs")
@@ -1031,7 +1025,11 @@ mod tests {
             "a spinner with no caption: {frames:?}"
         );
         assert_ne!(frames[0], frames[1], "the spinner stood still");
-        assert_eq!(frames[0], frames[FRAMES.len()], "the frames do not cycle");
+        assert_eq!(
+            frames[0],
+            frames[crate::SPINNER.len()],
+            "the frames do not cycle"
+        );
     }
 
     #[test]

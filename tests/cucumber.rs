@@ -75,6 +75,8 @@ pub struct VardeWorld {
     ai_stopped: bool,
     project: Vec<(String, String)>,
     indexable: Vec<String>,
+    holding_searches: bool,
+    held_search: Option<varde::search::Request>,
     diffs_read: Vec<PathBuf>,
     screen: Vec<String>,
     ai_screen: Vec<String>,
@@ -788,6 +790,27 @@ impl VardeWorld {
         None
     }
 
+    fn search_finishes(&mut self, request: varde::search::Request) {
+        let disk: Vec<(String, String)> = self
+            .project
+            .iter()
+            .filter(|(name, _)| request.covers(name))
+            .cloned()
+            .collect();
+        let mut hits = varde::search::scan(&request.query, &request.buffers);
+        hits.extend(varde::search::scan(&request.query, &disk));
+        let (state, effects) = update(
+            &self.state,
+            Event::Searched {
+                generation: request.generation,
+                hits,
+                done: true,
+            },
+        );
+        self.state = state;
+        self.apply(effects);
+    }
+
     fn applied_to_files(&mut self, effect: Effect) -> Option<Effect> {
         match effect {
             Effect::Scrolled(pane, direction) => self.scrolled.push((pane, direction)),
@@ -808,20 +831,23 @@ impl VardeWorld {
                     self.apply(effects);
                 }
             }
-            Effect::IndexProject => {
+            Effect::IndexProject { walk } => {
                 let files = self.indexable.clone();
-                let (state, effects) = update(&self.state, Event::Indexed(files));
+                let (state, effects) = update(
+                    &self.state,
+                    Event::Indexed {
+                        walk,
+                        files,
+                        done: true,
+                    },
+                );
                 self.state = state;
                 self.apply(effects);
             }
-            Effect::RunSearch(query) => {
-                let disk = self.project.clone();
-                let sources = varde::search::sources(&self.state, disk);
-                let results = varde::search::scan(&query, &sources);
-                let (state, effects) = update(&self.state, Event::Searched(results));
-                self.state = state;
-                self.apply(effects);
-            }
+            Effect::RunSearch(request) => match self.holding_searches {
+                true => self.held_search = Some(request),
+                false => self.search_finishes(request),
+            },
             Effect::OpenAt { path, at } => {
                 self.opened.push(path.clone());
                 let (state, effects) = update(
@@ -5928,8 +5954,7 @@ fn project_contains(world: &mut VardeWorld, step: &Step) {
         .iter()
         .map(|row| row[0].clone())
         .collect();
-    world.indexable = files.clone();
-    world.send(Event::Indexed(files));
+    world.indexable = files;
 }
 
 #[given(expr = "the project gains {string}")]
@@ -5952,7 +5977,7 @@ fn filtered_files_are(world: &mut VardeWorld, step: &Step) {
         .iter()
         .map(|row| row[0].clone())
         .collect();
-    let mut actual = varde::filter::matches(&world.state);
+    let mut actual: Vec<&str> = varde::filter::matches(&world.state).collect();
     let mut sorted = expected.clone();
     actual.sort();
     sorted.sort();
@@ -5961,21 +5986,18 @@ fn filtered_files_are(world: &mut VardeWorld, step: &Step) {
 
 #[then(expr = "the filtered files include {string}")]
 fn filtered_include(world: &mut VardeWorld, path: String) {
-    assert!(varde::filter::matches(&world.state).contains(&path));
+    assert!(varde::filter::matches(&world.state).any(|found| found == path));
 }
 
 #[then(expr = "the filtered files are empty")]
 fn filtered_empty(world: &mut VardeWorld) {
-    assert!(varde::filter::matches(&world.state).is_empty());
+    assert_eq!(varde::filter::matches(&world.state).next(), None);
 }
 
 #[then(expr = "the best match is {string}")]
 #[then(expr = "the completion is {string}")]
 fn best_match_is(world: &mut VardeWorld, path: String) {
-    assert_eq!(
-        varde::filter::best(&world.state).as_deref(),
-        Some(path.as_str())
-    );
+    assert_eq!(varde::filter::best(&world.state), Some(path.as_str()));
 }
 
 #[then(expr = "the row {string} is expanded")]
@@ -6013,8 +6035,27 @@ fn project_holds(world: &mut VardeWorld, step: &Step) {
         .skip(1)
         .map(|row| (row[0].clone(), row[1].replace("\\n", "\n")))
         .collect();
-    let names = world.project.iter().map(|(name, _)| name.clone()).collect();
-    world.send(Event::Indexed(names));
+}
+
+#[given("searching does not finish yet")]
+fn searching_is_held(world: &mut VardeWorld) {
+    world.holding_searches = true;
+}
+
+#[when("the search finishes")]
+fn search_finishes(world: &mut VardeWorld) {
+    let request = world.held_search.take().expect("a search in flight");
+    world.search_finishes(request);
+}
+
+#[then("the search spinner shows")]
+fn search_spinner_shows(world: &mut VardeWorld) {
+    assert!(varde::search::running(&world.state).is_some());
+}
+
+#[then("the search spinner is gone")]
+fn search_spinner_is_gone(world: &mut VardeWorld) {
+    assert_eq!(varde::search::running(&world.state), None);
 }
 
 #[given(expr = "I open search")]

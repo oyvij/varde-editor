@@ -1,4 +1,5 @@
-use crate::{Direction, State};
+use crate::{Direction, Effect, State};
+use std::path::PathBuf;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Hit {
@@ -11,29 +12,154 @@ pub struct Hit {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Results {
     pub hits: Vec<Hit>,
-    pub truncated: bool,
+    pub run: Run,
+    pub generation: u64,
+    pub query: String,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Run {
+    Searching,
+    #[default]
+    Finished,
+    CutShort,
 }
 
 pub const CAP: usize = 500;
 
-pub fn sources(state: &State, disk: Vec<(String, String)>) -> Vec<(String, String)> {
-    let mut sources = disk;
-    for (path, buffer) in &state.buffers {
-        let Ok(relative) = path.strip_prefix(&state.root) else {
-            continue;
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Request {
+    pub generation: u64,
+    pub query: String,
+    pub under: Option<PathBuf>,
+    pub only: Option<Vec<String>>,
+    pub buffers: Vec<(String, String)>,
+}
+
+impl Request {
+    pub fn covers(&self, file: &str) -> bool {
+        !self.buffers.iter().any(|(open, _)| open == file)
+            && self
+                .under
+                .as_ref()
+                .is_none_or(|under| std::path::Path::new(file).starts_with(under))
+            && self
+                .only
+                .as_ref()
+                .is_none_or(|only| only.iter().any(|hit| hit == file))
+    }
+}
+
+pub fn ask(next: &mut State) -> Vec<Effect> {
+    next.searches_asked += 1;
+    let generation = next.searches_asked;
+    let buffers = buffers(next);
+    let Some(search) = next.search.as_mut() else {
+        return Vec::new();
+    };
+    search.asked = generation;
+    let query = search.query.shown().to_string();
+    if query.is_empty() {
+        search.results = Results {
+            generation,
+            ..Results::default()
         };
-        let relative = relative.to_string_lossy().into_owned();
-        let contents = buffer.shown().to_string();
-        match sources.iter_mut().find(|(name, _)| *name == relative) {
-            Some(entry) => entry.1 = contents,
-            None => sources.push((relative, contents)),
-        }
+        return Vec::new();
     }
-    if let Some(scope) = state.search.as_ref().and_then(|s| s.scope.as_ref()) {
-        sources.retain(|(name, _)| std::path::Path::new(name).starts_with(scope));
+    let previous = &search.results;
+    let narrows = previous.run == Run::Finished && extends(&query, &previous.query);
+    vec![Effect::RunSearch(Request {
+        generation,
+        only: narrows.then(|| files(previous)),
+        query,
+        under: search.scope.clone(),
+        buffers,
+    })]
+}
+
+fn extends(query: &str, previous: &str) -> bool {
+    if previous.is_empty() {
+        return false;
     }
-    sources.sort_by(|a, b| a.0.cmp(&b.0));
-    sources
+    match Case::Smart.exact(previous) {
+        true => query.contains(previous),
+        false => query.to_lowercase().contains(previous),
+    }
+}
+
+fn buffers(state: &State) -> Vec<(String, String)> {
+    let scope = state
+        .search
+        .as_ref()
+        .and_then(|search| search.scope.as_ref());
+    state
+        .buffers
+        .iter()
+        .filter_map(|(path, buffer)| {
+            let relative = path.strip_prefix(&state.root).ok()?;
+            scope
+                .is_none_or(|scope| relative.starts_with(scope))
+                .then(|| {
+                    (
+                        relative.to_string_lossy().into_owned(),
+                        buffer.shown().to_string(),
+                    )
+                })
+        })
+        .collect()
+}
+
+pub fn arrived(next: &mut State, generation: u64, hits: Vec<Hit>, done: bool) {
+    let Some(search) = next.search.as_mut() else {
+        return;
+    };
+    if generation != search.asked {
+        return;
+    }
+    if search.results.generation != generation {
+        search.results = Results {
+            generation,
+            query: search.query.shown().to_string(),
+            run: Run::Searching,
+            ..Results::default()
+        };
+        search.selected = 0;
+    }
+    let results = &mut search.results;
+    if results.run != Run::Searching {
+        return;
+    }
+    let held = results
+        .hits
+        .get(search.selected)
+        .map(|hit| (hit.file.clone(), hit.line));
+    results.hits.extend(hits);
+    results
+        .hits
+        .sort_by(|a, b| (&a.file, a.line).cmp(&(&b.file, b.line)));
+    results
+        .hits
+        .dedup_by(|a, b| (&a.file, a.line) == (&b.file, b.line));
+    if results.hits.len() > CAP {
+        results.hits.truncate(CAP);
+        results.run = Run::CutShort;
+    } else if done {
+        results.run = Run::Finished;
+    }
+    search.selected = held
+        .and_then(|(file, line)| {
+            results
+                .hits
+                .iter()
+                .position(|hit| hit.file == file && hit.line == line)
+        })
+        .unwrap_or(search.selected.min(results.hits.len().saturating_sub(1)));
+}
+
+pub fn running(state: &State) -> Option<u64> {
+    let search = state.search.as_ref()?;
+    (search.asked != search.results.generation || search.results.run == Run::Searching)
+        .then_some(search.asked)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,26 +198,27 @@ pub fn occurrences(query: &str, line: &str, case: Case) -> Vec<u32> {
     columns
 }
 
-pub fn scan(query: &str, files: &[(String, String)]) -> Results {
-    let mut results = Results::default();
-    for (path, contents) in files {
-        for (index, line) in contents.split('\n').enumerate() {
-            let Some(&column) = occurrences(query, line, Case::Smart).first() else {
-                continue;
-            };
-            if results.hits.len() == CAP {
-                results.truncated = true;
-                return results;
-            }
-            results.hits.push(Hit {
-                file: path.clone(),
-                line: index as u32 + 1,
-                column,
-                text: line.trim_end().to_string(),
-            });
-        }
-    }
-    results
+pub fn hit(query: &str, file: &str, line: u64, text: &str) -> Option<Hit> {
+    let &column = occurrences(query, text, Case::Smart).first()?;
+    Some(Hit {
+        file: file.to_string(),
+        line: line as u32,
+        column,
+        text: text.trim_end().to_string(),
+    })
+}
+
+pub fn scan(query: &str, files: &[(String, String)]) -> Vec<Hit> {
+    files
+        .iter()
+        .flat_map(|(path, contents)| {
+            contents
+                .split('\n')
+                .enumerate()
+                .filter_map(move |(index, line)| hit(query, path, index as u64 + 1, line))
+        })
+        .take(CAP + 1)
+        .collect()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -175,8 +302,238 @@ pub fn completion(query: &str, results: &Results) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{completion, files, in_next_file, occurrences, rows, scan, Case, Results, Row};
-    use crate::Direction;
+    use super::{
+        completion, files, in_next_file, occurrences, rows, running, scan, Case, Hit, Request,
+        Results, Row,
+    };
+    use crate::{update, Direction, Effect, Event, Search, State};
+    use std::path::PathBuf;
+
+    fn at(file: &str, line: u32) -> Hit {
+        Hit {
+            file: file.to_string(),
+            line,
+            column: 1,
+            text: String::new(),
+        }
+    }
+
+    fn requested(effects: Vec<Effect>) -> Request {
+        match effects.as_slice() {
+            [Effect::RunSearch(request)] => request.clone(),
+            other => panic!("no search was asked for: {other:?}"),
+        }
+    }
+
+    fn typed(state: &State, query: &str) -> (State, Request) {
+        let (state, effects) = update(state, Event::SearchQuery(query.to_string()));
+        (state, requested(effects))
+    }
+
+    fn asked(query: &str) -> (State, u64) {
+        let (state, request) = typed(&State::default(), query);
+        (state, request.generation)
+    }
+
+    fn arrive(state: &State, generation: u64, hits: Vec<Hit>, done: bool) -> State {
+        update(
+            state,
+            Event::Searched {
+                generation,
+                hits,
+                done,
+            },
+        )
+        .0
+    }
+
+    fn shown(state: &State) -> Vec<(&str, u32)> {
+        state
+            .search
+            .as_ref()
+            .unwrap()
+            .results
+            .hits
+            .iter()
+            .map(|hit| (hit.file.as_str(), hit.line))
+            .collect()
+    }
+
+    fn selected(state: &State) -> (&str, u32) {
+        let search = state.search.as_ref().unwrap();
+        let hit = &search.results.hits[search.selected];
+        (hit.file.as_str(), hit.line)
+    }
+
+    #[test]
+    fn hits_arriving_out_of_order_are_shown_by_path_then_line() {
+        let (state, generation) = asked("x");
+        let state = arrive(
+            &state,
+            generation,
+            vec![at("b.rs", 3), at("a.rs", 9)],
+            false,
+        );
+        let state = arrive(
+            &state,
+            generation,
+            vec![at("b.rs", 1), at("a.rs", 2)],
+            false,
+        );
+        assert_eq!(
+            shown(&state),
+            vec![("a.rs", 2), ("a.rs", 9), ("b.rs", 1), ("b.rs", 3)]
+        );
+    }
+
+    #[test]
+    fn the_selection_stays_on_its_hit_as_hits_arrive_above_it() {
+        let (state, generation) = asked("x");
+        let state = arrive(
+            &state,
+            generation,
+            vec![at("m.rs", 1), at("m.rs", 5)],
+            false,
+        );
+        let state = update(&state, Event::MoveHit(Direction::Down)).0;
+        assert_eq!(selected(&state), ("m.rs", 5));
+        let state = arrive(
+            &state,
+            generation,
+            vec![at("a.rs", 1), at("b.rs", 1)],
+            false,
+        );
+        assert_eq!(
+            selected(&state),
+            ("m.rs", 5),
+            "the selection slid off its hit"
+        );
+        assert_eq!(state.search.as_ref().unwrap().selected, 3);
+    }
+
+    #[test]
+    fn the_same_hit_arriving_twice_is_shown_once() {
+        let (state, generation) = asked("x");
+        let state = arrive(&state, generation, vec![at("a.rs", 1)], false);
+        let state = arrive(&state, generation, vec![at("a.rs", 1), at("a.rs", 1)], true);
+        assert_eq!(shown(&state), vec![("a.rs", 1)]);
+    }
+
+    #[test]
+    fn hits_from_an_older_search_are_dropped() {
+        let (first, old) = asked("x");
+        let (second, request) = typed(&first, "y");
+        assert!(request.generation > old);
+        let late = arrive(&second, old, vec![at("a.rs", 1)], true);
+        assert!(shown(&late).is_empty(), "the older search's hit was shown");
+        assert_eq!(running(&late), Some(request.generation));
+    }
+
+    #[test]
+    fn a_closed_and_reopened_box_does_not_reuse_a_generation() {
+        let (first, old) = asked("x");
+        let closed = update(&first, Event::CloseSearch).0;
+        let reopened = update(&closed, Event::OpenSearch).0;
+        let (_, request) = typed(&reopened, "x");
+        assert_ne!(request.generation, old);
+    }
+
+    #[test]
+    fn the_spinner_turns_until_the_search_is_done() {
+        let (state, generation) = asked("x");
+        assert_eq!(
+            running(&state),
+            Some(generation),
+            "waiting for the first hit"
+        );
+        let state = arrive(&state, generation, vec![at("a.rs", 1)], false);
+        assert_eq!(running(&state), Some(generation), "hits still coming");
+        let state = arrive(&state, generation, vec![], true);
+        assert_eq!(running(&state), None);
+    }
+
+    #[test]
+    fn an_open_buffer_is_searched_in_place_of_its_file() {
+        let root = PathBuf::from("/w");
+        let mut buffers = std::collections::BTreeMap::new();
+        buffers.insert(
+            root.join("a.rs"),
+            crate::editor::Buffer::text_box("let x = 1"),
+        );
+        let state = State {
+            root,
+            buffers,
+            search: Some(Search::default()),
+            ..State::default()
+        };
+        let (_, request) = typed(&state, "x");
+        assert_eq!(
+            request.buffers,
+            vec![("a.rs".to_string(), "let x = 1".to_string())]
+        );
+        assert!(!request.covers("a.rs"), "the file on disk was searched too");
+        assert!(request.covers("b.rs"));
+    }
+
+    #[test]
+    fn a_request_covers_only_its_folder_and_the_files_it_narrowed_to() {
+        let request = Request {
+            generation: 1,
+            query: "x".to_string(),
+            under: Some(PathBuf::from("src")),
+            only: Some(vec!["src/a.rs".to_string(), "docs/a.md".to_string()]),
+            buffers: Vec::new(),
+        };
+        assert!(request.covers("src/a.rs"));
+        assert!(!request.covers("src/b.rs"), "a file the last query missed");
+        assert!(!request.covers("docs/a.md"), "a file outside the folder");
+    }
+
+    #[test]
+    fn an_extended_query_searches_only_the_files_it_hit() {
+        let (state, generation) = asked("upd");
+        let state = arrive(&state, generation, vec![at("a.rs", 1), at("c.rs", 4)], true);
+        let (_, request) = typed(&state, "update");
+        assert_eq!(
+            request.only,
+            Some(vec!["a.rs".to_string(), "c.rs".to_string()])
+        );
+    }
+
+    #[test]
+    fn a_cut_short_search_is_not_narrowed() {
+        let (state, generation) = asked("x");
+        let many = (1..=super::CAP as u32 + 1)
+            .map(|line| at("a.rs", line))
+            .collect();
+        let state = arrive(&state, generation, many, false);
+        assert_eq!(typed(&state, "xy").1.only, None);
+    }
+
+    #[test]
+    fn an_unfinished_search_is_not_narrowed() {
+        let (state, generation) = asked("x");
+        let state = arrive(&state, generation, vec![at("a.rs", 1)], false);
+        assert_eq!(typed(&state, "xy").1.only, None);
+    }
+
+    #[test]
+    fn a_query_that_is_not_an_extension_searches_everything() {
+        let (state, generation) = asked("update");
+        let state = arrive(&state, generation, vec![at("a.rs", 1)], true);
+        assert_eq!(typed(&state, "upd").1.only, None, "a shorter query");
+        assert!(
+            typed(&state, "Update").1.only.is_some(),
+            "every Update is an update"
+        );
+        let (state, generation) = asked("Upd");
+        let state = arrive(&state, generation, vec![at("a.rs", 1)], true);
+        assert_eq!(
+            typed(&state, "update").1.only,
+            None,
+            "a capital narrowed nothing case-insensitive"
+        );
+    }
 
     fn corpus() -> Vec<(String, String)> {
         vec![
@@ -190,29 +547,29 @@ mod tests {
 
     #[test]
     fn a_lowercase_query_ignores_case() {
-        assert_eq!(scan("update", &corpus()).hits.len(), 2);
+        assert_eq!(scan("update", &corpus()).len(), 2);
     }
 
     #[test]
     fn a_capital_makes_it_exact() {
-        let hits = scan("Update", &corpus()).hits;
+        let hits = scan("Update", &corpus());
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].line, 2);
     }
 
     #[test]
     fn punctuation_is_literal() {
-        assert_eq!(scan("update(x)", &corpus()).hits.len(), 1);
+        assert_eq!(scan("update(x)", &corpus()).len(), 1);
     }
 
     #[test]
     fn an_empty_query_matches_nothing() {
-        assert!(scan("", &corpus()).hits.is_empty());
+        assert!(scan("", &corpus()).is_empty());
     }
 
     #[test]
     fn a_hit_names_where_in_the_line_the_match_starts() {
-        let hits = scan("update", &corpus()).hits;
+        let hits = scan("update", &corpus());
         assert_eq!((hits[0].line, hits[0].column), (1, 4));
         assert_eq!((hits[1].line, hits[1].column), (2, 5));
     }
@@ -244,32 +601,42 @@ mod tests {
     #[test]
     fn one_line_matching_twice_is_one_hit() {
         let files = vec![("a.rs".to_string(), "state and state".to_string())];
-        let hits = scan("state", &files).hits;
+        let hits = scan("state", &files);
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].column, 1);
     }
 
     #[test]
     fn lines_are_numbered_from_one() {
-        assert_eq!(scan("fn", &corpus()).hits[0].line, 1);
+        assert_eq!(scan("fn", &corpus())[0].line, 1);
     }
 
     #[test]
     fn the_cap_is_reported_rather_than_hidden() {
         let many = vec![("big.rs".to_string(), "x\n".repeat(super::CAP + 50))];
-        let results = scan("x", &many);
+        let (state, generation) = asked("x");
+        let state = arrive(&state, generation, scan("x", &many), false);
+        let results = &state.search.as_ref().unwrap().results;
         assert_eq!(results.hits.len(), super::CAP);
-        assert!(results.truncated, "a silent subset is worse than a count");
+        assert_eq!(
+            results.run,
+            super::Run::CutShort,
+            "a silent subset is worse than a count"
+        );
+        assert_eq!(running(&state), None, "the search went on past the cap");
     }
 
     fn grouped() -> Results {
-        scan(
-            "update",
-            &[
-                ("a.rs".to_string(), "update\nupdate".to_string()),
-                ("b.rs".to_string(), "update".to_string()),
-            ],
-        )
+        Results {
+            hits: scan(
+                "update",
+                &[
+                    ("a.rs".to_string(), "update\nupdate".to_string()),
+                    ("b.rs".to_string(), "update".to_string()),
+                ],
+            ),
+            ..Results::default()
+        }
     }
 
     #[test]
@@ -309,7 +676,10 @@ mod tests {
 
     #[test]
     fn files_keep_the_order_they_first_appear() {
-        let results = scan("fn", &corpus());
+        let results = Results {
+            hits: scan("fn", &corpus()),
+            ..Results::default()
+        };
         assert_eq!(files(&results), vec!["a.rs".to_string()]);
     }
 
@@ -330,7 +700,7 @@ mod tests {
                     text: "updated".into(),
                 },
             ],
-            truncated: false,
+            ..Default::default()
         };
         assert_eq!(completion("upda", &results).as_deref(), Some("update"));
     }
@@ -352,7 +722,7 @@ mod tests {
                     text: "update".into(),
                 },
             ],
-            truncated: false,
+            ..Default::default()
         };
         assert_eq!(completion("upda", &results).as_deref(), Some("update"));
         assert_eq!(completion("Upda", &results).as_deref(), Some("Update"));
@@ -367,7 +737,7 @@ mod tests {
                 column: 1,
                 text: "update".into(),
             }],
-            truncated: false,
+            ..Default::default()
         };
         assert_eq!(completion("update", &results), None);
     }

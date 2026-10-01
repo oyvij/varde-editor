@@ -17,8 +17,11 @@ Feature: Filtering the file tree
   the tree and opens nothing: narrowing the tree is looking for a file, and
   what to do with it once found is the reader's to say.
 
-  Each filter walks the project afresh. A file created since the last one is a
-  file the filter has to find.
+  Opening the filter walks the project afresh, in the background, so typing
+  never waits for the walk. Matches appear as the walk finds them. The filter
+  searches the project as it was when the filter opened: a file created since
+  the last filter is a file it has to find, and a file created while it is
+  open waits for the next one.
 
   Background:
     Given the workspace root is "/home/me/projects/varde"
@@ -134,3 +137,9 @@ Feature: Filtering the file tree
     When I filter by "keys"
     Then the filtered files are:
       | src/keys.rs |
+
+  Scenario: A file created while the filter is open waits for the next one
+    Given I filter by "ke"
+    And the project gains "src/keys.rs"
+    When I filter by "keys"
+    Then the filtered files are empty

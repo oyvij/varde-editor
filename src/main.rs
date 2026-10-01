@@ -14,7 +14,7 @@ use crossterm::{execute, terminal};
 use notify::{RecursiveMode, Watcher};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use terminput_crossterm::{to_terminput_key, to_terminput_mouse};
@@ -485,7 +485,9 @@ struct Edge {
     previewed: (PathBuf, u64, usize, Vec<varde::preview::Row>),
     code: (String, ui::Code),
     faint: ratatui::style::Style,
-    pending_search: Option<(String, Instant)>,
+    pending_search: Option<(varde::search::Request, Instant)>,
+    searching: Option<(u64, Receiver<Vec<varde::search::Hit>>, Arc<()>)>,
+    indexing: Option<(u64, Receiver<String>)>,
     candidates_due: Option<Instant>,
     hover_due: Option<Instant>,
     analysed: Sender<(u64, Figures, Option<Figures>)>,
@@ -620,6 +622,8 @@ fn run(
         code: (String::new(), ui::Code::new()),
         faint: ui::faint(palette),
         pending_search: None,
+        searching: None,
+        indexing: None,
         candidates_due: None,
         hover_due: None,
         servers: BTreeMap::new(),
@@ -712,7 +716,8 @@ fn run(
 
         queue_tick(&state, &mut last_tick, &mut queue);
         dirty |= queue_held_drag(&state, &mut edge, &mut last_drag, &mut queue);
-        dirty |= queue_settled_search(&state, &root, &mut edge, &mut queue);
+        dirty |= queue_search(&state, &root, &mut edge, &mut queue);
+        dirty |= queue_index(&state, &mut edge, &mut queue);
         dirty |= queue_due_windows(&mut edge, &mut queue);
         dirty |= drain_panes(&state, &mut edge, &mut queue);
         dirty |= drain_servers(&mut edge, &mut queue);
@@ -765,7 +770,9 @@ fn run(
 }
 
 fn queue_tick(state: &State, last_tick: &mut Instant, queue: &mut VecDeque<Event>) {
-    if state.risk.in_flight() && last_tick.elapsed() >= SPIN {
+    let spinning =
+        state.risk.in_flight() || state.index.walking || varde::search::running(state).is_some();
+    if spinning && last_tick.elapsed() >= SPIN {
         *last_tick = Instant::now();
         queue.push_back(Event::Tick);
     }
@@ -789,21 +796,78 @@ fn queue_held_drag(
     queue.len() != before
 }
 
-fn queue_settled_search(
-    state: &State,
-    root: &Path,
-    edge: &mut Edge,
-    queue: &mut VecDeque<Event>,
-) -> bool {
-    let Some((query, at)) = edge.pending_search.clone() else {
+fn queue_search(state: &State, root: &Path, edge: &mut Edge, queue: &mut VecDeque<Event>) -> bool {
+    let wanted = varde::search::running(state);
+    if edge
+        .pending_search
+        .as_ref()
+        .is_some_and(|(request, _)| Some(request.generation) != wanted)
+    {
+        edge.pending_search = None;
+    }
+    if edge
+        .searching
+        .as_ref()
+        .is_some_and(|(generation, ..)| Some(*generation) != wanted)
+    {
+        edge.searching = None;
+    }
+    if let Some((request, _)) = edge.pending_search.take_if(|(_, at)| Instant::now() >= *at) {
+        let (hits, found) = channel();
+        let root = root.to_path_buf();
+        let wanted = Arc::new(());
+        let still = Arc::downgrade(&wanted);
+        edge.searching = Some((request.generation, found, wanted));
+        std::thread::spawn(move || search_project(&root, &request, &hits, &still));
+    }
+    let Some((generation, found, _)) = edge.searching.as_ref() else {
         return false;
     };
-    if Instant::now() < at {
+    let generation = *generation;
+    let (batches, done) = drained(found);
+    if done {
+        edge.searching = None;
+    }
+    if batches.is_empty() && !done {
         return false;
     }
-    edge.pending_search = None;
-    queue.push_back(Event::Searched(run_search(state, root, &query)));
+    queue.push_back(Event::Searched {
+        generation,
+        hits: batches.into_iter().flatten().collect(),
+        done,
+    });
     true
+}
+
+fn queue_index(state: &State, edge: &mut Edge, queue: &mut VecDeque<Event>) -> bool {
+    let Some((walk, files)) = edge.indexing.as_ref() else {
+        return false;
+    };
+    let walk = *walk;
+    if !state.index.walking || state.index.walk != walk {
+        edge.indexing = None;
+        return false;
+    }
+    let (files, done) = drained(files);
+    if done {
+        edge.indexing = None;
+    }
+    if files.is_empty() && !done {
+        return false;
+    }
+    queue.push_back(Event::Indexed { walk, files, done });
+    true
+}
+
+fn drained<T>(receiver: &Receiver<T>) -> (Vec<T>, bool) {
+    let mut batch = Vec::new();
+    loop {
+        match receiver.try_recv() {
+            Ok(item) => batch.push(item),
+            Err(TryRecvError::Empty) => return (batch, false),
+            Err(TryRecvError::Disconnected) => return (batch, true),
+        }
+    }
 }
 
 fn queue_due_windows(edge: &mut Edge, queue: &mut VecDeque<Event>) -> bool {
@@ -2576,13 +2640,21 @@ fn perform_files(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>) -
 
 fn perform_jobs(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>) {
     match effect {
-        Effect::RunSearch(query) => {
-            edge.pending_search = Some((query, Instant::now() + Duration::from_millis(150)));
+        Effect::RunSearch(request) => {
+            edge.searching = None;
+            edge.pending_search = Some((request, Instant::now() + Duration::from_millis(150)));
         }
-        Effect::IndexProject => {
+        Effect::IndexProject { walk } => {
+            let (files, walked) = channel();
             let root = edge.root.clone();
-            let files = walk(&root);
-            queue.push_back(Event::Indexed(files));
+            edge.indexing = Some((walk, walked));
+            std::thread::spawn(move || {
+                for name in walking(&root) {
+                    if files.send(name).is_err() {
+                        return;
+                    }
+                }
+            });
         }
         Effect::ReadStories { dir, repo } => {
             for name in story_set_names_oldest_first(&dir) {
@@ -3193,20 +3265,29 @@ fn story_range_status(root: &Path, file: &Path) -> story::RangeStatus {
 }
 
 fn walk(root: &Path) -> Vec<String> {
-    ignore::WalkBuilder::new(root)
+    walking(root).collect()
+}
+
+fn project(base: &Path) -> ignore::WalkBuilder {
+    let mut walker = ignore::WalkBuilder::new(base);
+    walker
         .hidden(false)
-        .filter_entry(|entry| entry.file_name() != ".git")
+        .filter_entry(|entry| entry.file_name() != ".git");
+    walker
+}
+
+fn walking(root: &Path) -> impl Iterator<Item = String> + '_ {
+    project(root)
         .build()
         .flatten()
         .filter(|entry| entry.file_type().is_some_and(|kind| kind.is_file()))
-        .filter_map(|entry| {
+        .filter_map(move |entry| {
             entry
                 .path()
                 .strip_prefix(root)
                 .ok()
                 .map(|rest| rest.to_string_lossy().into_owned())
         })
-        .collect()
 }
 
 fn head_commit(root: &Path) -> Option<String> {
@@ -3304,16 +3385,92 @@ fn space(analysed: &rust_code_analysis::FuncSpace) -> Space {
     }
 }
 
-fn run_search(state: &State, root: &Path, query: &str) -> varde::search::Results {
-    let disk = walk(root)
-        .into_iter()
-        .filter_map(|name| {
-            std::fs::read_to_string(root.join(&name))
-                .ok()
-                .map(|contents| (name, contents))
+fn search_project(
+    root: &Path,
+    request: &varde::search::Request,
+    hits: &Sender<Vec<varde::search::Hit>>,
+    wanted: &std::sync::Weak<()>,
+) {
+    use grep_searcher::{BinaryDetection, SearcherBuilder};
+    if hits
+        .send(varde::search::scan(&request.query, &request.buffers))
+        .is_err()
+    {
+        return;
+    }
+    let exact = varde::search::Case::Smart.exact(&request.query);
+    let matcher = match grep_regex::RegexMatcherBuilder::new()
+        .fixed_strings(true)
+        .case_insensitive(!exact)
+        .build(&request.query)
+    {
+        Ok(matcher) => matcher,
+        Err(error) => {
+            eprintln!("varde: cannot search for {:?}: {error}", request.query);
+            return;
+        }
+    };
+    let searcher = SearcherBuilder::new()
+        .binary_detection(BinaryDetection::quit(0))
+        .line_number(true)
+        .build();
+    let search_file = |searcher: &mut grep_searcher::Searcher, path: &Path| -> bool {
+        if wanted.strong_count() == 0 {
+            return false;
+        }
+        let Some(name) = path
+            .strip_prefix(root)
+            .ok()
+            .map(|rest| rest.to_string_lossy())
+        else {
+            return true;
+        };
+        if !request.covers(&name) {
+            return true;
+        }
+        let mut found = Vec::new();
+        let searched = searcher.search_path(
+            &matcher,
+            path,
+            grep_searcher::sinks::Lossy(|number, line| {
+                found.extend(varde::search::hit(&request.query, &name, number, line));
+                Ok(found.len() <= varde::search::CAP)
+            }),
+        );
+        if let Err(error) = searched {
+            eprintln!("varde: cannot read {}: {error}", path.display());
+        }
+        found.is_empty() || hits.send(found).is_ok()
+    };
+    if let Some(only) = &request.only {
+        let mut searcher = searcher;
+        for name in only {
+            if !search_file(&mut searcher, &root.join(name)) {
+                return;
+            }
+        }
+        return;
+    }
+    let base = match &request.under {
+        Some(under) => root.join(under),
+        None => root.to_path_buf(),
+    };
+    project(&base).build_parallel().run(|| {
+        let mut searcher = searcher.clone();
+        let search_file = &search_file;
+        Box::new(move |entry| {
+            let Ok(entry) = entry else {
+                return ignore::WalkState::Continue;
+            };
+            if !entry.file_type().is_some_and(|kind| kind.is_file()) {
+                return ignore::WalkState::Continue;
+            }
+            match search_file(&mut searcher, entry.path()) {
+                true => ignore::WalkState::Continue,
+                false => ignore::WalkState::Quit,
+            }
         })
-        .collect();
-    varde::search::scan(query, &varde::search::sources(state, disk))
+    });
 }
 
 #[derive(Default)]

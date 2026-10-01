@@ -1265,13 +1265,15 @@ fn filter_box(frame: &mut Frame, state: &State, area: Rect, draft: Option<&str>)
     frame.render_widget(Clear, field);
 
     let completion = filter::best(state)
-        .map(|best| best.rsplit('/').next().unwrap_or(&best).to_string())
+        .map(|best| best.rsplit('/').next().unwrap_or(best).to_string())
         .filter(|name| {
             name.to_lowercase().starts_with(&draft.to_lowercase()) && name.len() > draft.len()
         })
         .map(|name| name[draft.len()..].to_string())
         .unwrap_or_default();
-    let hint = if active || !draft.is_empty() {
+    let hint = if state.index.walking {
+        format!(" {}", varde::spinner(state.tick))
+    } else if active || !draft.is_empty() {
         String::new()
     } else {
         "filter files".to_string()
@@ -3765,7 +3767,7 @@ fn search_screen(frame: &mut Frame, state: &State) {
         Some(folder) => format!(" under {}/", folder.display()),
         None => String::new(),
     };
-    let count = if results.truncated {
+    let mut count = if results.run == varde::search::Run::CutShort {
         format!("first {hits} hits — narrow the query{scope}")
     } else {
         format!(
@@ -3774,6 +3776,9 @@ fn search_screen(frame: &mut Frame, state: &State) {
             if files == 1 { "" } else { "s" }
         )
     };
+    if varde::search::running(state).is_some() {
+        count = format!("{} {count}", varde::spinner(state.tick));
+    }
     let query = search.query.shown();
     let completion = varde::search::completion(query, results)
         .map(|word| word[query.len().min(word.len())..].to_string())

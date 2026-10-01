@@ -4093,7 +4093,7 @@ mod tests {
                 query: crate::editor::Buffer::text_box("upd"),
                 results: crate::search::Results {
                     hits: vec![hit("a.rs"), hit("b.rs")],
-                    truncated: false,
+                    ..Default::default()
                 },
                 ..crate::Search::default()
             }),
