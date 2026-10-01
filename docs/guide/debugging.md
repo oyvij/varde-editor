@@ -2,8 +2,8 @@
 
 Varde debugs through the Debug Adapter Protocol: one Debug adapter per language, named in a
 `[dap.<language>]` row rather than in Varde, the way a language server is
-([configuration.md](configuration.md)). A Debug session is laid over Edit view — the editor stays
-editable while the program is Paused.
+([configuration.md](configuration.md)). A Debug session runs on top of Edit view, and you can keep
+editing while the program is Paused.
 
 ## Breakpoints
 
@@ -27,19 +27,19 @@ args = { program = "target/debug/server" }
 arrows pick one and `Enter` starts it. Varde runs the protocol's start sequence and sends your
 Breakpoints before the program runs.
 
-The Rust adapter is `codelldb`. With it missing, starting a session is refused by name, and its row
-under **Debug adapters** in Tools (`Ctrl+Space` then `v`) installs it.
+The Rust adapter is `codelldb`. If it is missing, Varde refuses to start the session and names the
+adapter. Its row under **Debug adapters** in Tools (`Ctrl+Space` then `v`) installs it.
 
 ## Paused
 
-When the program pauses, the line it paused on is highlighted across the editor with a `→` in the
-gutter, its file opened if it was not, and the Frames — the call stack — come into the Corner. The
-keyboard stays where it was. Enter or a click on a Frame moves the Paused line to that call.
+When the program pauses, Varde opens the file it paused in if it was not open, highlights the paused
+line across the editor with a `→` in the gutter, and shows the Frames (the call stack) in the Corner.
+The keyboard stays where it was. Enter or a click on a Frame moves the Paused line to that call.
 
 | Key | Does |
 |---|---|
 | `F9` | continue while Paused, pause while Running |
-| `Ctrl+F2` | stop: a launched program is terminated, an attached one left running |
+| `Ctrl+F2` | stop: terminates a launched program, leaves an attached one running |
 
-Both reach Varde from every pane, a shell's included, while a session exists; with none the
-programs in your shells have them back. Ending the session gives the Corner back what it held.
+While a session exists, both keys reach Varde from every pane, a shell included. With no session,
+they go to the programs in your shells. Ending the session puts back what the Corner showed before.
