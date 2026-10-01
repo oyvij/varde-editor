@@ -1245,6 +1245,13 @@ pub enum Event {
         write: tools::Write,
         text: Option<String>,
     },
+    /// A config layer changed on disk while Varde runs: both layers as the
+    /// edge read them after the change, merged here the way a start merges
+    /// them.
+    ConfigEdited {
+        global: startup::OnDisk,
+        project: startup::OnDisk,
+    },
     /// What a taken row's install reported in [`tools::SENTINEL`], or `None`
     /// when the sentinel could not be read.
     InstallEnded(Option<String>),
@@ -7153,7 +7160,7 @@ fn on_debug(state: &State, mut next: State, event: Event, wheeled: bool) -> Answ
 
 /// LspReceived, LspGone, CandidatesDue, PointerMoved, HoverDue, FormatBuffer, FormatterAnswered,
 /// MoveCandidate, AcceptCandidate, NextStop, MoveToolRow, InstallTool,
-/// GlobalConfigRead, InstallEnded, RecheckTool, PathProbed
+/// ConfigEdited, GlobalConfigRead, InstallEnded, RecheckTool, PathProbed
 fn on_lsp(state: &State, mut next: State, event: Event, wheeled: bool) -> Answered {
     let effects = match event {
         Event::LspReceived { language, json } => lsp::received(&mut next, &language, &json),
@@ -7381,6 +7388,18 @@ fn on_lsp(state: &State, mut next: State, event: Event, wheeled: bool) -> Answer
                         write: tools::Write::Row,
                     }]
                 }
+            }
+        }
+
+        // Said rather than refused: a start would not open on this file, but
+        // the session is already open on the last one that worked.
+        Event::ConfigEdited { global, project } => {
+            match startup::reload(&mut next, global, project) {
+                Ok(()) => vec![],
+                Err(error) => vec![Effect::NotifyAbout {
+                    slug: "broken-config",
+                    about: error.to_string(),
+                }],
             }
         }
 
@@ -9967,6 +9986,9 @@ pub fn watched_folders(state: &State) -> BTreeSet<PathBuf> {
     // The Refactor loop's completion sentinel lands here, and the wait for it
     // has no timeout — a folder nobody watches is a loop that never finishes.
     folders.insert(varde_dir(&state.root, state.sidecar.as_deref()));
+    // The global config is edited while Varde runs, and it lives outside the
+    // workspace.
+    folders.insert(state.varde_home.clone());
     folders.extend(state.expanded.iter().cloned());
     let open = state
         .buffers
@@ -11843,10 +11865,15 @@ mod tests {
                 .into_iter()
                 .collect(),
             diff_file: Some("other/landing.js".to_string()),
+            varde_home: PathBuf::from("/home/me/.varde"),
             ..State::default()
         };
         let watched = watched_folders(&state);
         assert!(state.expanded.is_empty(), "nothing is expanded");
+        assert!(
+            watched.contains(&state.varde_home),
+            "the global config's folder"
+        );
         assert!(watched.contains(&root.join("src/deep")), "the open buffer");
         assert!(watched.contains(&root.join("other")), "the diff on screen");
         assert!(watched.contains(&root), "the root, always");

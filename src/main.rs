@@ -4497,6 +4497,11 @@ fn diff_lines(root: &Path, path: &Path) -> Diff {
 /// Gate and "the loop gave up" is the report nobody can act on.
 const NOTICES: &[(&str, &str, ui::Tone)] = &[
     (
+        "broken-config",
+        "Config not applied — still running on the last one that worked",
+        ui::Tone::Warning,
+    ),
+    (
         "checkout-failed",
         "Could not check that branch out — you are still on the branch you were on",
         ui::Tone::Warning,
@@ -4809,10 +4814,41 @@ fn collect_watch_events(
 ) {
     let git_dir = state.root.join(".git");
     let stories_dir = varde_dir(&state.root, state.sidecar.as_deref()).join("stories");
+    let global = state.varde_home.join(startup::CONFIG_FILE);
+    let project = varde_dir(&state.root, state.sidecar.as_deref()).join(startup::CONFIG_FILE);
+    let mut edited = false;
     while let Ok(Ok(event)) = receiver.try_recv() {
         let notify::Event { kind, paths, .. } = event;
         for path in paths {
+            // Not `Access`: inotify reports an open, and reading the layers
+            // below opens them — counting it would reload once per batch forever.
+            edited |= !matches!(kind, notify::EventKind::Access(_))
+                && (path == global || path == project);
+            // `~/.varde` is watched for its config alone: nothing else in it
+            // is the workspace's.
+            if path.parent() == Some(state.varde_home.as_path()) && !path.starts_with(&state.root) {
+                continue;
+            }
             watched_path(&kind, path, state, &git_dir, &stories_dir, queue);
+        }
+    }
+    // Both layers, once per batch however many events a save made: the merge
+    // needs the one that did not change as much as the one that did.
+    if edited {
+        queue.push_back(Event::ConfigEdited {
+            global: on_disk(&global),
+            project: on_disk(&project),
+        });
+    }
+}
+
+fn on_disk(path: &Path) -> startup::OnDisk {
+    match std::fs::read_to_string(path) {
+        Ok(text) => startup::OnDisk::Text(text),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => startup::OnDisk::Missing,
+        Err(error) => {
+            eprintln!("varde: cannot read {}: {error}", path.display());
+            startup::OnDisk::Unreadable
         }
     }
 }

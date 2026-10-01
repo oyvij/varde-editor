@@ -1776,7 +1776,7 @@ fn initial_state(
     checkout: Option<PathBuf>,
     update: Option<String>,
 ) -> State {
-    State {
+    let mut state = State {
         root: input.root.clone(),
         sidecar: input.sidecar.clone(),
         varde_home: input.varde_home.clone(),
@@ -1842,14 +1842,34 @@ fn initial_state(
         // has.
         minimap: saved_flag(input.state_json.as_deref(), "minimap")
             .unwrap_or_else(|| config.get("editor.minimap").as_deref() != Some("false")),
-        editor_theme: config
-            .get("editor.theme")
-            .unwrap_or_else(|| "dark".to_string()),
         // What you used here last time wins; config is the default when there
         // is no history.
         ai_command: saved_text(input.state_json.as_deref(), "ai_command")
             .or_else(|| config.get("ai.command"))
             .unwrap_or_else(|| "claude".to_string()),
+        os: input.os.clone(),
+        arch: input.arch.clone(),
+        running_version: input.running_version.clone(),
+        checkout,
+        update,
+        head: input.head.clone(),
+        repo: input.repo.clone(),
+        ..State::default()
+    };
+    configure(&mut state, config);
+    state
+}
+
+/// Every `State` field the merged config alone decides — what a reload
+/// recomputes, and so the one derivation startup and a reload share. A key
+/// that only sets where a project with no history *starts*, such as
+/// `editor.minimap` or `ai.command`, is not here: it is the session's once it
+/// has started, and a saved config must not flip what the project recorded.
+fn configure(state: &mut State, config: &Config) {
+    *state = State {
+        editor_theme: config
+            .get("editor.theme")
+            .unwrap_or_else(|| "dark".to_string()),
         double_tap_ms: config
             .get("view.double_tap_ms")
             .and_then(|ms| ms.parse().ok())
@@ -1884,16 +1904,49 @@ fn initial_state(
         adapters: config.adapters(),
         launches: config.launches(),
         runs: config.runs(),
-        speech: speech(config, &input.os),
-        os: input.os.clone(),
-        arch: input.arch.clone(),
-        running_version: input.running_version.clone(),
-        checkout,
-        update,
-        head: input.head.clone(),
-        repo: input.repo.clone(),
-        ..State::default()
-    }
+        speech: speech(config, &state.os),
+        ..std::mem::take(state)
+    };
+}
+
+/// One config layer as the edge found it when the file changed on disk.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OnDisk {
+    /// No file: merged as a start with no file would merge it.
+    Missing,
+    Text(String),
+    /// There, and the edge could not read it.
+    Unreadable,
+}
+
+/// Both layers again, while Varde runs: the fields startup derives from the
+/// merge are derived again, and nothing else moves. Nothing is spawned or
+/// stopped either — a running child keeps the command it was started with, and
+/// the next one started reads the new one. A layer that is broken leaves the
+/// last good config in place and is returned, as a start would refuse it.
+pub(crate) fn reload(
+    state: &mut State,
+    global: OnDisk,
+    project: OnDisk,
+) -> Result<(), ConfigError> {
+    let text = |layer: OnDisk, label: &str| match layer {
+        OnDisk::Missing => Ok(None),
+        OnDisk::Text(text) => Ok(Some(text)),
+        OnDisk::Unreadable => Err(ConfigError {
+            file: label.to_string(),
+            line: 1,
+            fault: ConfigFault::Unreadable,
+        }),
+    };
+    let global = text(global, GLOBAL_LABEL)?;
+    // The Bare workspace rule `start` keeps: no project layer at all.
+    let project = match &state.sidecar {
+        Some(_) => None,
+        None => text(project, PROJECT_LABEL)?,
+    };
+    let config = Config(merged_config(global.as_deref(), project.as_deref())?);
+    configure(state, &config);
+    Ok(())
 }
 
 /// The `[speech]` row, with the two per-OS tables already resolved for the OS

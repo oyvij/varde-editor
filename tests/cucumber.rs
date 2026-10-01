@@ -49,6 +49,9 @@ pub struct VardeWorld {
     /// only named — never started — is an assertion about this list.
     startup_effects: Vec<Effect>,
     error: Option<StartupError>,
+    /// What saving a config file while Varde runs asked the edge to do — the
+    /// list "nothing is started or stopped" is a statement about.
+    config_effects: Vec<Effect>,
     dirs: BTreeSet<PathBuf>,
     files: BTreeMap<PathBuf, String>,
     /// Every path a write reached, in order. What "unchanged" is a statement
@@ -1522,6 +1525,84 @@ fn global_config(world: &mut VardeWorld, step: &Step) {
 #[given("the project config is:")]
 fn project_config(world: &mut VardeWorld, step: &Step) {
     world.startup.project_config = Some(step.docstring().expect("docstring").trim().to_string());
+}
+
+/// What the edge sends when either file changes on disk: both layers as they
+/// now are, the one that was not saved read as it stands.
+fn config_edited(world: &mut VardeWorld, global: Option<startup::OnDisk>) {
+    let layer = |text: &Option<String>| match text {
+        Some(text) => startup::OnDisk::Text(text.clone()),
+        None => startup::OnDisk::Missing,
+    };
+    let event = Event::ConfigEdited {
+        global: global.unwrap_or_else(|| layer(&world.startup.global_config)),
+        project: layer(&world.startup.project_config),
+    };
+    let (state, effects) = update(&world.state, event);
+    world.state = state;
+    world.config_effects = effects.clone();
+    world.apply(effects);
+    world.tell_core();
+}
+
+#[when("the global config is saved as:")]
+fn global_config_saved(world: &mut VardeWorld, step: &Step) {
+    global_config(world, step);
+    config_edited(world, None);
+}
+
+#[when("the project config is saved as:")]
+fn project_config_saved(world: &mut VardeWorld, step: &Step) {
+    project_config(world, step);
+    config_edited(world, None);
+}
+
+#[when("the global config can no longer be read")]
+fn global_config_unreadable(world: &mut VardeWorld) {
+    config_edited(world, Some(startup::OnDisk::Unreadable));
+}
+
+#[then(expr = "the test command in effect is {string}")]
+fn test_command_in_effect(world: &mut VardeWorld, command: String) {
+    assert_eq!(world.state.test_command, Some(command));
+}
+
+#[then(expr = "no test command is in effect")]
+fn no_test_command_in_effect(world: &mut VardeWorld) {
+    assert_eq!(world.state.test_command, None);
+}
+
+#[then(expr = "the language server for {string} is configured as {string}")]
+fn server_configured_as(world: &mut VardeWorld, language: String, command: String) {
+    let server = world.state.servers.get(&language);
+    assert_eq!(
+        server.map(|server| server.command.as_str()),
+        Some(command.as_str())
+    );
+}
+
+#[then(expr = "the save asked for nothing to be started or stopped")]
+fn save_asked_for_nothing(world: &mut VardeWorld) {
+    assert!(
+        world.config_effects.is_empty(),
+        "asked for: {:?}",
+        world.config_effects
+    );
+}
+
+#[then(expr = "a language server for {string} is still running")]
+fn server_still_running(world: &mut VardeWorld, language: String) {
+    assert!(
+        world.state.lsp_running.contains(&language),
+        "running: {:?}",
+        world.state.lsp_running
+    );
+}
+
+#[given(expr = "the project {string} records the minimap as hidden")]
+fn state_records_minimap_hidden(world: &mut VardeWorld, path: String) {
+    assert_eq!(path, ".varde/state.json");
+    world.startup.state_json = Some(r#"{"minimap": false}"#.to_string());
 }
 
 #[given(expr = "the global config is empty")]
@@ -12453,6 +12534,18 @@ fn editor_never_said(world: &mut VardeWorld, notice: String) {
     );
 }
 
+/// The prefix `ConfigError`'s `Display` puts first, pinned beside it: the
+/// fault's own words are copy, and the file and line are what fix it.
+#[then(expr = "the message names the file {string} at line {int}")]
+fn message_names_file_and_line(world: &mut VardeWorld, file: String, line: usize) {
+    let prefix = format!("{file}:{line}: ");
+    assert!(
+        world.named.iter().any(|named| named.starts_with(&prefix)),
+        "the messages named: {:?}",
+        world.named
+    );
+}
+
 #[then(expr = "the message names {string}")]
 fn message_names(world: &mut VardeWorld, name: String) {
     assert!(
@@ -14821,6 +14914,15 @@ fn open_launch_palette(world: &mut VardeWorld) {
     load_debug_config(world);
     world.send(Event::FallbackBinding);
     route_key(world, &palette_key("Launch").to_string(), 0);
+}
+
+/// The palette over whatever the running Varde holds, not a fresh read of the
+/// scenario's config: what is offered has to have arrived without a restart.
+#[then(expr = "the launch palette, opened without restarting, offers {string}")]
+fn launch_palette_without_restarting_offers(world: &mut VardeWorld, name: String) {
+    world.send(Event::FallbackBinding);
+    route_key(world, &palette_key("Launch").to_string(), 0);
+    launch_palette_offers(world, name);
 }
 
 /// Through the palette the way a person goes: its Launch face, the arrows down
