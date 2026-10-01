@@ -232,6 +232,15 @@ Feature: Finding inside the buffer
     And the in-file search is not open
     And the cursor is at line 1 column 11
 
+  Scenario: Escape out of insert keeps the search on
+    Given I press "/" in the editor
+    And I type "state" into the in-file search
+    And I press Enter during the in-file search
+    And I press "i" in the editor
+    When I press "Escape" in the editor
+    Then the in-file search is open
+    And the in-file search query is "state"
+
   Scenario: Right at the end of the query reaches the case icon
     Given I press "/" in the editor
     And I type "state" into the in-file search

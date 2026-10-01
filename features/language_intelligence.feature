@@ -606,11 +606,11 @@ Feature: Language intelligence
     Scenario: The gutter width does not change when diagnostics arrive
       Given a language server for "rust" is ready
       And "src/lib.rs" is open in the editor
-      And the editor gutter width is 9
+      And the editor gutter width is 10
       When the language server for "rust" publishes diagnostics for "src/lib.rs":
         | line | severity | message           |
         | 3    | error    | cannot find value |
-      Then the editor gutter width is 9
+      Then the editor gutter width is 10
 
   Rule: Hover says what the symbol under the cursor is
 

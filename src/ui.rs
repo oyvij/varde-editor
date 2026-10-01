@@ -2,7 +2,7 @@ use crate::pty::Pane as PtyPane;
 use ratatui::layout::{Margin, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 use ratatui::Frame;
 use std::collections::HashMap;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -554,6 +554,7 @@ fn pane_block(title: impl Into<Line<'static>>, state: &State, pane: Pane) -> Blo
     Block::default()
         .borders(Borders::ALL)
         .title(title.into())
+        .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(border_colour(state, pane)))
 }
 
@@ -2106,15 +2107,15 @@ fn with_toggle(
         Style::default().fg(Color::Cyan),
     );
     let first = line.spans.first().map(|span| span.content.as_ref());
-    let mut spans = if first == Some(format!(" {number:>4} {PAD}").as_str()) {
+    let mut spans = if first == Some(format!("  {number:>4} {PAD}").as_str()) {
         let mut spans = vec![
-            Span::styled(format!(" {number:>4} "), line.spans[0].style),
+            Span::styled(format!("  {number:>4} "), line.spans[0].style),
             glyph,
             Span::raw("  "),
         ];
         spans.extend(line.spans.iter().skip(1).cloned());
         spans
-    } else if first == Some(format!(" {number:>4}").as_str())
+    } else if first == Some(format!("  {number:>4}").as_str())
         && line.spans.get(2).map(|span| span.content.as_ref()) == Some(PAD)
     {
         let mut spans = line.spans.clone();
@@ -2830,7 +2831,7 @@ fn refusal(file: &str) -> Vec<Line<'static>> {
 
 fn barred(line: &Line<'static>, number: usize, colour: Color) -> Line<'static> {
     let mut spans = vec![
-        Span::styled(format!(" {number:>4}"), Style::default().fg(Color::Gray)),
+        Span::styled(format!("  {number:>4}"), Style::default().fg(Color::Gray)),
         Span::styled("▌", Style::default().fg(colour)),
         Span::raw(PAD),
     ];
@@ -2887,6 +2888,7 @@ fn replace_box(frame: &mut Frame, state: &State, editor: Area) {
         Paragraph::new(vec![Line::from(find_row), Line::from(with_row)]).block(
             Block::default()
                 .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
                 .title(" replace ")
                 .title_bottom(Line::from(Span::styled(
                     format!(" {footer} "),
@@ -2991,7 +2993,10 @@ fn evaluator(frame: &mut Frame, state: &State, panes: &layout::Layout, code: &Co
     let (snippet_area, output_area) = layout::evaluator_split(window, open.snippet_rows);
     frame.render_widget(Clear, rect(window));
     frame.render_widget(
-        Block::default().borders(Borders::ALL).title("EVALUATE"),
+        Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .title("EVALUATE"),
         rect(window),
     );
     let dark = state.editor_theme != "light";
@@ -3231,7 +3236,7 @@ fn diff_rows(
         let mut spans = vec![
             Span::styled(
                 format!(
-                    " {:>4} ",
+                    "  {:>4} ",
                     line.new_line.map(|n| n.to_string()).unwrap_or_default()
                 ),
                 Style::default().fg(Color::DarkGray),
@@ -3281,7 +3286,7 @@ fn changed_row(
     let (_, own, tint) = change_colours(removed, dark);
     let mut spans = vec![
         Span::styled(
-            format!(" {:>4}", number.map(|n| n.to_string()).unwrap_or_default()),
+            format!("  {:>4}", number.map(|n| n.to_string()).unwrap_or_default()),
             Style::default().fg(Color::Gray),
         ),
         Span::styled("▌", Style::default().fg(own)),
@@ -3493,7 +3498,7 @@ fn numbered(number: usize, cursor: Option<usize>) -> Line<'static> {
         false => Color::DarkGray,
     };
     Line::from(Span::styled(
-        format!(" {number:>4} {PAD}"),
+        format!("  {number:>4} {PAD}"),
         Style::default().fg(colour),
     ))
 }
@@ -3576,6 +3581,7 @@ fn terminal_widget(
     Paragraph::new(lines).block(
         Block::default()
             .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
             .title(title.to_string())
             .border_style(Style::default().fg(border)),
     )
@@ -4062,6 +4068,8 @@ fn overlay(frame: &mut Frame, title: &str, lines: Vec<Line<'static>>) {
         Paragraph::new(lines).block(
             Block::default()
                 .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .border_type(BorderType::Thick)
                 .title(title.to_string()),
         ),
         box_area,
@@ -4624,12 +4632,12 @@ mod tests {
                 .collect::<String>()
         };
         let top = drawn(&state, "guide.md");
-        assert!(top.starts_with("\u{250c}guide.md"), "{top:?}");
+        assert!(top.starts_with("\u{256d}guide.md"), "{top:?}");
         assert!(
             top.contains("Ada Lovelace  2026-01-05"),
             "the authorship is not on the border: {top:?}"
         );
-        assert!(top.ends_with(" 1.00x \u{2500}\u{2510}"), "{top:?}");
+        assert!(top.ends_with(" 1.00x \u{2500}\u{256e}"), "{top:?}");
 
         let top = drawn(
             &state,
@@ -4637,7 +4645,7 @@ mod tests {
         );
         assert!(top.contains("indeed-and-then"), "the name gave: {top:?}");
         assert!(!top.contains("Ada"), "{top:?}");
-        assert!(top.ends_with(" 1.00x \u{2500}\u{2510}"), "{top:?}");
+        assert!(top.ends_with(" 1.00x \u{2500}\u{256e}"), "{top:?}");
     }
 
     #[test]
@@ -5469,10 +5477,10 @@ mod tests {
         assert_eq!(
             drawn(&state),
             [
-                "    1 \u{25bc}  fn\u{b7}main()\u{b7}{",
-                "    2    \u{2503}\u{b7}\u{b7}\u{b7}go();",
-                "    3    }",
-                "    4    "
+                "     1 \u{25bc}  fn\u{b7}main()\u{b7}{",
+                "     2    \u{2503}\u{b7}\u{b7}\u{b7}go();",
+                "     3    }",
+                "     4    "
             ]
         );
         assert_eq!(
@@ -5491,9 +5499,9 @@ mod tests {
         assert_eq!(
             drawn(&state),
             [
-                format!("    1 \u{25ba}  fn\u{b7}main()\u{b7}{{{DOTS}"),
-                "    3    }".to_string(),
-                "    4    ".to_string()
+                format!("     1 \u{25ba}  fn\u{b7}main()\u{b7}{{{DOTS}"),
+                "     3    }".to_string(),
+                "     4    ".to_string()
             ]
         );
     }

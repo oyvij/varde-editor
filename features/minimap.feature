@@ -70,11 +70,11 @@ Feature: The minimap
     Given "src/main.rs" is open in the editor with 20 lines
     When I run ":minimap" in the editor
     Then the minimap is hidden
-    And the editor shows 43 columns of text
+    And the editor shows 42 columns of text
 
   Scenario: The editor keeps room for the mirror while it is showing
     Given "src/main.rs" is open in the editor with 20 lines
-    Then the editor shows 31 columns of text
+    Then the editor shows 30 columns of text
 
   # A Preview's rows are not the file's lines, so there is nothing a mirror of
   # lines could be a mirror of — the same refusal a Preview gets from every other
@@ -103,7 +103,7 @@ Feature: The minimap
     Given the screen is 26 rows by 100 columns
     And "src/main.rs" is open in the editor with 200 lines
     Then the minimap is hidden
-    And the editor shows 29 columns of text
+    And the editor shows 28 columns of text
 
   Scenario: A project that asks for no mirror starts without one
     Given the project config is:
