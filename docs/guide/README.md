@@ -1,8 +1,8 @@
 # Varde user guide
 
-One file per area. Every key, palette letter and `:` command named here is traceable to the
-Cheatsheet in the editor's top-right (`:help` toggles it), which is the contract for what is
-bindable — if a gesture is not there and not in these pages, it does not exist.
+One file per area. Every key, palette letter and `:` command named here is also in the Cheatsheet
+in the editor's top-right (`:help` toggles it). The Cheatsheet lists every binding. If a gesture is
+not there and not in these pages, it does not exist.
 
 | Guide | Read it when you want to |
 |---|---|
@@ -26,8 +26,8 @@ executable form and is the final word where the two disagree.
 1. `Ctrl+Space` opens the palette from any pane, hosted ones included. `Esc Esc` does too from
    inside the terminal or AI pane.
 2. Every motion is reachable without a modifier. `Alt+hjkl` moves focus, but so do palette letters.
-3. There is one Selection in the whole workspace. Whatever you last picked — a drag, `V` lines, a
-   search hit — is what `Ctrl+C` copies and `:read` reads.
+3. There is one Selection in the whole workspace. Whatever you last picked (a drag, `V` lines, a
+   search hit) is what `Ctrl+C` copies and `:read` reads.
 4. Review view shows only what git says changed. `V` then `c` comments a range; `:submit` sends it.
 5. `:story` asks the AI to narrate the current change; `:story?` picks a branch first.
 6. The Risk list (palette `k`) names functions over the complexity threshold; its action starts a
