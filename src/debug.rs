@@ -2348,7 +2348,7 @@ pub fn variables(state: &State) -> Vec<Row> {
 /// the Paused Frame's language, while a Hover's expression was read out of
 /// the Buffer under the pointer — which need not be the file the program
 /// stopped in.
-fn paused_in(state: &State) -> String {
+pub fn paused_in(state: &State) -> String {
     file_named(paused_line(state).map(|(file, _, _)| file))
 }
 
@@ -3543,6 +3543,33 @@ pub fn evaluator_output(state: &State) -> Vec<Said> {
         }
     }
     lines
+}
+
+/// Every text the debug panes draw as code in the language of [`paused_in`]:
+/// the Variables' values, the Evaluator's value rows and its Snippet — for the
+/// edge to colour once as each arrives rather than once per frame. A Watch that
+/// failed and the Evaluator's prints are left out: the adapter's reason and
+/// what the program printed are words, not code.
+pub fn code(state: &State) -> Vec<String> {
+    let values = evaluator_output(state)
+        .into_iter()
+        .filter_map(|said| match said {
+            Said::Value(row) => Some(row),
+            _ => None,
+        });
+    variables(state)
+        .into_iter()
+        .filter(|row| !matches!(row.of, Of::Watch { failed: true, .. }))
+        .chain(values)
+        .map(|row| row.value)
+        .chain(
+            state
+                .evaluator
+                .as_ref()
+                .map(|open| open.snippet.shown().to_string()),
+        )
+        .filter(|text| !text.is_empty())
+        .collect()
 }
 
 /// A click on a row of the Evaluator's value, which opens it exactly as the
@@ -5512,5 +5539,74 @@ mod tests {
         assert!(marked[1].contains("main"), "the chosen Frame: {quoted}");
         assert!(quoted.contains("third"), "{quoted}");
         assert!(!quoted.contains("fourth"), "{quoted}");
+    }
+
+    /// #93: what the edge colours is the values and the Snippet, in the
+    /// Paused Frame's language — never a name, a print or an adapter's
+    /// reason. A Rust value coloured that way is more than one kind of token.
+    #[test]
+    fn the_code_the_debug_panes_colour_is_their_values_in_the_paused_language() {
+        let mut state = paused(State::default());
+        let value = "Order { name: \"Ann\", total: 42 }";
+        state.watches = vec![
+            Watch {
+                expression: "order".to_string(),
+                answer: Answer::Value(value.to_string()),
+            },
+            Watch {
+                expression: "gone".to_string(),
+                answer: Answer::Failed("not in scope".to_string()),
+            },
+        ];
+        open_evaluator(&mut state, "order.total".to_string());
+        run(&mut state);
+        received(
+            &mut state,
+            r#"{"type":"event","event":"output","body":{"output":"printed 7\n"}}"#,
+        );
+        let seq = outstanding(&state, "evaluate");
+        received(
+            &mut state,
+            &json!({"type": "response", "request_seq": seq, "success": true, "command": "evaluate",
+                "body": {"result": "42", "variablesReference": 0}})
+            .to_string(),
+        );
+
+        let code = code(&state);
+        assert_eq!(paused_in(&state), "one.rs");
+        assert!(code.contains(&value.to_string()), "{code:?}");
+        assert!(code.contains(&"42".to_string()), "{code:?}");
+        assert!(code.contains(&"order.total".to_string()), "{code:?}");
+        for words in ["order", "gone", "not in scope", "printed 7"] {
+            assert!(!code.contains(&words.to_string()), "{words:?} in {code:?}");
+        }
+        let kinds: Vec<_> = crate::highlight::highlight(&paused_in(&state), value)
+            .into_iter()
+            .flatten()
+            .map(|token| token.kind)
+            .collect();
+        assert!(kinds.contains(&crate::highlight::Kind::String), "{kinds:?}");
+        assert!(kinds.contains(&crate::highlight::Kind::Number), "{kinds:?}");
+    }
+
+    /// With no Paused source file there is no language, so whatever is
+    /// coloured comes back plain rather than failing.
+    #[test]
+    fn with_nothing_paused_the_code_is_plain() {
+        let state = State {
+            watches: vec![Watch {
+                expression: "order".to_string(),
+                answer: Answer::Value("\"Ann\" 42".to_string()),
+            }],
+            ..State::default()
+        };
+        assert_eq!(paused_in(&state), "");
+        for text in code(&state) {
+            assert!(crate::highlight::highlight(&paused_in(&state), &text)
+                .into_iter()
+                .flatten()
+                .all(|token| token.kind == crate::highlight::Kind::Plain));
+        }
+        assert_eq!(code(&state), vec!["\"Ann\" 42".to_string()]);
     }
 }

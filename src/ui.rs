@@ -6,6 +6,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
+use std::collections::HashMap;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use varde::highlight::{self, Kind};
 use varde::layout::{self, Area};
@@ -100,9 +101,15 @@ pub struct Chrome<'a> {
     /// the reason the tokens are: a mermaid routing pass per frame is visible,
     /// not merely wasteful.
     pub preview: &'a [varde::preview::Row],
+    /// The debug panes' code, by its text — [`varde::debug::code`] — coloured
+    /// by the edge once as each text arrives rather than once per frame.
+    pub code: &'a Code,
     /// Mixed once, from the colours the terminal said it has: [`faint`].
     pub faint: Style,
 }
+
+/// Tokens by the text they colour, in the Paused Frame's language.
+pub type Code = HashMap<String, Vec<Vec<highlight::Token>>>;
 
 pub struct Areas {
     pub tree: Rect,
@@ -236,7 +243,12 @@ pub fn draw(
         }
         layout::Group::Debug => {
             frame.render_widget(
-                variables_widget(state, areas.panes.terminal.width, chrome.name_draft),
+                variables_widget(
+                    state,
+                    areas.panes.terminal.width,
+                    chrome.name_draft,
+                    chrome.code,
+                ),
                 rect(areas.panes.terminal),
             );
             // Zero-width while it is hidden, so there is nothing to draw and
@@ -325,7 +337,7 @@ pub fn draw(
     candidates(frame, state, &areas.panes);
     // Over the panes for the Hover's reason, and after it: the window is the
     // thing the reader is working in, so nothing floats above it but a modal.
-    evaluator(frame, state, &areas.panes);
+    evaluator(frame, state, &areas.panes, chrome.code);
 
     // Search floats over the panes rather than replacing them: you can still
     // see where you were.
@@ -1049,8 +1061,8 @@ fn frames_lines(state: &State, width: u16) -> Vec<Line<'static>> {
 
 /// The Variables of the chosen Frame, in the Strip's Debug group. Its title
 /// says which of the two it is drawing: this pause, or the last one.
-fn variables_widget(state: &State, width: u16, draft: &str) -> Paragraph<'static> {
-    let widget = Paragraph::new(variables_lines(state, width, draft))
+fn variables_widget(state: &State, width: u16, draft: &str, code: &Code) -> Paragraph<'static> {
+    let widget = Paragraph::new(variables_lines(state, width, draft, code))
         .scroll((state.variables_scroll as u16, 0))
         .block(pane_block(
             varde::debug::title(state),
@@ -1063,9 +1075,11 @@ fn variables_widget(state: &State, width: u16, draft: &str) -> Paragraph<'static
 /// Split out of `variables_widget` for the reason `frames_lines` is. One row
 /// per member the tree has open: its depth as indentation, whether it opens,
 /// its name, what the adapter's presentation hint says about it, and its
-/// value.
-fn variables_lines(state: &State, width: u16, draft: &str) -> Vec<Line<'static>> {
+/// value — coloured on its own, out of context, the trade `history_lines`
+/// makes. A Watch that failed shows the adapter's reason, which is not code.
+fn variables_lines(state: &State, width: u16, draft: &str, code: &Code) -> Vec<Line<'static>> {
     let inner = width.saturating_sub(2) as usize;
+    let dark = state.editor_theme != "light";
     varde::debug::variables(state)
         .into_iter()
         .enumerate()
@@ -1119,21 +1133,23 @@ fn variables_lines(state: &State, width: u16, draft: &str) -> Vec<Line<'static>>
                 .saturating_sub(chips.len() * 2);
             let mut spans = vec![
                 Span::styled(truncate(&name, inner), style),
-                // Padded to the columns left over, so the Chips sit hard
-                // against the right-hand border — the very columns
-                // `mouse::icon_at` hit-tests them from.
-                Span::styled(
-                    format!(
-                        " {:<pad$}",
-                        truncate(&row.value, room.saturating_sub(1)),
-                        pad = room.saturating_sub(1)
-                    ),
-                    style.fg(match row.of {
-                        varde::debug::Of::Watch { failed: true, .. } => WARNING,
-                        _ => Color::DarkGray,
-                    }),
-                ),
+                Span::styled(" ", style),
             ];
+            // Padded to the columns left over, so the Chips sit hard against
+            // the right-hand border — the very columns `mouse::icon_at`
+            // hit-tests them from.
+            let pad = room.saturating_sub(1);
+            match (row.of, tokens_of(code, &row.value)) {
+                (varde::debug::Of::Watch { failed: true, .. }, _) => spans.push(Span::styled(
+                    format!("{:<pad$}", truncate(&row.value, pad)),
+                    style.fg(WARNING),
+                )),
+                (_, Some(lines)) => spans.extend(cut_spans(&one_row(lines), pad, style, dark)),
+                (_, None) => spans.push(Span::styled(
+                    format!("{:<pad$}", truncate(&row.value, pad)),
+                    style.fg(Color::DarkGray),
+                )),
+            }
             for (at, chip) in chips.iter().enumerate() {
                 spans.push(Span::styled(
                     chip.glyph.clone(),
@@ -3398,6 +3414,59 @@ fn spans(tokens: &[highlight::Token], dark: bool) -> Vec<Span<'static>> {
         .collect()
 }
 
+/// `text`'s tokens as the edge coloured them, and `None` where it did not or
+/// found nothing to colour — no Paused file, or a language with no grammar —
+/// which the caller draws exactly as it did before there was colour.
+fn tokens_of<'a>(code: &'a Code, text: &str) -> Option<&'a Vec<Vec<highlight::Token>>> {
+    code.get(text).filter(|lines| {
+        lines
+            .iter()
+            .flatten()
+            .any(|token| token.kind != Kind::Plain)
+    })
+}
+
+/// A value's lines as one row's tokens. The newline stays in, as it did when
+/// the value was drawn as one string.
+fn one_row(lines: &[Vec<highlight::Token>]) -> Vec<highlight::Token> {
+    lines.join(&highlight::Token {
+        text: "\n".to_string(),
+        kind: Kind::Plain,
+    })
+}
+
+/// Tokens on one row, cut to `width` with `…` and padded out to it, each in
+/// its kind's colour over `style` — so a selected row stays reversed.
+fn cut_spans(
+    tokens: &[highlight::Token],
+    width: usize,
+    style: Style,
+    dark: bool,
+) -> Vec<Span<'static>> {
+    let whole: String = tokens.iter().map(|token| token.text.as_str()).collect();
+    let shown = truncate(&whole, width);
+    let mut left = match shown == whole {
+        true => whole.chars().count(),
+        false => shown.chars().count() - 1,
+    };
+    let mut cut = Vec::new();
+    for token in tokens {
+        let text: String = token.text.chars().take(left).collect();
+        left -= text.chars().count();
+        if !text.is_empty() {
+            cut.push(Span::styled(text, style.fg(colour(token.kind, dark))));
+        }
+    }
+    if shown != whole {
+        cut.push(Span::styled("\u{2026}", style));
+    }
+    cut.push(Span::styled(
+        " ".repeat(width.saturating_sub(shown.width())),
+        style,
+    ));
+    cut
+}
+
 /// The buffer's text as numbered, syntax-coloured rows. Shared by Edit view
 /// and Story view's code surface, so the two cannot disagree about what a line
 /// of code looks like — only about what is drawn over it.
@@ -3809,7 +3878,7 @@ fn breakpoint_reason(frame: &mut Frame, state: &State, panes: &layout::Layout) {
 /// The Evaluator: the Snippet above, the output below, and the Chips on the
 /// top border. Every rectangle here is `layout`'s — the mouse hit-tests the
 /// same ones — and every row of the output is `debug`'s, so this only draws.
-fn evaluator(frame: &mut Frame, state: &State, panes: &layout::Layout) {
+fn evaluator(frame: &mut Frame, state: &State, panes: &layout::Layout, code: &Code) {
     let Some(open) = state.evaluator.as_ref() else {
         return;
     };
@@ -3820,12 +3889,8 @@ fn evaluator(frame: &mut Frame, state: &State, panes: &layout::Layout) {
         Block::default().borders(Borders::ALL).title("EVALUATE"),
         rect(window),
     );
-    let mut lines: Vec<Line<'static>> = open
-        .snippet
-        .shown()
-        .split('\n')
-        .map(|row| Line::raw(row.to_string()))
-        .collect();
+    let dark = state.editor_theme != "light";
+    let mut lines = snippet_lines(open.snippet.shown(), code, dark);
     if state.focus == Pane::Evaluator {
         paint_drag(
             &mut lines,
@@ -3845,8 +3910,39 @@ fn evaluator(frame: &mut Frame, state: &State, panes: &layout::Layout) {
             ..output_area
         }),
     );
-    let output: Vec<Line> = varde::debug::evaluator_output(state)
-        .iter()
+    let output = output_lines(&varde::debug::evaluator_output(state), code, dark);
+    frame.render_widget(Paragraph::new(output), rect(output_area));
+    evaluator_chips(frame, state, window);
+    if state.focus == varde::Pane::Evaluator {
+        if let Some(buffer) = state.edited() {
+            frame.set_cursor_position((
+                snippet_area.x + buffer.column.saturating_sub(1) as u16,
+                snippet_area.y + buffer.line.saturating_sub(1) as u16,
+            ));
+        }
+    }
+}
+
+/// The Snippet's rows, coloured as the editor colours a buffer of the Paused
+/// Frame's language — parsed whole, so a string spanning lines colours the
+/// lines under it.
+fn snippet_lines(text: &str, code: &Code, dark: bool) -> Vec<Line<'static>> {
+    match tokens_of(code, text) {
+        Some(lines) => lines
+            .iter()
+            .map(|line| Line::from(spans(line, dark)))
+            .collect(),
+        None => text
+            .split('\n')
+            .map(|row| Line::raw(row.to_string()))
+            .collect(),
+    }
+}
+
+/// The Evaluator output's rows: what the program printed stays plain, being
+/// output and not code, and the value is coloured as a Variables value is.
+fn output_lines(said: &[varde::debug::Said], code: &Code, dark: bool) -> Vec<Line<'static>> {
+    said.iter()
         .map(|line| match line {
             varde::debug::Said::Printed(text) => Line::from(Span::styled(
                 text.clone(),
@@ -3862,8 +3958,8 @@ fn evaluator(frame: &mut Frame, state: &State, panes: &layout::Layout) {
                 why.clone(),
                 Style::default().fg(Color::LightRed),
             )),
-            varde::debug::Said::Value(row) => Line::from(vec![
-                Span::styled(
+            varde::debug::Said::Value(row) => {
+                let mut line = Line::from(Span::styled(
                     format!(
                         "{}{}{} ",
                         " ".repeat(row.depth * 2),
@@ -3875,21 +3971,19 @@ fn evaluator(frame: &mut Frame, state: &State, panes: &layout::Layout) {
                         row.name
                     ),
                     Style::default().fg(Color::DarkGray),
-                ),
-                Span::raw(row.value.clone()),
-            ]),
+                ));
+                match tokens_of(code, &row.value) {
+                    Some(lines) => {
+                        for span in spans(&one_row(lines), dark) {
+                            line.push_span(span);
+                        }
+                    }
+                    None => line.push_span(Span::raw(row.value.clone())),
+                }
+                line
+            }
         })
-        .collect();
-    frame.render_widget(Paragraph::new(output), rect(output_area));
-    evaluator_chips(frame, state, window);
-    if state.focus == varde::Pane::Evaluator {
-        if let Some(buffer) = state.edited() {
-            frame.set_cursor_position((
-                snippet_area.x + buffer.column.saturating_sub(1) as u16,
-                snippet_area.y + buffer.line.saturating_sub(1) as u16,
-            ));
-        }
-    }
+        .collect()
 }
 
 /// The Evaluator's Chips along its top border, at the columns
@@ -5155,11 +5249,12 @@ fn overlay(frame: &mut Frame, title: &str, lines: Vec<Line<'static>>) {
 mod tests {
     use super::{
         action_icon, authorship_clause, branch_lines, buffer_title, code_lines, colour, diff_rows,
-        editor_block, faint, guided, highlight, icon_colour, launch_lines, layout, paint_drag,
-        pane_actions_title, preview_line, right_title, risk_lines, risk_title, shift, source_lines,
-        status_line, story_title, title_room, tree_lines, truncate, with_breakpoint, with_caret,
-        Block, Borders, Color, Kind, Line, Modifier, Place, Selection, Span, State, Style, Tone,
-        UnicodeWidthStr, DIRTY, DOTS, WARNING,
+        editor_block, faint, guided, highlight, icon_colour, launch_lines, layout, output_lines,
+        paint_drag, pane_actions_title, preview_line, right_title, risk_lines, risk_title, shift,
+        snippet_lines, source_lines, status_line, story_title, title_room, tree_lines, truncate,
+        variables_lines, with_breakpoint, with_caret, Block, Borders, Code, Color, Kind, Line,
+        Modifier, Place, Selection, Span, State, Style, Tone, UnicodeWidthStr, DIRTY, DOTS,
+        WARNING,
     };
     use varde::risk::{Figure, Figures, Function, Metrics};
 
@@ -7125,5 +7220,106 @@ mod tests {
                 "\u{2611} done",
             ]
         );
+    }
+
+    /// Code coloured in the Paused Frame's language, as the edge would.
+    fn coloured_rust(texts: &[&str]) -> Code {
+        texts
+            .iter()
+            .map(|text| (text.to_string(), highlight::highlight("one.rs", text)))
+            .collect()
+    }
+
+    fn colours(line: &Line) -> Vec<Option<Color>> {
+        line.spans.iter().map(|span| span.style.fg).collect()
+    }
+
+    /// #93: a Variables value is drawn in more than one token colour, and its
+    /// name — the tree's chrome — is not; with nothing coloured it is plain
+    /// and still padded out to the Chips' columns.
+    #[test]
+    fn a_variables_value_is_coloured_and_its_name_is_not() {
+        let value = "Order { name: \"Ann\", total: 42 }";
+        let mut state = State::default();
+        state.watches = vec![varde::debug::Watch {
+            expression: "order".to_string(),
+            answer: varde::debug::Answer::Value(value.to_string()),
+        }];
+        let line = &variables_lines(&state, 80, "", &coloured_rust(&[value]))[0];
+        assert!(line.spans[0].content.contains("order"));
+        assert_eq!(line.spans[0].style.fg, None);
+        let shown = colours(line);
+        assert!(
+            shown.contains(&Some(colour(Kind::String, true))),
+            "{shown:?}"
+        );
+        assert!(
+            shown.contains(&Some(colour(Kind::Number, true))),
+            "{shown:?}"
+        );
+
+        // Nothing coloured, or nothing to colour, is drawn as before colour.
+        let unknown: Code = [(value.to_string(), highlight::plain(value))].into();
+        for code in [Code::new(), unknown] {
+            let plain = &variables_lines(&state, 80, "", &code)[0];
+            assert_eq!(plain.width(), line.width());
+            assert_eq!(plain.spans[2].style.fg, Some(Color::DarkGray));
+        }
+    }
+
+    /// A value wider than its room is cut with `…`, not wrapped.
+    #[test]
+    fn a_coloured_value_is_cut_to_its_room() {
+        let tokens = highlight::highlight("one.rs", "\"Ann\", 42");
+        let cut = super::cut_spans(&tokens.concat(), 5, Style::default(), true);
+        let text: String = cut.iter().map(|span| span.content.as_ref()).collect();
+        assert_eq!(text, "\"Ann\u{2026}");
+    }
+
+    /// A value that spans lines keeps its newline when it is coloured.
+    #[test]
+    fn a_coloured_value_keeps_its_newlines() {
+        let value = "[\n    1,\n]";
+        let row = super::one_row(&highlight::highlight("one.rs", value));
+        let text: String = row.iter().map(|token| token.text.as_str()).collect();
+        assert_eq!(text, value);
+    }
+
+    /// The Snippet is parsed whole, so the second line of a string that
+    /// spans two is drawn as a string.
+    #[test]
+    fn the_snippet_colours_a_string_across_its_lines() {
+        let snippet = "let s = \"one\ntwo\";";
+        let lines = snippet_lines(snippet, &coloured_rust(&[snippet]), true);
+        assert_eq!(lines[1].spans[0].content, "two\"");
+        assert_eq!(lines[1].spans[0].style.fg, Some(colour(Kind::String, true)));
+        let plain = snippet_lines(snippet, &Code::new(), true);
+        assert!(plain
+            .iter()
+            .flat_map(|line| colours(line))
+            .all(|fg| fg.is_none()));
+    }
+
+    /// What the program printed is output, not code; the value is code.
+    #[test]
+    fn the_evaluator_colours_the_value_and_not_the_prints() {
+        let row = varde::debug::Row {
+            name: "total".to_string(),
+            value: "\"Ann\"".to_string(),
+            depth: 0,
+            hint: varde::debug::Hint::Plain,
+            open: false,
+            opens: varde::debug::Opens::Nothing,
+            expression: String::new(),
+            parent: 0,
+            of: varde::debug::Of::Member,
+        };
+        let said = [
+            varde::debug::Said::Printed("\"printed\" 7".to_string()),
+            varde::debug::Said::Value(row),
+        ];
+        let lines = output_lines(&said, &coloured_rust(&["\"printed\" 7", "\"Ann\""]), true);
+        assert_eq!(colours(&lines[0]), vec![Some(Color::DarkGray)]);
+        assert!(colours(&lines[1]).contains(&Some(colour(Kind::String, true))));
     }
 }

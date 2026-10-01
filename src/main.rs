@@ -647,6 +647,9 @@ struct Edge {
     /// two widths is two different answers. "Never parse per frame" is sharper
     /// here than for tokens — a diagram is routed, not merely scanned.
     previewed: (PathBuf, u64, usize, Vec<varde::preview::Row>),
+    /// The debug panes' code by its text, and the Paused file name it was
+    /// coloured in: [`cache_code`].
+    code: (String, ui::Code),
     faint: ratatui::style::Style,
     /// A query waiting for typing to settle.
     pending_search: Option<(String, Instant)>,
@@ -916,6 +919,7 @@ fn run(
         trace_committed: None,
         diff_sides: (Vec::new(), Vec::new()),
         previewed: (PathBuf::new(), u64::MAX, 0, Vec::new()),
+        code: (String::new(), ui::Code::new()),
         faint: ui::faint(palette),
         pending_search: None,
         candidates_due: None,
@@ -1047,6 +1051,7 @@ fn run(
             continue;
         }
         dirty = false;
+        cache_code(&state, &mut edge);
         render(&mut terminal, &state, &mut edge)?;
     };
 
@@ -1974,6 +1979,29 @@ fn cache_preview(state: &State, edge: &mut Edge) {
     }
 }
 
+/// Colour each of the debug panes' texts once, when it arrives — a pause, an
+/// opened row, a finished run, an edit to the Snippet — and keep only the
+/// ones still on screen. Short texts, so on the loop. Before a frame rather
+/// than every pass of the loop: asking which texts are shown is not free.
+fn cache_code(state: &State, edge: &mut Edge) {
+    let language = varde::debug::paused_in(state);
+    if edge.code.0 != language {
+        edge.code = (language, ui::Code::new());
+    }
+    let mut kept = ui::Code::new();
+    for text in varde::debug::code(state) {
+        if let std::collections::hash_map::Entry::Vacant(entry) = kept.entry(text) {
+            let tokens = edge
+                .code
+                .1
+                .remove(entry.key())
+                .unwrap_or_else(|| varde::highlight::highlight(&edge.code.0, entry.key()));
+            entry.insert(tokens);
+        }
+    }
+    edge.code.1 = kept;
+}
+
 fn render(terminal: &mut Screen, state: &State, edge: &mut Edge) -> Result<()> {
     let rows = tree::visible_rows(state);
     terminal.draw(|frame| {
@@ -2005,6 +2033,7 @@ fn render(terminal: &mut Screen, state: &State, edge: &mut Edge) -> Result<()> {
                 diff_new: &edge.diff_sides.0,
                 diff_old: &edge.diff_sides.1,
                 preview: &edge.previewed.3,
+                code: &edge.code.1,
                 faint: edge.faint,
             },
         );
