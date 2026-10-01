@@ -2224,13 +2224,18 @@ fn source_lines(
             );
         }
     }
-    paint_drag(
-        &mut lines,
-        &row,
-        state.selection.as_ref().and_then(Selection::buffer_span),
-        &state.occurrences,
-        true,
-    );
+    // A Selection made with the keyboard in the Evaluator is a span of the
+    // Snippet, drawn in its window: painted here it would land on the file at
+    // the Snippet's coordinates.
+    if state.focus != Pane::Evaluator {
+        paint_drag(
+            &mut lines,
+            &row,
+            state.selection.as_ref().and_then(Selection::buffer_span),
+            &state.occurrences,
+            true,
+        );
+    }
     // The whole affordance a link has: a terminal has no hand pointer to turn
     // the mouse into, so the underline is what says a click here jumps.
     if let Some((line, from, to)) = varde::link(state) {
@@ -3815,12 +3820,21 @@ fn evaluator(frame: &mut Frame, state: &State, panes: &layout::Layout) {
         Block::default().borders(Borders::ALL).title("EVALUATE"),
         rect(window),
     );
-    let lines: Vec<Line> = open
+    let mut lines: Vec<Line<'static>> = open
         .snippet
         .shown()
         .split('\n')
         .map(|row| Line::raw(row.to_string()))
         .collect();
+    if state.focus == Pane::Evaluator {
+        paint_drag(
+            &mut lines,
+            &|number| Some(number - 1),
+            state.selection.as_ref().and_then(Selection::buffer_span),
+            &state.occurrences,
+            false,
+        );
+    }
     frame.render_widget(Paragraph::new(lines), rect(snippet_area));
     // The rule between the two, on the row `layout` left for it.
     frame.render_widget(

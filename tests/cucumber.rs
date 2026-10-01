@@ -2968,6 +2968,9 @@ fn named_key(key: &str) -> Option<terminput::KeyEvent> {
         "Ctrl+Alt+Right" => plain(terminput::KeyCode::Right)
             .modifiers(terminput::KeyModifiers::ALT | terminput::KeyModifiers::CTRL),
         "Alt+Right" => alt(terminput::KeyCode::Right),
+        "Shift+Right" => plain(terminput::KeyCode::Right).modifiers(terminput::KeyModifiers::SHIFT),
+        "Shift+Alt+Right" => plain(terminput::KeyCode::Right)
+            .modifiers(terminput::KeyModifiers::SHIFT | terminput::KeyModifiers::ALT),
         "Left" => plain(terminput::KeyCode::Left),
         "Right" => plain(terminput::KeyCode::Right),
         "Ctrl+c" => plain(terminput::KeyCode::Char('c')).modifiers(terminput::KeyModifiers::CTRL),
@@ -17540,6 +17543,13 @@ fn evaluator_is_not_open(world: &mut VardeWorld) {
 #[then(expr = "the Snippet is {string}")]
 fn the_snippet_is(world: &mut VardeWorld, expected: String) {
     assert_eq!(snippet(world), expected);
+}
+
+/// The Snippet's own cursor, never the one in the file behind the window.
+#[then(expr = "the cursor in the Snippet is at line {int} column {int}")]
+fn cursor_in_the_snippet(world: &mut VardeWorld, line: usize, column: usize) {
+    let snippet = &evaluator(world).snippet;
+    assert_eq!((snippet.line, snippet.column), (line, column));
 }
 
 #[then("the Snippet is:")]

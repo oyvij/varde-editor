@@ -2880,9 +2880,11 @@ fn settle(mut next: State, mut effects: Vec<Effect>, wheeled: bool) -> (State, V
             find.keys = FindKeys::Away;
         }
     }
-    let showing_lines = next.focus == Pane::Editor && next.diff.is_none() && !previewing(&next);
+    // The Snippet's `V` picks lines on the same terms, out of the Snippet.
+    let showing_lines = next.focus == Pane::Evaluator
+        || (next.focus == Pane::Editor && next.diff.is_none() && !previewing(&next));
     let linewise = showing_lines
-        .then(|| current_buffer(&next).and_then(Buffer::selected_lines))
+        .then(|| next.edited().and_then(Buffer::selected_lines))
         .flatten();
     match linewise {
         Some((from, to)) => next.selection = Some(Selection::Lines { from, to }),
@@ -3360,7 +3362,7 @@ fn opens_a_chord(state: &State) -> bool {
 /// while the keyboard is in it and the editor answers the same events: a key
 /// meant for the Snippet would otherwise edit the file the window is floating
 /// over, which is the one file the reader can see it is not typing in.
-fn on_snippet(mut next: State, event: Event, wheeled: bool) -> Answered {
+fn on_snippet(state: &State, mut next: State, event: Event, wheeled: bool) -> Answered {
     if next.focus != Pane::Evaluator || next.evaluator.is_none() {
         return Err((next, event));
     }
@@ -3387,13 +3389,15 @@ fn on_snippet(mut next: State, event: Event, wheeled: bool) -> Answered {
         }
     }
     // Escape closes the window once there is nothing left for it to leave:
-    // inserting, a Visual selection, a half-typed command and a Selection are
-    // each taken back by an Escape of their own first. `:q` closes it rather
-    // than the file behind it, which is not the one being typed in.
+    // inserting, a Visual selection, a half-typed command, a Selection and
+    // the occurrences taken with it are each taken back by an Escape of their
+    // own first. `:q` closes it rather than the file behind it, which is not
+    // the one being typed in.
     let snippet = &next.evaluator.as_ref().expect("checked just above").snippet;
     let settled = snippet.mode == editor::Mode::Normal
         && snippet.pending_command().is_empty()
-        && next.selection.is_none();
+        && next.selection.is_none()
+        && next.occurrences.is_empty();
     if matches!(event, Event::CloseBuffer { .. })
         || (matches!(event, Event::EditorEscape) && settled)
     {
@@ -3402,23 +3406,65 @@ fn on_snippet(mut next: State, event: Event, wheeled: bool) -> Answered {
     }
     if matches!(event, Event::EditorEscape) {
         next.selection = None;
+        next.occurrences.clear();
     }
+    // The gestures that read the workspace's Selection and occurrences, or
+    // move a cursor that clears them, are the editor's own arms: they act on
+    // whichever buffer has the keyboard, so the Snippet hands them over rather
+    // than keeping a second copy that drifts. `gd` is not one of them — a
+    // definition is a file's, and the Snippet is not a file.
+    let shared = match event {
+        Event::EditorArrow(_) | Event::EditorWord(_) | Event::EditorExtend(_) => {
+            on_editor_arrow_2(state, next, event, wheeled)
+        }
+        Event::EditorExtendWord(_) | Event::EditorNextOccurrence => {
+            on_editor_extend_word(state, next, event, wheeled)
+        }
+        Event::EditorIndent(_) | Event::EditorPaste(_) => {
+            on_editor_key_6(state, next, event, wheeled)
+        }
+        // The Snippet is never read-only, so the guards that arm reads — a
+        // Preview, a diff, a walked Site — would be the file behind talking.
+        Event::PasteFromClipboard => Ok(settle(next, vec![Effect::ReadClipboard], wheeled)),
+        Event::EditorKey('d') if pending_g(state) => Err((next, event)),
+        Event::EditorKey(_) => on_editor_key_3(state, next, event, wheeled),
+        other => Err((next, other)),
+    };
+    let (mut next, event) = match shared {
+        Ok(answer) => return Ok(answer),
+        Err(declined) => declined,
+    };
     let snippet = &mut next.evaluator.as_mut().expect("checked just above").snippet;
     match event {
         Event::EditorKey(key) => _ = snippet.key(key),
-        Event::EditorBackspace => snippet.backspace(),
+        Event::EditorBackspace => erase(state, &mut next),
         Event::EditorDeleteWord => snippet.delete_word_back(),
         Event::EditorUndo => snippet.undo(),
         Event::EditorRedo => snippet.redo(),
-        Event::EditorArrow(direction) => snippet.arrow(direction),
-        Event::EditorWord(direction) => snippet.word_motion(editor::Word::toward(direction)),
         Event::EditorEscape => snippet.escape(),
-        // One edit, not a run of keys, for the reason the comment box's paste
-        // is one: a newline in pasted code is text and not a gesture.
-        Event::EditorPaste(text) => snippet.paste(&text),
         other => return Err((next, other)),
     }
     Ok(settle(next, vec![], wheeled))
+}
+
+/// A backspace in whichever buffer has the keyboard. Picked characters are
+/// what goes, as typing over them replaces them: the selection names the text,
+/// not the character behind the cursor. Insert mode only, for the reason the
+/// typing-over arm is.
+fn erase(state: &State, next: &mut State) {
+    let picked = match editor_inserting(state) {
+        true => state.selection.as_ref().and_then(Selection::buffer_span),
+        false => None,
+    };
+    if picked.is_some() {
+        next.selection = None;
+    }
+    if let Some(buffer) = edited_mut(next) {
+        match picked {
+            Some((from, to)) => buffer.delete_in(from, to),
+            None => buffer.backspace(),
+        }
+    }
 }
 
 /// The comment box's body, which is a [`Buffer`]. The box inherits the editor's
@@ -3590,7 +3636,7 @@ fn section_workspace(state: &State, next: State, event: Event, wheeled: bool) ->
 /// 6 of the groups, in the order their arms had.
 fn route_trigger(state: &State, next: State, event: Event, wheeled: bool) -> Answered {
     let declined = (next, event);
-    let declined = match on_snippet(declined.0, declined.1, wheeled) {
+    let declined = match on_snippet(state, declined.0, declined.1, wheeled) {
         Ok(answer) => return Ok(answer),
         Err(declined) => declined,
     };
@@ -5692,23 +5738,7 @@ fn on_accept_filter(state: &State, mut next: State, event: Event, wheeled: bool)
         // hid it — at line 1 column 1 a backspace does nothing anyway.
         Event::EditorBackspace => {
             if state.diff.is_none() && state.walking.is_none() {
-                // Picked characters are what goes, as typing over them
-                // replaces them: the selection names the text, not the
-                // character behind the cursor. Insert mode only, for the
-                // reason the typing-over arm is.
-                let picked = match editor_inserting(state) {
-                    true => state.selection.as_ref().and_then(Selection::buffer_span),
-                    false => None,
-                };
-                if picked.is_some() {
-                    next.selection = None;
-                }
-                if let Some(buffer) = current(&mut next) {
-                    match picked {
-                        Some((from, to)) => buffer.delete_in(from, to),
-                        None => buffer.backspace(),
-                    }
-                }
+                erase(state, &mut next);
             }
             // Deleting inside a word is still typing it: the list a longer
             // prefix earned would otherwise stand over what is left.
@@ -5811,7 +5841,7 @@ fn on_editor_arrow_2(state: &State, mut next: State, event: Event, wheeled: bool
         Event::EditorArrow(direction) => {
             next.selection = None;
             next.occurrences.clear();
-            if let Some(buffer) = current(&mut next) {
+            if let Some(buffer) = edited_mut(&mut next) {
                 buffer.arrow(direction);
             }
             vec![]
@@ -5822,7 +5852,7 @@ fn on_editor_arrow_2(state: &State, mut next: State, event: Event, wheeled: bool
         Event::EditorWord(direction) => {
             next.selection = None;
             next.occurrences.clear();
-            if let Some(buffer) = current(&mut next) {
+            if let Some(buffer) = edited_mut(&mut next) {
                 buffer.word_motion(editor::Word::toward(direction));
             }
             vec![]
@@ -5835,7 +5865,7 @@ fn on_editor_arrow_2(state: &State, mut next: State, event: Event, wheeled: bool
                 Some(Selection::Buffer { anchor, .. }) => Some(anchor),
                 _ => None,
             };
-            if let Some(buffer) = current(&mut next) {
+            if let Some(buffer) = edited_mut(&mut next) {
                 let anchor = held.unwrap_or(Place {
                     line: buffer.line,
                     column: buffer.column,
@@ -5865,7 +5895,7 @@ fn on_editor_extend_word(state: &State, mut next: State, event: Event, wheeled: 
                 Some(Selection::Buffer { anchor, .. }) => Some(anchor),
                 _ => None,
             };
-            if let Some(buffer) = current(&mut next) {
+            if let Some(buffer) = edited_mut(&mut next) {
                 let anchor = held.unwrap_or(Place {
                     line: buffer.line,
                     column: buffer.column,
@@ -5919,7 +5949,7 @@ fn on_editor_extend_word(state: &State, mut next: State, event: Event, wheeled: 
 /// of lines is not a word, and every occurrence of one is a different gesture.
 fn take_next_occurrence(next: &mut State) {
     let span = next.selection.as_ref().and_then(Selection::buffer_span);
-    let Some(buffer) = current(next) else {
+    let Some(buffer) = edited_mut(next) else {
         return;
     };
     let lines: Vec<String> = buffer.shown().split('\n').map(str::to_string).collect();
@@ -5959,7 +5989,12 @@ fn take_next_occurrence(next: &mut State) {
         .or_else(|| all.iter().find(|place| !taken.contains(place)));
     if let Some(found) = untaken {
         next.occurrences.push(*found);
-        next.revealing = Some(*found);
+        // The editor's scroll is the file's; the Snippet's window follows its
+        // own cursor, and scrolling the file behind it would be a jump nobody
+        // asked for.
+        if next.focus != Pane::Evaluator {
+            next.revealing = Some(*found);
+        }
     }
 }
 
@@ -6338,7 +6373,7 @@ fn on_editor_key_3(state: &State, mut next: State, event: Event, wheeled: bool) 
         // `every_key` sweep cannot see it: the selection it drives every key
         // with is a pty one, and that arm only claims a Buffer one.
         Event::EditorKey('d') if pending_g(state) => {
-            if let Some(buffer) = current(&mut next) {
+            if let Some(buffer) = edited_mut(&mut next) {
                 buffer.clear_pending();
             }
             lsp::ask(&mut next, lsp::About::Definition)
@@ -6350,7 +6385,7 @@ fn on_editor_key_3(state: &State, mut next: State, event: Event, wheeled: bool) 
         // alone would be the only route to it. A waiting `g` is normal mode by
         // construction, exactly as it is for `gd`.
         Event::EditorKey('m') if pending_g(state) => {
-            if let Some(buffer) = current(&mut next) {
+            if let Some(buffer) = edited_mut(&mut next) {
                 buffer.clear_pending();
             }
             take_next_occurrence(&mut next);
@@ -6370,7 +6405,7 @@ fn on_editor_key_3(state: &State, mut next: State, event: Event, wheeled: bool) 
         Event::EditorKey(key) if !state.occurrences.is_empty() => {
             let picked = state.selection.as_ref().and_then(Selection::buffer_span);
             next.selection = None;
-            if let Some(buffer) = current(&mut next) {
+            if let Some(buffer) = edited_mut(&mut next) {
                 buffer.mode = editor::Mode::Insert;
                 let primary = picked.map_or(
                     Place {
@@ -6407,7 +6442,7 @@ fn on_editor_key_3(state: &State, mut next: State, event: Event, wheeled: bool) 
                 .and_then(Selection::buffer_span)
                 .expect("matched above");
             next.selection = None;
-            if let Some(buffer) = current(&mut next) {
+            if let Some(buffer) = edited_mut(&mut next) {
                 buffer.replace_in(from, to, key);
             }
             vec![]
@@ -6426,7 +6461,7 @@ fn on_editor_key_3(state: &State, mut next: State, event: Event, wheeled: bool) 
                 .expect("matched above");
             let picked = state.selected_text();
             next.selection = None;
-            if let Some(buffer) = current(&mut next) {
+            if let Some(buffer) = edited_mut(&mut next) {
                 match key {
                     'd' => buffer.delete_in(from, to),
                     _ => buffer.yank_in(from, to),
@@ -6466,7 +6501,7 @@ fn on_editor_key_3(state: &State, mut next: State, event: Event, wheeled: bool) 
                 column: place.column + usize::from(place.line == from.line),
                 ..place
             };
-            if let Some(buffer) = current(&mut next) {
+            if let Some(buffer) = edited_mut(&mut next) {
                 buffer.wrap_in(from, to, key, close);
                 buffer.go_to_place(shifted(cursor));
             }
@@ -6477,14 +6512,6 @@ fn on_editor_key_3(state: &State, mut next: State, event: Event, wheeled: bool) 
             vec![]
         }
 
-        other => return Err((next, other)),
-    };
-    Ok(settle(next, effects, wheeled))
-}
-
-/// EditorKey
-fn on_editor_key_4(state: &State, mut next: State, event: Event, wheeled: bool) -> Answered {
-    let effects = match event {
         // Shift with a word key extends, so `W` and `B` are claimed before the
         // buffer sees them. Normal mode only: inserting a capital must still
         // type one.
@@ -6497,6 +6524,14 @@ fn on_editor_key_4(state: &State, mut next: State, event: Event, wheeled: bool) 
             return Ok(update(state, Event::EditorExtendWord(direction)));
         }
 
+        other => return Err((next, other)),
+    };
+    Ok(settle(next, effects, wheeled))
+}
+
+/// EditorKey
+fn on_editor_key_4(state: &State, mut next: State, event: Event, wheeled: bool) -> Answered {
+    let effects = match event {
         // `D` answers the ⚠ the watcher raised. Normal mode only: inserting a
         // `D` must still type one. Refused out loud on a buffer that agrees
         // with disk — a picker offering to resolve nothing reads as the flag
@@ -6581,7 +6616,7 @@ fn on_editor_key_6(state: &State, mut next: State, event: Event, wheeled: bool) 
         // edit names different characters after it.
         Event::EditorIndent(direction) => {
             let span = state.selection.as_ref().and_then(Selection::buffer_span);
-            if let (Some((from, to)), Some(buffer)) = (span, current(&mut next)) {
+            if let (Some((from, to)), Some(buffer)) = (span, edited_mut(&mut next)) {
                 buffer.indent_lines(from.line, to.line, direction == Direction::Right);
                 let cursor = Place {
                     line: buffer.line,
@@ -6619,7 +6654,7 @@ fn on_editor_key_6(state: &State, mut next: State, event: Event, wheeled: bool) 
         // Pasted text asks for no candidates: a name that arrived whole is not
         // a name being typed.
         Event::EditorPaste(text) => {
-            if let Some(buffer) = current(&mut next) {
+            if let Some(buffer) = edited_mut(&mut next) {
                 buffer.paste(&text);
             }
             Ok(settle(next, vec![], wheeled))
@@ -6688,12 +6723,7 @@ fn editor_key(state: &State, next: State, key: char, wheeled: bool) -> (State, V
 /// below, and the `gd` arm that has to sit ahead of charwise delete — so it is
 /// one fact rather than two spellings of it.
 fn pending_g(state: &State) -> bool {
-    state
-        .current_buffer
-        .as_ref()
-        .and_then(|path| state.buffers.get(path))
-        .map(|buffer| buffer.pending())
-        == Some("g")
+    state.edited().map(|buffer| buffer.pending()) == Some("g")
 }
 
 /// `gr` looks up the selection, `*` the word under the cursor. Normal mode
@@ -10086,6 +10116,16 @@ fn current(state: &mut State) -> Option<&mut Buffer> {
     state.buffers.get_mut(&path)
 }
 
+/// [`State::edited`], to change: the arm of an editing gesture writes to the
+/// buffer the keyboard is in, so the Snippet is edited by the editor's own
+/// arms rather than by a second copy of them.
+fn edited_mut(state: &mut State) -> Option<&mut Buffer> {
+    match state.focus {
+        Pane::Evaluator => state.evaluator.as_mut().map(|it| &mut it.snippet),
+        _ => current(state),
+    }
+}
+
 /// A path as the workspace names it — the spelling a Site is authored with, a
 /// Visit records and the tree, the buffer title and every notice show. Outside
 /// the root it stays whole: a file opened from elsewhere is not the root's to
@@ -11164,9 +11204,7 @@ fn walk_to_citation(state: &State, next: State) -> (State, Vec<Effect>) {
 /// of them must still type it.
 fn normal_mode(state: &State) -> bool {
     state
-        .current_buffer
-        .as_ref()
-        .and_then(|path| state.buffers.get(path))
+        .edited()
         .is_some_and(|buffer| buffer.mode == editor::Mode::Normal)
 }
 
@@ -11286,6 +11324,29 @@ mod tests {
         let clicked = update(&picked, Event::FocusSplit(0)).0;
         assert_eq!(clicked.selection, None);
         assert_eq!(clicked.focus, Pane::Terminal);
+    }
+
+    /// The Snippet is never read-only, so a Preview open behind the window
+    /// must not refuse a paste meant for it: the refusal is the file's.
+    #[test]
+    fn a_paste_into_the_snippet_is_not_refused_by_a_preview_behind_it() {
+        let (opened, _) = update(
+            &State::default(),
+            Event::BufferOpened {
+                path: PathBuf::from("/w/notes.md"),
+                contents: "# notes".to_string(),
+                preview: false,
+                at: None,
+            },
+        );
+        let mut state = debug::paused(opened);
+        if let Some(buffer) = current(&mut state) {
+            buffer.previewing = true;
+        }
+        debug::open_evaluator(&mut state, "count".to_string());
+        let (pasted, effects) = update(&state, Event::PasteFromClipboard);
+        assert_eq!(pasted.refusal, None);
+        assert!(effects.contains(&Effect::ReadClipboard));
     }
 
     /// A snippet's tab stops belong to the text being typed exactly as the list

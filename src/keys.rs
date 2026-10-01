@@ -1119,10 +1119,14 @@ fn buffer_takes_paste(state: &State, drafts: &Drafts) -> bool {
 /// two spellings of it, for the reason [`a_box_has_the_keys`] is one — two
 /// spellings of the same question are two answers waiting to disagree.
 fn the_buffer_takes_edits(state: &State) -> bool {
-    state.focus == Pane::Editor
-        && state.diff.is_none()
-        && state.walking.is_none()
-        && !crate::previewing(state)
+    // The Snippet is a buffer typed into on the same terms, and nothing
+    // read-only stands in front of it: the diff, the Site and the Preview are
+    // all the file's.
+    state.focus == Pane::Evaluator
+        || (state.focus == Pane::Editor
+            && state.diff.is_none()
+            && state.walking.is_none()
+            && !crate::previewing(state))
 }
 
 /// Whether the open buffer is the thing being *typed* into: the surface above,
@@ -1638,7 +1642,7 @@ fn jump_alias(event: KeyEvent) -> Option<Vec<Event>> {
 /// modifier but Ctrl and Command is inspected, so one that names no gesture of
 /// its own is folded into the key it triggers.
 fn occurrence_alias(state: &State, event: KeyEvent) -> Option<Vec<Event>> {
-    (state.focus == Pane::Editor
+    (matches!(state.focus, Pane::Editor | Pane::Evaluator)
         && state.diff.is_none()
         && state.walking.is_none()
         && ctrl_or_command(event)
@@ -1723,7 +1727,7 @@ fn tab_indent(state: &State, event: KeyEvent) -> Option<Vec<Event>> {
 /// keep every modifier they had — the pair below is read on an arrow and
 /// nowhere else, so a letter carrying Ctrl names no gesture of its own here.
 fn word_motion_alias(state: &State, event: KeyEvent, alt: bool, shift: bool) -> Option<Vec<Event>> {
-    if !(state.focus == Pane::Editor && alt) {
+    if !(matches!(state.focus, Pane::Editor | Pane::Evaluator) && alt) {
         return None;
     }
     match (arrow(event.code), shift) {
@@ -1925,6 +1929,10 @@ fn pane_key(state: &State, event: KeyEvent) -> Vec<Event> {
         {
             vec![Event::WriteBuffer]
         }
+        // Declined in the Snippet rather than typed: Command leaves the `s`
+        // alone, so falling through would substitute a character with the key
+        // that means "write".
+        Pane::Evaluator if event.code == KeyCode::Char('s') && ctrl_or_command(event) => vec![],
         Pane::Editor | Pane::Evaluator => editor_pane_key(event),
         Pane::Tree => tree_pane_key(event),
         // The corner's panes answer Enter — go to the code behind the figure,
@@ -4852,6 +4860,205 @@ mod tests {
                 missing.is_empty(),
                 "in {view:?} these bindings do something and are in neither the \
                  cheatsheet nor the omissions list: {missing:?}"
+            );
+        }
+    }
+
+    /// The editing gestures the Snippet declines, in the mode each is declined
+    /// in, with the reason. The gestures that act on the *file* — writing,
+    /// `gt`/`gT`, `gd`, `D`, the jumps, the searches — need no line here: they
+    /// leave the editor's buffer as it was, so the sweep below holds them to
+    /// leaving the Snippet and the file behind it as they were too, which is
+    /// what declining them means. What is named is what changes the text, the
+    /// cursor or the Selection on one side and deliberately not on the other;
+    /// a gesture that diverges without being named is the accident the sweep
+    /// catches.
+    const SNIPPET_DECLINES: [(&str, crate::editor::Mode, &str); 3] = [
+        (
+            "Enter",
+            crate::editor::Mode::Normal,
+            "runs the Snippet — the Selection if there is one — which is what \
+             the Evaluator is for. Inserting, it is the newline it is in the \
+             editor, and the sweep holds it to that",
+        ),
+        (
+            "C-Enter",
+            crate::editor::Mode::Normal,
+            "the alias of normal-mode Enter, which runs the Snippet",
+        ),
+        (
+            "C-Enter",
+            crate::editor::Mode::Insert,
+            "runs the Snippet while inserting, so a block need not be left to \
+             be run — the editor reads no Ctrl on Enter and types the newline",
+        ),
+    ];
+
+    /// A candidate's label, with the one modifier only the Evaluator reads:
+    /// [`label`] folds Ctrl on Enter away because the editor never inspects
+    /// it, and folded here it would decline plain Enter with it.
+    fn gesture(label: String, sequence: &[KeyEvent]) -> String {
+        match sequence {
+            [key] if key.code == KeyCode::Enter && key.modifiers.contains(KeyModifiers::CTRL) => {
+                "C-Enter".to_string()
+            }
+            _ => label,
+        }
+    }
+
+    /// What an editing key can change: the text, the cursor, the mode and the
+    /// Selection of whichever buffer the keyboard is in — the occurrences a
+    /// `C-d` takes are part of what is picked.
+    type Edit = (
+        String,
+        Place,
+        crate::editor::Mode,
+        Option<Selection>,
+        Vec<Place>,
+    );
+
+    fn edit_of(state: &State) -> Option<Edit> {
+        let buffer = state.edited()?;
+        Some((
+            buffer.shown().to_string(),
+            Place {
+                line: buffer.line,
+                column: buffer.column,
+            },
+            buffer.mode,
+            state.selection.clone(),
+            state.occurrences.clone(),
+        ))
+    }
+
+    /// The file behind the Evaluator's window, which no key typed into the
+    /// Snippet may reach.
+    fn behind(state: &State) -> Option<(String, Place)> {
+        let buffer = state.buffers.get(state.current_buffer.as_ref()?)?;
+        Some((
+            buffer.shown().to_string(),
+            Place {
+                line: buffer.line,
+                column: buffer.column,
+            },
+        ))
+    }
+
+    /// The editor and the Evaluator holding the same text with the cursor in
+    /// the same place, each driven on into the same starts: normal mode and
+    /// inserting, since Tab and Alt+Backspace are insert-mode keys; with
+    /// characters picked, since `d`, `y` and typing act on a Selection; and
+    /// with an occurrence taken, since typing then lands at every one. A sweep
+    /// of a bare cursor alone never drives the arms that read either.
+    fn snippet_pairs() -> Vec<(State, State)> {
+        let opened = crate::update(
+            &State::default(),
+            Event::BufferOpened {
+                path: std::path::PathBuf::from("/w/one.rs"),
+                contents: "one two one\ntwo one two\none two one\n".to_string(),
+                preview: false,
+                at: None,
+            },
+        )
+        .0;
+        let mut editor = crate::debug::paused(State {
+            focus: Pane::Editor,
+            ..opened
+        });
+        // Off the corner for the reason [`editing`] walks off it.
+        for direction in [Direction::Down, Direction::Right, Direction::Right] {
+            editor = crate::update(&editor, Event::EditorArrow(direction)).0;
+        }
+        let mut evaluator = editor.clone();
+        let text = editor
+            .edited()
+            .expect("a buffer is open")
+            .shown()
+            .to_string();
+        crate::debug::open_evaluator(&mut evaluator, text);
+        let at = edit_of(&editor).expect("a buffer is open").1;
+        if let Some(it) = evaluator.evaluator.as_mut() {
+            it.snippet.go_to_place(at);
+        }
+        let extend = KeyEvent::new(KeyCode::Right).modifiers(KeyModifiers::SHIFT);
+        let take = KeyEvent::new(KeyCode::Char('d')).modifiers(KeyModifiers::CTRL);
+        [
+            vec![],
+            vec![plain('i')],
+            vec![extend],
+            vec![plain('i'), extend],
+            vec![take, take],
+            vec![plain('i'), take, take],
+        ]
+        .into_iter()
+        .map(|start| (outcome(&editor, &start).0, outcome(&evaluator, &start).0))
+        .collect()
+    }
+
+    /// The Snippet is edited with the editor's own gestures: every key or chord
+    /// leaves the Snippet's text, cursor, mode and Selection as it leaves the
+    /// editor's, and the file behind the window alone — or is named in
+    /// [`SNIPPET_DECLINES`]. Every key, not only the editing ones: a key that
+    /// moves nothing in the editor and edits the Snippet is the same accident
+    /// the other way round, and `D-s` substituting a character was one. Measured rather than read off the Cheatsheet's
+    /// rows, for the reason [`answers`] is: Rust cannot reflect over a match,
+    /// and the gestures that went missing were aliases — Alt+arrow beside
+    /// `w`/`b`, Shift+arrow beside `W`/`B` — that only the editor answered.
+    #[test]
+    fn every_editing_key_does_to_the_snippet_what_it_does_in_the_editor() {
+        let mut diverged: Vec<String> = Vec::new();
+        for (editor, evaluator) in snippet_pairs() {
+            let before = edit_of(&editor);
+            assert_eq!(before, edit_of(&evaluator), "the pair starts equal");
+            let mode = before.expect("a buffer is open").2;
+            let file = behind(&evaluator);
+            for (label, sequence) in candidates(&editor) {
+                let label = gesture(label, &sequence);
+                if SNIPPET_DECLINES
+                    .iter()
+                    .any(|(declined, declined_in, _)| *declined == label && *declined_in == mode)
+                {
+                    continue;
+                }
+                let edited = drive(&editor, &mut Drafts::default(), &sequence).0;
+                let typed = drive(&evaluator, &mut Drafts::default(), &sequence).0;
+                if edit_of(&typed) != edit_of(&edited) || behind(&typed) != file {
+                    diverged.push(format!("{label} ({mode:?})"));
+                }
+            }
+        }
+        diverged.sort();
+        diverged.dedup();
+        assert!(
+            diverged.is_empty(),
+            "these editing keys do something else in the Snippet and are not \
+             declined: {diverged:?}"
+        );
+    }
+
+    /// A decline is only worth its line if the Snippet really does something
+    /// else there: one that has come to agree is a decision nobody is making
+    /// any more, and an Enter that stopped running the Snippet would read as
+    /// declined forever.
+    #[test]
+    fn every_declined_editing_key_still_differs_in_the_snippet() {
+        for (declined, mode, _) in SNIPPET_DECLINES {
+            let differs = snippet_pairs()
+                .into_iter()
+                .filter(|(editor, _)| edit_of(editor).map(|edit| edit.2) == Some(mode))
+                .any(|(editor, evaluator)| {
+                    candidates(&editor)
+                        .into_iter()
+                        .filter(|(label, sequence)| gesture(label.clone(), sequence) == declined)
+                        .any(|(_, sequence)| {
+                            let edited = drive(&editor, &mut Drafts::default(), &sequence);
+                            let typed = drive(&evaluator, &mut Drafts::default(), &sequence);
+                            edit_of(&edited.0) != edit_of(&typed.0)
+                        })
+                });
+            assert!(
+                differs,
+                "{declined} is declined in {mode:?} and does the same"
             );
         }
     }
