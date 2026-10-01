@@ -7,7 +7,6 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
-use varde::editor::Mode;
 use varde::highlight::{self, Kind};
 use varde::layout::{self, Area};
 use varde::lsp;
@@ -215,7 +214,6 @@ pub fn draw(
     // strip's columns out of the count the text is clamped against, so nothing
     // the text was allowed to reach is covered.
     minimap(frame, state, &areas, chrome.tokens);
-    cheatsheet(frame, state, areas.editor);
     replace_box(frame, state, areas.panes.editor);
     if !finding {
         place_cursor(frame, state, &areas, typing.as_deref());
@@ -304,7 +302,10 @@ pub fn draw(
     ) {
         place_pty_cursor(frame, *area, shell);
     }
-    draw_ai_pane(frame, state, &areas, ai, &chrome, caret_is_free);
+    match state.ai_slot {
+        layout::Slot::Ai => draw_ai_pane(frame, state, &areas, ai, &chrome, caret_is_free),
+        layout::Slot::Cheatsheet => frame.render_widget(cheatsheet_widget(state), areas.ai),
+    }
     draw_status(frame, state, &chrome);
     // On the editor's text, under everything that floats over it.
     if let Some((x, y)) = varde::debug::edit_chip(state, &areas.panes) {
@@ -3650,66 +3651,6 @@ fn bar(kind: story::Kind) -> Color {
     }
 }
 
-/// A reminder of the keys, tucked into the editor's top-right. `:help` takes it
-/// down and puts it back — a terminal cell holds one character, so while it is
-/// up the code under it is gone and there is no opacity to give it. Hidden while
-/// Edit view is inserting, when you are typing rather than remembering, and
-/// hidden in Review view until a diff has actually landed — Review's rows
-/// answer to `state.diff`, and one that has not shown up yet claims nothing.
-/// There is no third arm for Edit view with a diff on screen:
-/// `move_to_view` clears `state.diff` on every
-/// way out of Review, so the two never coexist. The keys themselves live in
-/// `keys::CHEATSHEET`, one row per gesture tagged with the views it applies
-/// to; drawing only filters the table to `state.view` rather than deciding
-/// what belongs in it.
-/// Whether the view has keys to claim at all.
-fn showing_cheatsheet(state: &State) -> bool {
-    match state.view {
-        View::Edit => state
-            .current_buffer
-            .as_ref()
-            .and_then(|path| state.buffers.get(path))
-            .is_some_and(|buffer| buffer.mode != Mode::Insert),
-        // Review's rows only answer once a diff is on screen — `j k V c` and
-        // `e` are read from `state.diff` in `update`, and an empty review or
-        // one whose diff has not landed yet has none of them to claim.
-        View::Review => state.diff.is_some(),
-        // Nothing gates it: Story view has no content yet whose absence
-        // should hide the box, unlike Edit's insert mode or Review's diff.
-        View::Story => true,
-    }
-}
-
-/// The rows the box actually shows in a pane `height` rows tall: the table
-/// filtered to the view, and then cut to what
-/// there is room for — the pane's height less the border the box starts under
-/// and the one it stops above.
-///
-/// The cut is made here rather than left to `Paragraph`, which drops the
-/// surplus without a word. The box has no footer and nowhere to put a mark, so
-/// this cannot be announced the way `lsp::TALLEST` announces one; what it can
-/// be is *read*, which is what lets a test hold `keys::CHEATSHEET`'s order to
-/// the promise its own doc makes — the rows that survive a short window are the
-/// ones nothing else teaches you. Twenty-five Edit rows compete for sixteen on
-/// a 26-row screen, so the order is the whole of the answer.
-fn cheatsheet_rows(state: &State, height: u16) -> Vec<(String, Color)> {
-    let rows_for_view: Vec<(&str, &str)> = keys::cheatsheet(state)
-        .filter(|(_, _, views)| state.cheatsheet && keys::applies_to(views, state.view))
-        .map(|(keys, what, _)| (*keys, *what))
-        .collect();
-    let column = rows_for_view
-        .iter()
-        .map(|(keys, _)| keys.len())
-        .max()
-        .unwrap_or(0);
-    let mut rows: Vec<(String, Color)> = rows_for_view
-        .into_iter()
-        .map(|(keys, what)| (format!(" {keys:column$}  {what}"), Color::DarkGray))
-        .collect();
-    rows.truncate(height.saturating_sub(2) as usize);
-    rows
-}
-
 /// The replace box, while it has the keyboard: find, with, and the two
 /// buttons, at the rows and columns `mouse` hit-tests them by. `[Aa]` is the
 /// search's own toggle, drawn a second time rather than being a second
@@ -3772,30 +3713,23 @@ fn replace_box(frame: &mut Frame, state: &State, editor: Area) {
     }
 }
 
-fn cheatsheet(frame: &mut Frame, state: &State, area: Rect) {
-    if !showing_cheatsheet(state) || state.focus != Pane::Editor {
-        return;
-    }
-    let rows = cheatsheet_rows(state, area.height);
-    let width = rows.iter().map(|(row, _)| row.len()).max().unwrap_or(0) as u16 + 1;
-    if area.width < width + 12 {
-        return;
-    }
-    let spot = Rect {
-        x: area.right().saturating_sub(width + 1),
-        y: area.y + 1,
-        width,
-        height: rows.len() as u16,
-    };
-    frame.render_widget(Clear, spot);
-    frame.render_widget(
-        Paragraph::new(
-            rows.into_iter()
-                .map(|(row, color)| Line::from(Span::styled(row, Style::default().fg(color))))
-                .collect::<Vec<_>>(),
-        ),
-        spot,
-    );
+/// The Cheatsheet, in the AI pane's rectangle: the rows `keys::cheatsheet_rows`
+/// lists for the view on screen, from the offset `update` clamped.
+fn cheatsheet_widget(state: &State) -> Paragraph<'static> {
+    let rows = keys::cheatsheet_rows(state);
+    let column = rows.iter().map(|(keys, _)| keys.len()).max().unwrap_or(0);
+    Paragraph::new(
+        rows.into_iter()
+            .skip(state.cheatsheet_scroll)
+            .map(|(keys, what)| {
+                Line::from(Span::styled(
+                    format!(" {keys:column$}  {what}"),
+                    Style::default().fg(Color::DarkGray),
+                ))
+            })
+            .collect::<Vec<_>>(),
+    )
+    .block(pane_block("keys", state, Pane::Cheatsheet))
 }
 
 /// The hover box, over the lines the core placed it on. The markdown is
@@ -5206,12 +5140,12 @@ fn overlay(frame: &mut Frame, title: &str, lines: Vec<Line<'static>>) {
 #[cfg(test)]
 mod tests {
     use super::{
-        action_icon, authorship_clause, branch_lines, buffer_title, cheatsheet_rows, code_lines,
-        colour, diff_rows, editor_block, faint, guided, highlight, icon_colour, launch_lines,
-        layout, paint_drag, pane_actions_title, preview_line, right_title, risk_lines, risk_title,
-        shift, source_lines, status_line, story_title, title_room, tree_lines, truncate,
-        with_breakpoint, with_caret, Block, Borders, Color, Kind, Line, Modifier, Place, Selection,
-        Span, State, Style, Tone, UnicodeWidthStr, DIRTY, DOTS, WARNING,
+        action_icon, authorship_clause, branch_lines, buffer_title, code_lines, colour, diff_rows,
+        editor_block, faint, guided, highlight, icon_colour, launch_lines, layout, paint_drag,
+        pane_actions_title, preview_line, right_title, risk_lines, risk_title, shift, source_lines,
+        status_line, story_title, title_room, tree_lines, truncate, with_breakpoint, with_caret,
+        Block, Borders, Color, Kind, Line, Modifier, Place, Selection, Span, State, Style, Tone,
+        UnicodeWidthStr, DIRTY, DOTS, WARNING,
     };
     use varde::risk::{Figure, Figures, Function, Metrics};
 
@@ -7044,47 +6978,6 @@ mod tests {
         assert_eq!(drawn("nåværende", 3), "nå[v]ærende");
         // A column past the end never panics and never wraps.
         assert_eq!(drawn("ab", 99), "ab[ ]");
-    }
-
-    /// The key box truncates from the bottom, so `keys::CHEATSHEET`'s order is
-    /// what decides which rows exist on a short screen — and 26 rows by 120
-    /// columns leaves Edit view's twenty-five rows competing for sixteen. It is
-    /// the size the replay recipe in `AGENTS.md` uses and the size
-    /// `features/ai_pane.feature` drives, and it is where `:format` — the whole
-    /// of what makes the formatter discoverable, since it is in no palette, has
-    /// no completion and is spelled nowhere else — was drawn off the bottom
-    /// along with the gesture that opens the palette.
-    ///
-    /// Not pinned at every row the table claims: at this size that assertion
-    /// cannot pass, and rows are excused off the bottom on purpose. What is
-    /// held is the two rows nothing else in Varde teaches. `C-f`, `D` and
-    /// `:w :q` are what they displaced, each of which is said again somewhere
-    /// the reader is already looking: the palette lists `(f) Find`, and the
-    /// `buffer-diverged` and `unsaved-changes` notices name `D`, `:w` and `:q!`
-    /// in the sentence that reports the problem they answer.
-    ///
-    /// Not pinned at 100 columns either, which is the other size in the suite:
-    /// the editor pane is 42 wide there, the width guard returns before drawing
-    /// anything, and an assertion about rows in a box nobody drew cannot fail.
-    #[test]
-    fn the_rows_nothing_else_teaches_survive_a_short_window() {
-        let mut state = State::default();
-        state.cheatsheet = true;
-        let editor =
-            varde::layout::panes(120, 26, 30, None, 0, 0, varde::layout::Shapes::default()).editor;
-        assert_eq!(editor.height, 18, "the pane the box is drawn in");
-
-        let drawn: Vec<String> = cheatsheet_rows(&state, editor.height)
-            .into_iter()
-            .map(|(row, _)| row)
-            .collect();
-        assert_eq!(drawn.len(), 16);
-        for keys in ["C-space Esc Esc", ":format"] {
-            assert!(
-                drawn.iter().any(|row| row.trim_start().starts_with(keys)),
-                "{keys:?} is drawn off the bottom at 26 rows: {drawn:?}"
-            );
-        }
     }
 
     fn text(line: Line) -> String {

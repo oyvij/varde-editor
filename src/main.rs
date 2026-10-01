@@ -2884,7 +2884,8 @@ fn grid_lines(edge: &Edge, pane: Pane, split: usize, upto: usize) -> Option<Vec<
         | Pane::Frames
         | Pane::Diagnostics
         | Pane::Conflicts
-        | Pane::Variables => return None,
+        | Pane::Variables
+        | Pane::Cheatsheet => return None,
     };
     let (rows, columns) = screen.size();
     // Absolutely indexed from the grid's first row, because that is what the
@@ -3002,7 +3003,8 @@ fn perform_terminal(effect: Effect, split: usize, edge: &mut Edge) -> Option<Eff
             | Pane::Frames
             | Pane::Diagnostics
             | Pane::Conflicts
-            | Pane::Variables => {}
+            | Pane::Variables
+            | Pane::Cheatsheet => {}
         },
         other => return Some(other),
     }

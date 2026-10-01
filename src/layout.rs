@@ -218,6 +218,27 @@ impl Corner {
     }
 }
 
+/// Which pane is in the AI pane's rectangle: the AI session (or the box that
+/// starts one), or the Cheatsheet over it. One slot naming its occupant for
+/// the reason [`Corner`] is one. The session keeps running behind the
+/// Cheatsheet — this changes what is drawn there, never where, and never the
+/// size of the pty, so hiding it again brings the session back unchanged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Slot {
+    #[default]
+    Ai,
+    Cheatsheet,
+}
+
+impl Slot {
+    pub fn pane(self) -> Pane {
+        match self {
+            Slot::Ai => Pane::Ai,
+            Slot::Cheatsheet => Pane::Cheatsheet,
+        }
+    }
+}
+
 /// Which group the Strip is showing. One slot naming its occupant, for the
 /// reason [`Corner`] is one: the Debug group joins it, and "both at once" must
 /// stay a state nobody can write down.
@@ -306,6 +327,8 @@ pub fn strip_height(screen_height: u16, asked: u16) -> u16 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Shapes {
     pub ai: AiPane,
+    /// Who is in the AI pane's rectangle, carried for the reason `corner` is.
+    pub slot: Slot,
     pub corner: Corner,
     /// Which group the Strip is showing, carried here for the reason
     /// `corner` is: the rectangle is the same either way, and what is in it
@@ -468,6 +491,8 @@ pub struct Layout {
     /// from the layout alone — the alternative is every hit-test taking the
     /// occupant as a second argument and one of them forgetting.
     pub occupant: Corner,
+    /// The same for the AI pane's rectangle.
+    pub slot: Slot,
     /// The same for the Strip, whose one rectangle is the shells or the Debug
     /// group: `terminal` is where it is, and this is whose it is.
     pub group: Group,
@@ -610,6 +635,7 @@ pub fn panes(
             height: terminal_height,
         },
         occupant: shapes.corner,
+        slot: shapes.slot,
         group: shapes.group,
         band: Area {
             x: tree_width + step_menu_width,
@@ -777,7 +803,7 @@ pub fn pane_at(layout: &Layout, column: u16, row: u16) -> Option<Pane> {
     } else if layout.editor.holds(column, row) || layout.band.holds(column, row) {
         Some(Pane::Editor)
     } else if layout.ai.holds(column, row) {
-        Some(Pane::Ai)
+        Some(layout.slot.pane())
     } else if layout.terminal.holds(column, row) {
         Some(layout.group.pane())
     } else {
@@ -1033,7 +1059,7 @@ mod frame_tests {
 mod tests {
     use super::{
         chip_labels, inset, pane_at, panes, strip_at, strip_height, strip_width, AiPane, Area,
-        Corner, Group, Output, Shapes, EDITOR_TITLE, STEP_MENU_WIDTH, STRIP_LEAST, TOP_LEAST,
+        Corner, Group, Output, Shapes, Slot, EDITOR_TITLE, STEP_MENU_WIDTH, STRIP_LEAST, TOP_LEAST,
     };
 
     /// Nine columns, the Breakpoint column leftmost and the fold toggle right
@@ -1254,6 +1280,50 @@ mod tests {
         assert_eq!(tall.terminal.height, beside.terminal.height);
     }
 
+    /// The Cheatsheet is the AI pane's rectangle in either shape — nothing
+    /// moves when it is shown, so the session behind it keeps its pty size —
+    /// and the hit-test answers for whoever is in it.
+    #[test]
+    fn the_cheatsheet_takes_the_ai_panes_rectangle_beside_and_tall() {
+        for (ai, at) in [(AiPane::Beside, (100, 5)), (AiPane::Tall, (100, 20))] {
+            let shapes = Shapes {
+                ai,
+                ..Shapes::default()
+            };
+            let session = panes(120, 26, 30, None, 0, 0, shapes);
+            let cheatsheet = panes(
+                120,
+                26,
+                30,
+                None,
+                0,
+                0,
+                Shapes {
+                    slot: Slot::Cheatsheet,
+                    ..shapes
+                },
+            );
+            let expected = match ai {
+                AiPane::Beside => Area {
+                    x: 84,
+                    y: 0,
+                    width: 36,
+                    height: 18,
+                },
+                AiPane::Tall => Area {
+                    x: 84,
+                    y: 0,
+                    width: 36,
+                    height: 26,
+                },
+            };
+            assert_eq!(cheatsheet.ai, expected);
+            assert_eq!(cheatsheet.ai, session.ai);
+            assert_eq!(pane_at(&cheatsheet, at.0, at.1), Some(Pane::Cheatsheet));
+            assert_eq!(pane_at(&session, at.0, at.1), Some(Pane::Ai));
+        }
+    }
+
     #[test]
     fn a_tall_pane_still_tiles_without_gaps_or_overlap() {
         let layout = panes(
@@ -1393,6 +1463,7 @@ mod tests {
             Shapes {
                 group: Group::Shells,
                 ai: AiPane::Tall,
+                slot: Slot::Ai,
                 corner: Corner::Risk,
                 strip: None,
                 output: Output::Away,
@@ -1423,6 +1494,7 @@ mod tests {
                 Shapes {
                     group: Group::Shells,
                     ai,
+                    slot: Slot::Ai,
                     corner: Corner::Risk,
                     strip: None,
                     output: Output::Away,
@@ -1594,6 +1666,7 @@ mod tests {
                 (Shapes {
                     group: Group::Shells,
                     ai: AiPane::Tall,
+                    slot: Slot::Ai,
                     corner: Corner::Risk,
                     strip: None,
                     output: Output::Away,

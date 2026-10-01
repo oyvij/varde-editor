@@ -617,6 +617,7 @@ impl VardeWorld {
             | Pane::Conflicts
             | Pane::Variables
             | Pane::Output
+            | Pane::Cheatsheet
             | Pane::Terminal => self.screen.clone(),
         }
     }
@@ -1834,38 +1835,81 @@ fn ask_to_update(world: &mut VardeWorld) {
     world.send(Event::Rebuild);
 }
 
+#[given(expr = "I ask Varde for help from the command line")]
 #[when(expr = "I ask Varde for help from the command line")]
 fn ask_for_help(world: &mut VardeWorld) {
     world.send(Event::ToggleCheatsheet);
 }
 
-#[given(expr = "the key reminder is hidden")]
+#[given(expr = "the Cheatsheet is hidden")]
 fn reminder_hidden(world: &mut VardeWorld) {
-    world.state.cheatsheet = false;
+    world.state.ai_slot = layout::Slot::Ai;
 }
 
-#[given(expr = "the key reminder is shown")]
+#[given(expr = "the Cheatsheet is shown")]
 fn reminder_up(world: &mut VardeWorld) {
-    world.state.cheatsheet = true;
+    world.state.ai_slot = layout::Slot::Cheatsheet;
 }
 
-#[given(expr = "the project {string} records the key reminder as shown")]
+#[given(expr = "the project {string} records the Cheatsheet as shown")]
 fn state_records_reminder(world: &mut VardeWorld, path: String) {
     assert_eq!(path, ".varde/state.json");
     world.startup.state_json = Some("{\"cheatsheet\": true}".to_string());
 }
 
-#[then(expr = "the key reminder is shown")]
+#[then(expr = "the Cheatsheet is shown")]
 fn reminder_shown(world: &mut VardeWorld) {
-    assert!(world.state.cheatsheet);
+    assert_eq!(world.state.ai_slot, layout::Slot::Cheatsheet);
 }
 
-#[then(expr = "the key reminder is not shown")]
+#[then(expr = "the Cheatsheet is not shown")]
 fn reminder_not_shown(world: &mut VardeWorld) {
-    assert!(!world.state.cheatsheet);
+    assert_eq!(world.state.ai_slot, layout::Slot::Ai);
 }
 
-#[then(expr = "the saved project state does not mention the key reminder")]
+/// Through the mouse router at a screen cell, not as an event naming the
+/// pane: which pane the wheel is over is the hit-test's answer, and that is
+/// what puts the Cheatsheet rather than the session behind it under the wheel.
+#[when(expr = "I turn the wheel {word} over the AI pane's rectangle")]
+fn wheel_over_ai_rectangle(world: &mut VardeWorld, direction: String) {
+    let ai = world.panes().ai;
+    let kind = match parse_direction(&direction) {
+        Direction::Down => mouse::Kind::ScrollDown,
+        _ => mouse::Kind::ScrollUp,
+    };
+    world.report(kind, ai.x + ai.width / 2, ai.y + ai.height / 2);
+}
+
+#[then(expr = "the Cheatsheet is scrolled {int} rows down")]
+fn cheatsheet_scrolled(world: &mut VardeWorld, rows: usize) {
+    assert_eq!(world.state.cheatsheet_scroll, rows);
+}
+
+/// Against the rows `ui` draws and the rows the pane fits, so a list that
+/// already fits — which proves nothing about scrolling — fails here too.
+#[then(expr = "the Cheatsheet's last row is on screen")]
+fn cheatsheet_at_its_end(world: &mut VardeWorld) {
+    let rows = keys::cheatsheet_rows(&world.state).len();
+    let fits = varde::cheatsheet_fits(&world.state);
+    assert!(rows > fits, "{rows} rows fit in {fits}");
+    assert_eq!(world.state.cheatsheet_scroll, rows - fits);
+}
+
+#[then(expr = "the Cheatsheet lists the keys of the view on screen")]
+fn cheatsheet_lists_the_view(world: &mut VardeWorld) {
+    assert_eq!(world.state.ai_slot, layout::Slot::Cheatsheet);
+    assert!(!keys::cheatsheet_rows(&world.state).is_empty());
+}
+
+#[then(expr = "nothing was asked of the AI session")]
+fn nothing_asked_of_ai(world: &mut VardeWorld) {
+    assert!(world.ai_spawned.is_empty(), "{:?}", world.ai_spawned);
+    assert!(!world.ai_stopped);
+    assert!(ai_sends(world).is_empty(), "{:?}", world.keys_sent);
+    assert!(world.state.ai_running);
+}
+
+#[then(expr = "the saved project state does not mention the Cheatsheet")]
 fn reminder_not_remembered(world: &mut VardeWorld) {
     let saved = world
         .startup
@@ -2368,7 +2412,7 @@ fn pointer_at(
     let (area, gutter, scroll) = match pane {
         Pane::Editor => (panes.editor, varde::gutter(state), state.editor_scroll),
         Pane::Tree => (panes.tree, 0, state.tree_scroll),
-        Pane::Ai => (panes.ai, 0, 0),
+        Pane::Ai | Pane::Cheatsheet => (panes.ai, 0, 0),
         Pane::Output => (panes.output, 0, 0),
         Pane::Risk
         | Pane::Buffers
@@ -2954,6 +2998,8 @@ fn named_key(key: &str) -> Option<terminput::KeyEvent> {
         "Shift+Tab" => plain(terminput::KeyCode::Tab).modifiers(terminput::KeyModifiers::SHIFT),
         "Up" => plain(terminput::KeyCode::Up),
         "Down" => plain(terminput::KeyCode::Down),
+        "PageUp" => plain(terminput::KeyCode::PageUp),
+        "PageDown" => plain(terminput::KeyCode::PageDown),
         "Ctrl+Space" => {
             plain(terminput::KeyCode::Char(' ')).modifiers(terminput::KeyModifiers::CTRL)
         }
@@ -3866,6 +3912,7 @@ fn parse_pane(name: &str) -> Pane {
         "history" => Pane::History,
         "diagnostics" => Pane::Diagnostics,
         "conflicts" => Pane::Conflicts,
+        "Cheatsheet" => Pane::Cheatsheet,
         other => panic!("unknown pane {other:?}"),
     }
 }
@@ -6042,7 +6089,7 @@ fn drag_past(world: &mut VardeWorld, side: String, pane: String) {
     let area = match parse_pane(&pane) {
         Pane::Tree => world.panes().tree,
         Pane::Editor => world.panes().editor,
-        Pane::Ai => world.panes().ai,
+        Pane::Ai | Pane::Cheatsheet => world.panes().ai,
         Pane::Output => world.panes().output,
         Pane::Terminal | Pane::Variables => world.panes().terminal,
         Pane::Risk

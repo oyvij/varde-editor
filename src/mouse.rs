@@ -1089,7 +1089,8 @@ fn dragged(
         | Pane::Frames
         | Pane::Diagnostics
         | Pane::Conflicts
-        | Pane::Variables => Outcome::default(),
+        | Pane::Variables
+        | Pane::Cheatsheet => Outcome::default(),
         // Moving the window, resizing it and picking text in the Snippet are
         // all drags, and which one this is was decided at the press: the
         // window's chrome grabs, and everything inside it picks text.
@@ -1504,7 +1505,8 @@ fn place_in(state: &State, panes: &Layout, pane: Pane, (column, row): (u16, u16)
         | Pane::Frames
         | Pane::Diagnostics
         | Pane::Conflicts
-        | Pane::Variables => (0, 0),
+        | Pane::Variables
+        | Pane::Cheatsheet => (0, 0),
     };
     Place {
         // Through `line_at_row`, not straight off the row: Story view draws
@@ -1552,7 +1554,7 @@ fn text_area(state: &State, panes: &Layout, pane: Pane) -> Area {
             height: tree_rows as u16,
             ..interior(panes.tree)
         },
-        Pane::Ai => interior(panes.ai),
+        Pane::Ai | Pane::Cheatsheet => interior(panes.ai),
         // The split with the keyboard, which the press that began any drag
         // here has already chosen.
         Pane::Terminal => interior(crate::layout::split(

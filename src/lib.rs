@@ -135,6 +135,9 @@ pub enum Pane {
     /// showing its file behind it, so a click lands in one or the other and
     /// the keys reach whichever holds the caret.
     Evaluator,
+    /// The Cheatsheet, in the AI pane's rectangle while it is showing. Varde's
+    /// own pane: nothing it is given reaches the session running behind it.
+    Cheatsheet,
 }
 
 /// One control in a Transport (`docs/adr/0022-every-action-has-a-chip.md`):
@@ -619,8 +622,8 @@ pub enum Event {
     },
     SubmitReview,
     ConfirmSubmit,
-    /// `:help`, and the palette's Keys entry: puts the key box up or takes it
-    /// down. Never saved: every launch starts with it down.
+    /// `:help`, and the palette's Keys entry: shows the Cheatsheet in the AI
+    /// pane's place or hides it. Never saved: every launch starts with it hidden.
     ToggleCheatsheet,
     ToggleField,
     /// `:minimap` — puts the mirror of the file up or takes it down, and gives
@@ -707,6 +710,13 @@ pub enum Event {
     /// The Hover box moved a row, by the wheel over it or by `j`/`k` with the
     /// keyboard in it — never the editor underneath.
     ScrollHover(Direction),
+    /// The Cheatsheet moved `rows` rows: a row by `j`/`k` or an arrow with
+    /// the keyboard in it, a page by PgUp or PgDn. The wheel over it is a
+    /// `Scroll` like any pane's.
+    ScrollCheatsheet {
+        direction: Direction,
+        rows: usize,
+    },
     RightClick(Pane),
     DragDivider(u32),
     /// The AI pane's left edge was dragged: how many columns wide it is now.
@@ -2031,10 +2041,12 @@ pub struct State {
     /// only where it starts: the columns it costs the text are worth it in one
     /// file and not in another.
     pub minimap: bool,
-    /// Whether the key reminder is up. A terminal cell holds one character, so
-    /// the box hides the code under it. Down at every launch and never saved:
-    /// `:help` and the palette are how it comes up.
-    pub cheatsheet: bool,
+    /// Whether the AI pane's rectangle shows the session or the Cheatsheet.
+    /// The AI pane at every launch and never saved: `:help` and the palette
+    /// are how the Cheatsheet comes up.
+    pub ai_slot: layout::Slot,
+    /// The first Cheatsheet row on screen, clamped in `settle`.
+    pub cheatsheet_scroll: usize,
     pub system_clipboard: bool,
     /// Open when search is showing; `None` when the modal is closed.
     pub search: Option<Search>,
@@ -2651,7 +2663,8 @@ impl Default for State {
             editor_theme: "dark".to_string(),
             editor_field: true,
             minimap: true,
-            cheatsheet: false,
+            ai_slot: layout::Slot::Ai,
+            cheatsheet_scroll: 0,
             system_clipboard: true,
             search: None,
             find: None,
@@ -2821,6 +2834,21 @@ fn settle(mut next: State, mut effects: Vec<Effect>, wheeled: bool) -> (State, V
     // four letters that move nothing.
     if next.evaluator.is_none() {
         next.arranging = None;
+    }
+    // Focus on the AI pane's rectangle is focus on whoever is in it, so
+    // showing or hiding the Cheatsheet never moves focus, and a key never
+    // reaches a session the Cheatsheet is covering.
+    if matches!(next.focus, Pane::Ai | Pane::Cheatsheet) {
+        next.focus = next.ai_slot.pane();
+    }
+    // The Cheatsheet has no cursor to follow, so its offset is only held
+    // inside the rows there are — whatever moved it, and a resize.
+    if next.ai_slot == layout::Slot::Cheatsheet {
+        next.cheatsheet_scroll = next.cheatsheet_scroll.min(
+            keys::cheatsheet_rows(&next)
+                .len()
+                .saturating_sub(cheatsheet_fits(&next)),
+        );
     }
     // The Evaluator's window, from the one clamp: wholly on the screen and
     // clear of the Paused line, whatever moved it — a drag, a resize, or a
@@ -4686,7 +4714,8 @@ fn on_submit_review(state: &State, mut next: State, event: Event, wheeled: bool)
             | Pane::Frames
             | Pane::Diagnostics
             | Pane::Conflicts
-            | Pane::Variables => vec![],
+            | Pane::Variables
+            | Pane::Cheatsheet => vec![],
         },
         Event::ClickLink { row, column } => editor::link_at(&row, column)
             .map(Effect::OpenUrl)
@@ -4850,7 +4879,7 @@ fn slide_editor(state: &State, next: &mut State, direction: Direction) {
     }
 }
 
-/// Scroll
+/// DragMinimap, Scroll, ScrollCheatsheet, ScrollHover
 fn on_scroll(state: &State, mut next: State, event: Event, wheeled: bool) -> Answered {
     let effects = match event {
         // Scrolling follows the pointer and never moves focus. The pty panes
@@ -4900,7 +4929,8 @@ fn on_scroll(state: &State, mut next: State, event: Event, wheeled: bool) -> Ans
                     | Pane::Frames
                     | Pane::Diagnostics
                     | Pane::Conflicts
-                    | Pane::Variables => {
+                    | Pane::Variables
+                    | Pane::Cheatsheet => {
                         vec![]
                     }
                 };
@@ -5012,6 +5042,15 @@ fn on_scroll(state: &State, mut next: State, event: Event, wheeled: bool) -> Ans
                 // editor's scroll, which is a different pane's offset and
                 // would move the code behind the window.
                 Pane::Evaluator => vec![],
+                // Never reported to the session behind it. `settle` holds
+                // the offset inside the rows there are.
+                Pane::Cheatsheet => {
+                    next.cheatsheet_scroll = match direction {
+                        Direction::Up => state.cheatsheet_scroll.saturating_sub(WHEEL_ROWS),
+                        _ => state.cheatsheet_scroll + WHEEL_ROWS,
+                    };
+                    vec![]
+                }
                 // A program that asked for mouse events scrolls itself; ours is
                 // the scrollback behind a shell that did not.
                 Pane::Terminal | Pane::Ai | Pane::Output => match mouse::report(
@@ -5041,6 +5080,15 @@ fn on_scroll(state: &State, mut next: State, event: Event, wheeled: bool) -> Ans
             travel_editor(state, &mut next, fits, |_| {
                 minimap::travel(row as usize, minimap::lines(state), fits)
             });
+            vec![]
+        }
+
+        // Held inside the rows there are by `settle`, which owns the bound.
+        Event::ScrollCheatsheet { direction, rows } => {
+            next.cheatsheet_scroll = match direction {
+                Direction::Up => state.cheatsheet_scroll.saturating_sub(rows),
+                _ => state.cheatsheet_scroll + rows,
+            };
             vec![]
         }
 
@@ -7605,6 +7653,7 @@ fn on_ai_spoke(state: &State, mut next: State, event: Event, wheeled: bool) -> A
         }
 
         Event::StartAi { command, force } => {
+            next.ai_slot = layout::Slot::Ai;
             next.focus = Pane::Ai;
             let named = command.is_some();
             if let Some(command) = command {
@@ -7745,7 +7794,11 @@ fn on_quit_force(state: &State, mut next: State, event: Event, wheeled: bool) ->
         // rather than running something: a command that silently does nothing is
         // a bug.
         Event::ToggleCheatsheet => {
-            next.cheatsheet = !state.cheatsheet;
+            // Focus stays on the slot, which `settle` hands to whoever is in it.
+            next.ai_slot = match state.ai_slot {
+                layout::Slot::Ai => layout::Slot::Cheatsheet,
+                layout::Slot::Cheatsheet => layout::Slot::Ai,
+            };
             vec![]
         }
 
@@ -9277,7 +9330,8 @@ fn on_bytes(state: &State, next: State, event: Event, wheeled: bool) -> Answered
             | Pane::Frames
             | Pane::Diagnostics
             | Pane::Conflicts
-            | Pane::Variables => vec![],
+            | Pane::Variables
+            | Pane::Cheatsheet => vec![],
         },
 
         other => return Err((next, other)),
@@ -9308,7 +9362,8 @@ fn on_pasted(state: &State, mut next: State, event: Event, wheeled: bool) -> Ans
                 | Pane::Frames
                 | Pane::Diagnostics
                 | Pane::Conflicts
-                | Pane::Variables => None,
+                | Pane::Variables
+                | Pane::Cheatsheet => None,
             };
             match asked {
                 Some(paste) => vec![Effect::SendKeys {
@@ -9590,6 +9645,8 @@ fn paste_bytes(text: &str, paste: keys::Paste) -> Vec<u8> {
 /// the one pane (ADR 0006), so all of them wait behind the same
 /// `pending_prompt` for `AiSpoke` when the CLI has not printed anything yet.
 pub(crate) fn queue_for_ai(next: &mut State, enter: Enter, prompt: String) -> Vec<Effect> {
+    // Text never goes into a session nobody can see.
+    next.ai_slot = layout::Slot::Ai;
     let mut effects = Vec::new();
     if !next.ai_running {
         effects.push(Effect::SpawnAi {
@@ -10147,7 +10204,8 @@ fn mouse_encoding(state: &State, pane: Pane) -> mouse::Encoding {
         | Pane::Frames
         | Pane::Diagnostics
         | Pane::Conflicts
-        | Pane::Variables => mouse::Encoding::None,
+        | Pane::Variables
+        | Pane::Cheatsheet => mouse::Encoding::None,
     }
 }
 
@@ -10198,6 +10256,7 @@ pub fn group_tabs(state: &State) -> Vec<Tab> {
 pub fn shapes(state: &State) -> layout::Shapes {
     layout::Shapes {
         ai: state.ai_pane,
+        slot: state.ai_slot,
         corner: state.corner,
         group: state.strip,
         strip: state.strip_height.map(|height| height as u16),
@@ -10268,6 +10327,12 @@ pub(crate) fn panes_of(state: &State) -> layout::Layout {
 /// of the corner.
 pub fn strip_rows(state: &State) -> usize {
     panes_of(state).terminal.height.saturating_sub(2) as usize
+}
+
+/// How many Cheatsheet rows the AI pane's rectangle shows: its two border
+/// rows and nothing else.
+pub fn cheatsheet_fits(state: &State) -> usize {
+    panes_of(state).ai.height.saturating_sub(2) as usize
 }
 
 /// How many rows the pane in the corner shows. One answer for every occupant,

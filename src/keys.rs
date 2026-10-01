@@ -59,10 +59,9 @@ pub struct Drafts {
 /// teaches them, and a key nobody can discover is a key nobody uses. The `:`
 /// commands that mean the same thing in every view — `:update`, `:tall`,
 /// `:help` — are the palette's now, as are the two that act on the whole
-/// workspace rather than on one thing, collapsing the tree: this
-/// box sits over the code being read, so a row it spends has to be about the
-/// view under it, and the palette draws its own letters where a cheatsheet row
-/// could only repeat them. What is left is what answers to what is in front of
+/// workspace rather than on one thing, collapsing the tree: a row it spends
+/// has to be about the view on screen, and the palette draws its own letters
+/// where a cheatsheet row could only repeat them. What is left is what answers to what is in front of
 /// you, `:submit` and `:w :q`. `C-space` is the
 /// palette gesture on every terminal and in every pane, hosted ones included;
 /// `Esc Esc` opens it from a hosted pane too, and is listed beside it because
@@ -359,6 +358,20 @@ pub fn cheatsheet(
     debug.iter().chain(CHEATSHEET.iter()).chain(chords(state))
 }
 
+/// The Cheatsheet's rows for the view on screen: what `ui` draws and what
+/// `update` clamps the offset against, so the two count the same rows.
+/// Review's rows answer to `state.diff`, so a review whose diff has not
+/// landed yet lists none of them.
+pub fn cheatsheet_rows(state: &State) -> Vec<(&'static str, &'static str)> {
+    if state.view == View::Review && state.diff.is_none() {
+        return vec![];
+    }
+    cheatsheet(state)
+        .filter(|(_, _, views)| applies_to(views, state.view))
+        .map(|(keys, what, _)| (*keys, *what))
+        .collect()
+}
+
 /// The Chord hint as drawn, each row carrying the key it offers or nothing —
 /// the shape [`crate::palette_rows`] has, so the mouse hit-tests these same
 /// rows and a click is the keystroke.
@@ -383,18 +396,17 @@ pub fn chord_rows(state: &State) -> Vec<(Option<char>, String)> {
 /// beside the router that answers them, for the reason [`CHEATSHEET`] is here:
 /// `ui` may only draw the contract, so a test can hold the two together. They
 /// are not cheatsheet rows because they exist only while the list is up, and
-/// the box the cheatsheet draws sits over the code being read — the gesture
+/// a cheatsheet row is spent on the view on screen — the gesture
 /// that opens the list is what earns a row there. The arrows are deliberately
 /// absent for the reason `UNLISTED` gives for them everywhere else: every list
-/// in Varde moves on them, and the box already cannot spell one label twice.
+/// in Varde moves on them, and the Cheatsheet already cannot spell one label twice.
 pub const TOOL_LIST_KEYS: [(&str, &str); 3] =
     [("i", "install"), ("r", "re-check"), ("Esc", "close")];
 
 /// The keys the branch picker answers and the word its box says for each —
 /// here, beside the router that answers them, for the reason
 /// [`TOOL_LIST_KEYS`] is here. Not cheatsheet rows for the same reason
-/// either: the list exists only while it is up, and the box the cheatsheet
-/// draws sits over the code being read.
+/// either: the list exists only while it is up.
 ///
 /// The arrows are deliberately absent, as they are for Tools: every
 /// list in Varde moves on them, and the box cannot spell one label twice. Enter
@@ -1052,7 +1064,8 @@ fn child_owns_keys(state: &State, drafts: &Drafts) -> bool {
             | Pane::Frames
             | Pane::Diagnostics
             | Pane::Conflicts
-            | Pane::Variables => false,
+            | Pane::Variables
+            | Pane::Cheatsheet => false,
         }
 }
 
@@ -1814,7 +1827,8 @@ fn claims_colon(state: &State) -> bool {
         | Pane::Frames
         | Pane::Diagnostics
         | Pane::Conflicts
-        | Pane::Variables => true,
+        | Pane::Variables
+        | Pane::Cheatsheet => true,
         Pane::Ai | Pane::Terminal | Pane::Output => false,
     }
 }
@@ -1867,6 +1881,13 @@ fn arrow_event(state: &State, event: KeyEvent, alt: bool, shift: bool) -> Option
             | Pane::Variables,
             true,
         ) => vec![],
+        (Pane::Cheatsheet, false) => match direction {
+            Direction::Up | Direction::Down => {
+                vec![Event::ScrollCheatsheet { direction, rows: 1 }]
+            }
+            Direction::Left | Direction::Right => vec![],
+        },
+        (Pane::Cheatsheet, true) => vec![],
         // A hosted pane's arrows went to its child; see below.
         (Pane::Ai | Pane::Terminal | Pane::Output, _) => vec![],
     })
@@ -1922,6 +1943,16 @@ fn pane_key(state: &State, event: KeyEvent) -> Vec<Event> {
         | Pane::Diagnostics
         | Pane::Conflicts
         | Pane::Variables => list_pane_key(event),
+        Pane::Cheatsheet => {
+            let (direction, rows) = match (event.code, typed(event)) {
+                (_, Some('j')) => (Direction::Down, 1),
+                (_, Some('k')) => (Direction::Up, 1),
+                (KeyCode::PageDown, _) => (Direction::Down, crate::cheatsheet_fits(state)),
+                (KeyCode::PageUp, _) => (Direction::Up, crate::cheatsheet_fits(state)),
+                _ => return vec![],
+            };
+            vec![Event::ScrollCheatsheet { direction, rows }]
+        }
         // A hosted pane never arrives here: with nothing of Varde's own
         // collecting, `child_owns_keys` sent the key to `to_child`, and with
         // something collecting one of the returns above took it. Every pane is
@@ -2203,6 +2234,34 @@ mod tests {
         State {
             focus: pane,
             ..State::default()
+        }
+    }
+
+    /// `keys::CHEATSHEET`'s order decides what a short window shows before
+    /// anyone scrolls: at 26 rows by 120 columns — the replay recipe's size and
+    /// `features/ai_pane.feature`'s — the AI pane's rectangle shows sixteen of
+    /// Edit view's rows. What is held is the two rows nothing else in Varde
+    /// teaches: the palette gesture, and `:format`, which is in no palette, has
+    /// no completion and is spelled nowhere else.
+    #[test]
+    fn the_rows_nothing_else_teaches_are_on_screen_before_scrolling() {
+        let state = State {
+            screen_width: 120,
+            screen_height: 26,
+            ..State::default()
+        };
+        let fits = crate::cheatsheet_fits(&state);
+        assert_eq!(fits, 16);
+        let shown: Vec<&str> = super::cheatsheet_rows(&state)
+            .into_iter()
+            .take(fits)
+            .map(|(keys, _)| keys)
+            .collect();
+        for keys in ["C-space Esc Esc", ":format"] {
+            assert!(
+                shown.iter().any(|row| row.starts_with(keys)),
+                "{keys:?} is below the fold at 26 rows: {shown:?}"
+            );
         }
     }
 
@@ -4868,8 +4927,7 @@ mod tests {
     /// The same contract [`CHEATSHEET`] is held to, for the keys that exist only
     /// while the branch picker is up: what the box names must answer, and what
     /// answers must be named. Held here rather than by a cheatsheet row for the
-    /// reason Tools is: the box exists only while it is up, and the
-    /// cheatsheet's own box sits over the code being read.
+    /// reason Tools is: the box exists only while it is up.
     #[test]
     fn the_branch_picker_answers_exactly_the_keys_its_box_names() {
         // A row to act on: Enter on a list of nothing is a key that does
