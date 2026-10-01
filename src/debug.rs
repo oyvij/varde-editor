@@ -1026,6 +1026,10 @@ pub fn launch_with(next: &mut State, launch: crate::startup::Launch) -> Vec<Effe
         corner: next.corner,
         strip: next.strip,
     });
+    // After the session has remembered the group it found, which is what
+    // ending it gives back: the Program output lives in the Debug group, and a
+    // program that never pauses would otherwise print out of sight.
+    next.strip = layout::Group::Debug;
     vec![effect]
 }
 
@@ -1077,6 +1081,7 @@ pub fn reattach(next: &mut State) -> Vec<Effect> {
         previous: None,
         ..session
     });
+    next.strip = layout::Group::Debug;
     vec![effect]
 }
 

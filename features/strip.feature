@@ -5,6 +5,9 @@ Feature: The Strip and the Debug group
   other without stopping anything running in it. Group tabs on its top border say which is up and are
   clicked to switch; a key does the same.
 
+  Starting a Debug session, by any route, brings the Debug group forward so the program's output is
+  never printed out of sight; like a pause, it moves what is on screen and never the keyboard.
+
   Its height is the user's to drag, with or without a session, clamped so that neither the Strip nor
   the area above it can vanish: a drag that left a pane unreachable is a pane with no way back.
 
@@ -71,6 +74,54 @@ Feature: The Strip and the Debug group
       Then the Group tabs are:
         | Shells |
         | Debug  |
+
+    Scenario: Starting a session from a Launch configuration shows the Debug group
+      Given the Strip shows the Shell group
+      When I start the Launch configuration "server" from the palette
+      Then the Strip shows the Debug group
+
+    Scenario: Starting a session from a Run mark's Debug offer shows the Debug group
+      Given "src/lib.rs" is open in the editor holding:
+        """
+        #[test]
+        fn adds() {}
+        """
+      And the Strip shows the Shell group
+      When I choose "debug" on the Run mark on line 2
+      Then the Strip shows the Debug group
+
+    Scenario: Attaching shows the Debug group
+      Given the global config is:
+        """
+        [launch.orders]
+        adapter = "java"
+        request = "attach"
+        args = { hostName = "localhost", port = 5005 }
+        """
+      And a Debug adapter for "java" is configured
+      And the Strip shows the Shell group
+      When I start the Launch configuration "orders" from the palette
+      Then the Strip shows the Debug group
+
+    Scenario: Attaching again shows the Debug group
+      Given the global config is:
+        """
+        [launch.orders]
+        adapter = "java"
+        request = "attach"
+        args = { hostName = "localhost", port = 5005 }
+        """
+      And a Debug adapter for "java" is configured
+      And a Debug session was started from the Launch configuration "orders"
+      And the Debug adapter sends the event "terminated"
+      And the Strip shows the Shell group
+      When the edge reports the port 5005 answers
+      Then the Strip shows the Debug group
+
+    Scenario: A session starting leaves the keyboard where it was
+      Given the terminal pane has focus
+      When I start the Launch configuration "server" from the palette
+      Then the terminal pane has focus
 
     Scenario: The group showing has the lit tab
       Given a Debug session is Paused at "src/main.rs" line 3
