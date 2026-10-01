@@ -1191,7 +1191,7 @@ fn tree_lines(state: &State, rows: &[Row], width: u16) -> Vec<Line<'static>> {
             } else {
                 Style::default()
             };
-            let selected = state.tree_selection.as_deref() == Some(row.path.as_path());
+            let selected = tree::highlighted(state).as_deref() == Some(row.path.as_path());
             if selected {
                 style = style.add_modifier(Modifier::REVERSED);
             }
@@ -1264,8 +1264,8 @@ fn filter_box(frame: &mut Frame, state: &State, area: Rect, draft: Option<&str>)
     );
     frame.render_widget(Clear, field);
 
-    let completion = filter::best(state)
-        .map(|best| best.rsplit('/').next().unwrap_or(best).to_string())
+    let completion = filter::chosen(state)
+        .map(|chosen| chosen.rsplit('/').next().unwrap_or(chosen).to_string())
         .filter(|name| {
             name.to_lowercase().starts_with(&draft.to_lowercase()) && name.len() > draft.len()
         })

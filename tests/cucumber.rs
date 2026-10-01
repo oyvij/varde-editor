@@ -5997,7 +5997,7 @@ fn filtered_empty(world: &mut VardeWorld) {
 #[then(expr = "the best match is {string}")]
 #[then(expr = "the completion is {string}")]
 fn best_match_is(world: &mut VardeWorld, path: String) {
-    assert_eq!(varde::filter::best(&world.state), Some(path.as_str()));
+    assert_eq!(varde::filter::chosen(&world.state), Some(path.as_str()));
 }
 
 #[then(expr = "the row {string} is expanded")]
@@ -6013,6 +6013,26 @@ fn row_is_expanded(world: &mut VardeWorld, path: String) {
 #[then(expr = "the tree is not filtered")]
 fn tree_not_filtered(world: &mut VardeWorld) {
     assert!(world.state.filter.is_empty());
+}
+
+#[given(expr = "I step {word} through the matches")]
+#[when(expr = "I step {word} through the matches")]
+fn step_through_matches(world: &mut VardeWorld, way: String) {
+    world.send(Event::StepFilter(match way.as_str() {
+        "down" => Direction::Down,
+        "up" => Direction::Up,
+        other => panic!("no way {other:?}"),
+    }));
+}
+
+#[then(expr = "no row is highlighted")]
+fn no_row_highlighted(world: &mut VardeWorld) {
+    assert_eq!(tree::highlighted(&world.state), None);
+}
+
+#[then(expr = "the highlighted row is {string}")]
+fn highlighted_row_is(world: &mut VardeWorld, path: String) {
+    assert_eq!(tree::highlighted(&world.state), Some(abs(world, &path)));
 }
 
 #[when(expr = "I accept the filter")]

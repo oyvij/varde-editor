@@ -378,6 +378,7 @@ pub enum Event {
     MoveFocus(Direction),
     MoveSelection(Direction),
     MoveAction(Direction),
+    StepFilter(Direction),
     Activate,
     Bytes(Vec<u8>),
     Pasted(String),
@@ -1575,6 +1576,9 @@ fn clamp_buffers(next: &mut State) {
 pub fn update(state: &State, event: Event) -> (State, Vec<Effect>) {
     let jump = history::jumped(state, &event);
     let (mut next, mut effects) = route(state, event);
+    if next.focus != state.focus {
+        next.selected_action = None;
+    }
     if next.current_buffer != state.current_buffer || !next.buffers.keys().eq(state.buffers.keys())
     {
         next.buffers_selection = buffer_list(&next)
@@ -3544,9 +3548,9 @@ fn on_complete_search(state: &State, mut next: State, event: Event, wheeled: boo
 fn on_accept_filter(state: &State, mut next: State, event: Event, wheeled: bool) -> Answered {
     let effects = match event {
         Event::AcceptFilter => {
-            let best = filter::best(&next).map(str::to_string);
+            let chosen = filter::chosen(state).map(str::to_string);
             filter::narrow(&mut next, String::new());
-            match best {
+            match chosen {
                 Some(relative) => {
                     next.tree_selection = Some(state.root.join(&relative));
                     let parts: Vec<&str> = relative.split('/').collect();
@@ -5142,7 +5146,6 @@ fn on_quit_force(state: &State, mut next: State, event: Event, wheeled: bool) ->
             if lsp::showing(state) != Some(severity) {
                 next.diagnostics_selection = 0;
             }
-            next.selected_action = None;
             next.corner = layout::Corner::Diagnostics(severity);
             next.focus = Pane::Diagnostics;
             vec![Effect::SaveState(state_json(&next))]
@@ -5162,7 +5165,6 @@ fn on_quit_force(state: &State, mut next: State, event: Event, wheeled: bool) ->
 }
 
 fn take_the_corner(state: &State, next: &mut State, asked: layout::Corner) -> Vec<Effect> {
-    next.selected_action = None;
     next.corner = match state.corner == asked {
         true => layout::Corner::Hidden,
         false => asked,
@@ -5781,7 +5783,6 @@ fn on_pane_action(state: &State, mut next: State, event: Event, wheeled: bool) -
                 }
                 _ => next.focus = neighbour(state, direction),
             }
-            next.selected_action = None;
             vec![]
         }
 
@@ -5796,7 +5797,6 @@ fn on_pane_action(state: &State, mut next: State, event: Event, wheeled: bool) -
         Event::FocusSplit(split) => {
             next.focus = Pane::Terminal;
             next.terminal_split = split;
-            next.selected_action = None;
             next.selection = None;
             vec![]
         }
@@ -5925,6 +5925,10 @@ fn on_move_selection_2(state: &State, mut next: State, event: Event, wheeled: bo
 
 fn on_move_selection_3(state: &State, mut next: State, event: Event, wheeled: bool) -> Answered {
     let effects = match event {
+        Event::StepFilter(direction) => {
+            filter::step(state, &mut next, direction);
+            vec![]
+        }
         Event::MoveSelection(direction) => {
             let rows = tree::visible_rows(state);
             if rows.is_empty() {
@@ -6853,27 +6857,28 @@ fn selected_row_actions(state: &State) -> Vec<&'static str> {
     if risk::on_actions(state) {
         return risk::pane_actions(state);
     }
-    if state.focus == Pane::Risk {
-        return risk::row_actions(state);
-    }
-    if state.focus == Pane::Buffers {
-        return Vec::new();
-    }
-    if state.focus == Pane::History {
-        return history::row_actions(state);
-    }
-    if state.focus == Pane::Breakpoints {
-        return debug::row_actions(state);
-    }
-    if state.focus == Pane::Variables {
-        return debug::row_chips(state, state.variables_selection)
+    match state.focus {
+        Pane::Risk => risk::row_actions(state),
+        Pane::History => history::row_actions(state),
+        Pane::Breakpoints => debug::row_actions(state),
+        Pane::Variables => debug::row_chips(state, state.variables_selection)
             .into_iter()
             .map(|chip| chip.action)
-            .collect();
-    }
-    match state.tree_selection.as_deref() {
-        Some(path) => tree::row_actions(state, path),
-        None => Vec::new(),
+            .collect(),
+        Pane::Tree => match state.tree_selection.as_deref() {
+            Some(path) => tree::row_actions(state, path),
+            None => Vec::new(),
+        },
+        Pane::Editor
+        | Pane::Terminal
+        | Pane::Ai
+        | Pane::Buffers
+        | Pane::Frames
+        | Pane::Output
+        | Pane::Diagnostics
+        | Pane::Conflicts
+        | Pane::Evaluator
+        | Pane::Cheatsheet => Vec::new(),
     }
 }
 
@@ -9876,6 +9881,49 @@ mod tests {
         let tiny = palette_rows(14);
         assert_eq!(tiny.len(), 12);
         assert_eq!(tiny.last(), Some(&(None, "   …".to_string())));
+    }
+
+    #[test]
+    fn a_pane_without_row_actions_never_arms_the_trees() {
+        let mut state = State {
+            root: PathBuf::from("/w"),
+            tree_selection: Some(PathBuf::from("/w/a.rs")),
+            screen_width: 100,
+            screen_height: 30,
+            ..State::default()
+        };
+        state.contents.insert(
+            PathBuf::from("/w"),
+            vec![tree::Entry {
+                name: "a.rs".to_string(),
+                is_dir: false,
+            }],
+        );
+        for (pane, corner) in [
+            (
+                Pane::Diagnostics,
+                layout::Corner::Diagnostics(lsp::Severity::Error),
+            ),
+            (Pane::Conflicts, layout::Corner::Conflicts),
+            (Pane::Frames, layout::Corner::Hidden),
+        ] {
+            let focused = State {
+                focus: pane,
+                corner,
+                ..state.clone()
+            };
+            let armed = update(&focused, Event::MoveAction(Direction::Right)).0;
+            assert_eq!(armed.selected_action, None, "{pane:?}");
+        }
+
+        let tree = State {
+            focus: Pane::Tree,
+            ..state
+        };
+        let armed = update(&tree, Event::MoveAction(Direction::Right)).0;
+        assert_eq!(armed.selected_action, Some(0));
+        let clicked = update(&armed, Event::ClickPane(Pane::Breakpoints)).0;
+        assert_eq!(clicked.selected_action, None);
     }
 
     #[test]

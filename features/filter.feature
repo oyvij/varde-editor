@@ -15,7 +15,12 @@ Feature: Filtering the file tree
 
   The box completes to the best match as you type. Enter marks that match in
   the tree and opens nothing: narrowing the tree is looking for a file, and
-  what to do with it once found is the reader's to say.
+  what to do with it once found is the reader's to say. The arrows step from
+  the best match through the others in rank order, so the second-best file is
+  one key away rather than a reach for the mouse, and typing again starts over
+  from the best match because the ranking it stepped through is gone. The tree
+  highlights the match Enter would mark, and stepping is not choosing: it
+  opens nothing, and until Enter the tree's own selection stays where it was.
 
   Opening the filter walks the project afresh, in the background, so typing
   never waits for the walk. Matches appear as the walk finds them. The filter
@@ -108,6 +113,47 @@ Feature: Filtering the file tree
     When I accept the filter
     Then the tree selection is "/home/me/projects/varde/src/tree_actions.rs"
     And no file was opened in the editor
+
+  Scenario: The best match is highlighted before any arrow
+    When I filter by "tree"
+    Then the highlighted row is "/home/me/projects/varde/features/tree.feature"
+
+  Scenario: Down steps from the best match to the next
+    Given I filter by "tree"
+    When I step down through the matches
+    Then the highlighted row is "/home/me/projects/varde/src/tree_actions.rs"
+    And no file was opened in the editor
+
+  Scenario: Up from the best match stays on it
+    Given I filter by "tree"
+    When I step up through the matches
+    Then the highlighted row is "/home/me/projects/varde/features/tree.feature"
+
+  Scenario: Stepping with nothing matching does nothing
+    Given I filter by "zzzz"
+    When I step down through the matches
+    Then no row is highlighted
+
+  Scenario: Clearing the filter after stepping leaves the selection where it was
+    Given the tree selection is "README.md"
+    And I filter by "tree"
+    And I step down through the matches
+    When I filter by ""
+    Then the tree selection is "/home/me/projects/varde/README.md"
+
+  Scenario: Enter marks the match the arrows reached
+    Given I filter by "tree"
+    And I step down through the matches
+    When I accept the filter
+    Then the tree selection is "/home/me/projects/varde/src/tree_actions.rs"
+    And the tree is not filtered
+
+  Scenario: Typing again starts over from the best match
+    Given I filter by "tre"
+    And I step down through the matches
+    And I filter by "tree"
+    When I accept the filter
+    Then the tree selection is "/home/me/projects/varde/features/tree.feature"
 
   Scenario: Enter opens the folders the marked file lives in
     Given I filter by "treeac"

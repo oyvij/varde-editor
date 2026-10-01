@@ -1,4 +1,4 @@
-use crate::{Effect, State};
+use crate::{Direction, Effect, State};
 use std::sync::Arc;
 
 pub fn score(needle: &str, haystack: &str) -> Option<i32> {
@@ -39,6 +39,7 @@ pub struct Index {
     pub walking: bool,
     pub files: Arc<Vec<String>>,
     pub ranked: Arc<Vec<Ranked>>,
+    pub pick: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -68,6 +69,7 @@ pub fn narrow(next: &mut State, text: String) -> Vec<Effect> {
         return vec![Effect::IndexProject { walk: walk + 1 }];
     }
     next.index.ranked = Arc::new(ranked(&next.filter, &next.index.files));
+    next.index.pick = None;
     vec![]
 }
 
@@ -109,7 +111,7 @@ fn order(a: &Ranked, b: &Ranked) -> std::cmp::Ordering {
 pub fn view_state(state: &State) -> &'static str {
     if state.filter.is_empty() {
         "unfiltered"
-    } else if best(state).is_some() {
+    } else if chosen(state).is_some() {
         "matches"
     } else if state.index.walking {
         "walking"
@@ -132,8 +134,28 @@ pub fn matches(state: &State) -> impl Iterator<Item = &str> {
         .map(|found| found.path.as_str())
 }
 
-pub fn best(state: &State) -> Option<&str> {
-    matches(state).next()
+pub fn chosen(state: &State) -> Option<&str> {
+    matches(state)
+        .find(|found| state.index.pick.as_deref() == Some(*found))
+        .or_else(|| matches(state).next())
+}
+
+pub fn step(state: &State, next: &mut State, direction: Direction) {
+    let found: Vec<&str> = matches(state).collect();
+    let Some(last) = found.len().checked_sub(1) else {
+        return;
+    };
+    let current = chosen(state);
+    let at = found
+        .iter()
+        .position(|path| Some(*path) == current)
+        .unwrap_or(0);
+    let to = match direction {
+        Direction::Down => (at + 1).min(last),
+        Direction::Up => at.saturating_sub(1),
+        Direction::Left | Direction::Right => return,
+    };
+    next.index.pick = Some(found[to].to_string());
 }
 
 #[cfg(test)]
@@ -236,7 +258,7 @@ mod tests {
             ..State::default()
         };
         assert_eq!(shown(&state), vec!["src/main.rs"]);
-        assert_eq!(super::best(&state), Some("src/main.rs"));
+        assert_eq!(super::chosen(&state), Some("src/main.rs"));
         assert_eq!(super::view_state(&state), "matches");
         assert!(crate::tree::visible_rows(&state)
             .iter()
