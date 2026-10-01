@@ -8,7 +8,6 @@ fn main() {
     for (index, line) in parser.screen().contents().lines().enumerate() {
         println!("{index:>2} {line}");
     }
-    // Where the caret ended up, which is otherwise invisible in a replay.
     let (row, column) = parser.screen().cursor_position();
     println!(
         "cursor row={row} column={column} hidden={}",

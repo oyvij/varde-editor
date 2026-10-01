@@ -1,23 +1,3 @@
-//! Markdown as rows.
-//!
-//! A Preview row is not a source line: markdown reflows, so one line becomes
-//! several rows or none, and every row carries the source line of the block it
-//! came from. The argument, and the four consumers that used to re-derive
-//! `row = line + editor_scroll` on their own, are in
-//! `docs/adr/0007-a-preview-row-is-not-a-line.md`.
-//!
-//! Nothing here draws. A glyph and a colour are a theme's business, exactly as
-//! they are in [`crate::highlight`] — this module answers what each row *is*
-//! and where it came from, and `ui` decides what that looks like.
-//!
-//! Nothing renders as nothing (R26.5a), and R26.5b is the mechanism that keeps
-//! that checkable: [`block_kind`] classifies every parser tag with no `_ =>`
-//! arm, [`FLAGS`] records a decision per parser flag, and the sweep beside the
-//! tests drives one sample of every construct with an explicit `UNRENDERED`
-//! list. Four gaps in this feature were found by eye in a Preview of this
-//! repo's own documents, two of them owned by no ticket at all; that is what
-//! the three of them together exist to prevent.
-
 use crate::highlight;
 use pulldown_cmark::{
     Alignment, BlockQuoteKind, CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd,
@@ -26,13 +6,6 @@ use std::collections::HashMap;
 use std::path::Path;
 use unicode_width::UnicodeWidthStr;
 
-/// What a rendered row is, so `ui` can style it and a scenario can assert it
-/// without naming a character. `Heading` carries the level a `#` run named and
-/// `Quote` the GFM alert kind a `[!NOTE]`-style marker named (`None` for a
-/// plain quote), so a scenario can assert what kind of row came back without
-/// `ui` reaching back into the source to find out. `Code`, `Diagram`,
-/// `Metadata` and `Table` are named here so that the tickets which add them
-/// are a match arm rather than a change to this type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RowKind {
     Heading(HeadingLevel),
@@ -46,8 +19,6 @@ pub enum RowKind {
     Rule,
 }
 
-/// A bulleted, ordered or task marker, mutually exclusive by construction —
-/// unlike [`Emphasis`], a list item is never two of these at once.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Marker {
     Bullet,
@@ -55,38 +26,21 @@ pub enum Marker {
     Task(bool),
 }
 
-/// A list row's nesting and marker. `marker` is `Some` only on the first row
-/// an item takes — a wrapped continuation row carries the same `depth` so it
-/// still indents under the item, but `None` so `ui` does not repeat the
-/// bullet, ordinal or checkbox down the wrapped lines.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ListItem {
     pub depth: usize,
     pub marker: Option<Marker>,
 }
 
-/// A run of text's modifiers. Independent and combinable — `*_**both**_*` is
-/// `italic` and `strong` both true, not a fifth variant — which is why this is
-/// a struct of flags rather than an enum: an enum would need one arm per
-/// combination that markdown can nest.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Emphasis {
     pub italic: bool,
     pub strong: bool,
     pub struck: bool,
     pub code: bool,
-    /// Set the same way `code` is — an image's alt text is prose carrying a
-    /// modifier, not a row of its own, since there is no picture to draw.
-    /// `ui` picks whatever glyph or colour marks it; no scenario asserts
-    /// either.
     pub image: bool,
 }
 
-/// One styled run inside a row. Names what it *is*, never what colour it is,
-/// exactly as [`crate::highlight::Token`] does — `ui` maps `emphasis` to a
-/// weight and a colour, and no scenario asserts either. `token` is a code
-/// row's piece of that same distinction — `Some` only inside [`RowKind::Code`],
-/// where a piece is a highlighted token rather than a run of prose.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Piece {
     pub text: String,
@@ -94,31 +48,15 @@ pub struct Piece {
     pub token: Option<highlight::Kind>,
 }
 
-/// One row of a Preview: what it is, the source line of the block it came
-/// from, and the styled pieces it draws. `line` is 1-based, like
-/// [`crate::editor::Buffer`]'s. A single string could not carry a difference
-/// *inside* a row — emphasis in the middle of a sentence, or a heading's own
-/// level — which is why a row is pieces rather than one `text: String`; see
-/// `docs/adr/0007-a-preview-row-is-not-a-line.md`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Row {
     pub kind: RowKind,
     pub line: usize,
     pub pieces: Vec<Piece>,
-    /// `Some` only on the one [`RowKind::Code`] row a mermaid fence's fallback
-    /// produces — never on a fence that was never mermaid, and never on a
-    /// [`RowKind::Diagram`] row, which only exists because rendering
-    /// succeeded. A reason rather than the crate's own wording, for the
-    /// reason [`Refusal`] is: `mermaid-text` can reword an error message
-    /// without turning this suite red.
     pub refused: Option<DiagramRefusal>,
 }
 
 impl Row {
-    /// The row's text with no styling, for a caller that only wants to know
-    /// what is on screen — search, drag-copy, a scenario checking a marker is
-    /// gone. Concatenating `pieces` rather than each caller doing it keeps the
-    /// join in one place.
     pub fn text(&self) -> String {
         self.pieces
             .iter()
@@ -127,50 +65,23 @@ impl Row {
     }
 }
 
-/// Why a key did nothing — `:preview` refusing to switch, or an editing key
-/// refusing to touch a Preview. A reason rather than a sentence: `update`
-/// records this and `ui` renders the wording, so a scenario asserts the
-/// decision and a reworded footer never turns the suite red.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Refusal {
     NotMarkdown,
     NoFileOpen,
     ReadOnlyPreview,
-    /// An edit to a buffer on a Guest repo's file. The clone goes with the
-    /// Sidecar when Varde exits, so an edit there is work nobody can keep.
     GuestReadOnly,
-    /// The install key on a row whose command this machine already has. Said
-    /// out loud rather than passed over: the row reads `installed`, so a key
-    /// that quietly did nothing would read as a key that failed.
     ToolAlreadyInstalled,
-    /// A Tools row taken while the global config is one Varde would refuse
-    /// to start on. Nothing is written and nothing runs, and the fault is
-    /// named, since the reader has to fix the file before anything is taken.
     BrokenConfig(crate::startup::ConfigError),
-    /// A Tools row taken whose install starts with a program this machine
-    /// lacks. Nothing is written and nothing runs; the program is named.
     NeedsInstaller(String),
-    /// A Launch configuration started while a Debug session exists: there is
-    /// one session, and a second would be the session picker the spec declines.
     SessionRunning,
-    /// No command runs the adapter a Launch configuration names — no
-    /// `[dap.*]` row, or a row whose command is not on this machine. Named.
     NoDebugAdapter(String),
-    /// The language server that hosts the adapter has not finished starting,
-    /// so there is nobody to ask for it. Named.
     NoLanguageServer(String),
     DebugAdapterFailed,
-    /// The adapter went away with a session still going.
     DebugAdapterExited,
-    /// The adapter said no to starting the program, in its own words.
     LaunchFailed(String),
-    /// Restart with nothing to rerun: no Launch configuration has been
-    /// started this session, so there is no last one.
     NoLastSession,
-    /// `␣x` on a line no Run mark stands on.
     NoRunMark,
-    /// The adapter would not write a member back, in its own words: a value
-    /// the program's language will not take, or one its type will not hold.
     SetValueFailed(String),
 }
 
@@ -197,11 +108,6 @@ impl Refusal {
     }
 }
 
-/// Why a mermaid fence's source did not become a diagram — ticket 07's own
-/// `Refusal`. `mermaid_text::Error` names the same three shapes with its own
-/// wording, which is the crate's to change; this is the word Varde promises
-/// to keep saying regardless. `EmptyInput` folds into `MalformedDiagram`: an
-/// empty fence is not a distinct failure mode either ticket names.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiagramRefusal {
     UnsupportedDiagram,
@@ -231,9 +137,6 @@ impl From<&mermaid_text::Error> for DiagramRefusal {
     }
 }
 
-/// Whether a path is a file this can render. `.mdx` is deliberately absent: a
-/// CommonMark parser renders its components as garbage text, which is worse
-/// than reading the source.
 pub fn is_markdown(path: &Path) -> bool {
     path.extension().is_some_and(|extension| {
         ["md", "markdown"]
@@ -242,21 +145,6 @@ pub fn is_markdown(path: &Path) -> bool {
     })
 }
 
-/// Every parser flag, with the decision and the reason for it. A flag left off
-/// does not lose its construct: the parser hands back the characters the author
-/// typed, which for a construct a cell cannot draw — a superscript, an equation
-/// — is the *better* terminal rendering. A flag turned on is a promise to
-/// render the construct as something, and the sweep holds it to that promise,
-/// so the wrong move is enabling one and having nowhere to put what comes back.
-///
-/// Held to covering `Options::all()` by a test rather than by the compiler:
-/// `Options` is a bitflags struct and cannot be matched exhaustively, so a flag
-/// `pulldown-cmark` grows fails the suite instead of quietly defaulting to off.
-/// The `bool` column is held to a test of its own —
-/// [`tests::strikethrough_tasklists_gfm_tables_and_yaml_metadata_are_the_only_flags_on`]
-/// pins the fold this feeds `rows()`, so flipping one without wiring its
-/// construct's layout fails the suite rather than silently changing what
-/// `pulldown-cmark` parses.
 const FLAGS: [(Options, bool, &str); 15] = [
     (
         Options::ENABLE_TABLES,
@@ -385,11 +273,6 @@ const FLAGS: [(Options, bool, &str); 15] = [
     ),
 ];
 
-/// The flags actually handed to the parser: the `bool` column of [`FLAGS`],
-/// folded. One caller in production (`rows`) and one in the test that pins it
-/// — [`tests::strikethrough_tasklists_gfm_tables_and_yaml_metadata_are_the_only_flags_on`]
-/// — which is why this earns being a
-/// function rather than the fold sitting inline at either call site.
 fn options() -> Options {
     FLAGS
         .iter()
@@ -397,54 +280,18 @@ fn options() -> Options {
         .fold(Options::empty(), |all, (flag, _, _)| all | *flag)
 }
 
-/// What a tag's block becomes, or `None` for an inline tag that is part of the
-/// block around it and contributes no row of its own.
-///
-/// Exhaustive, with no `_ =>` arm, on purpose: a construct `pulldown-cmark`
-/// grows does not compile until somebody has decided what it renders as. That
-/// is R26.5b, and it is the same shape `src/keys.rs` carries one layer down.
-///
-/// Deciding what a construct *is* is not the same as laying it out — the match
-/// in [`rows`] is where a kind gets rows, and the constructs still waiting for
-/// one are named in the sweep's `UNRENDERED` list with the ticket that owes
-/// them.
 fn block_kind(tag: &Tag) -> Option<RowKind> {
     match tag {
         Tag::Paragraph => Some(RowKind::Paragraph),
         Tag::Heading { level, .. } => Some(RowKind::Heading(*level)),
-        // The exact `BlockQuoteKind` this carries only matters at the point a
-        // quote's own `Paragraph` is classified — `rows()` reads it off the
-        // open quote stack there rather than off this generic classification,
-        // which exists only to prove the tag has a decided layout.
         Tag::BlockQuote(kind) => Some(RowKind::Quote(*kind)),
-        // A fence and an indented block are both verbatim text. This generic
-        // classification only feeds the no-op match below — the real
-        // decision between `Code` and a mermaid fence's `Diagram` is made
-        // from the fence's language where the frame is actually opened.
         Tag::CodeBlock(_) => Some(RowKind::Code),
-        // Verbatim for the same reason a fence is: HTML is preformatted, and
-        // wrapping a tag across rows would break it. `RowKind::Code` rather
-        // than a kind of its own — ticket 06's decision — since unwrapped and
-        // set apart is exactly what a fence already gets.
         Tag::HtmlBlock => Some(RowKind::Code),
-        // As with `BlockQuote`, the depth and marker only matter once
-        // `Tag::Item` is reached in `rows()`; this placeholder just proves the
-        // tag has a decided layout.
         Tag::List(_) | Tag::Item => Some(RowKind::List(ListItem {
             depth: 0,
             marker: None,
         })),
-        // Inline in the sense this classification means: the container
-        // carries no text of its own — its number is stamped onto the first
-        // row its *own* `Tag::Paragraph` produces, in `rows()`'s
-        // `RowKind::Paragraph` arm, exactly as a quote's alert is read off
-        // `quotes` rather than given a row here. Returning `Some(Paragraph)`
-        // instead would make this arm indistinguishable from a real
-        // paragraph in the generic dispatch below and open two frames for
-        // one block.
         Tag::FootnoteDefinition(_) => None,
-        // A term and its definition are an indented list in everything but
-        // name.
         Tag::DefinitionList | Tag::DefinitionListTitle | Tag::DefinitionListDefinition => {
             Some(RowKind::List(ListItem {
                 depth: 0,
@@ -452,34 +299,14 @@ fn block_kind(tag: &Tag) -> Option<RowKind> {
             }))
         }
         Tag::Table(_) | Tag::TableHead | Tag::TableRow | Tag::TableCell => Some(RowKind::Table),
-        // Inline: a difference *inside* a row. Emphasis, Strong and
-        // Strikethrough are carried as a piece's `Emphasis` by `rows` rather
-        // than as a row kind — contributing a row of their own would break
-        // the sentence they sit in. Superscript and Subscript stay `None`
-        // with no modifier to carry: ticket 13 leaves both flags off for
-        // good, so neither ever reaches this arm.
         Tag::Emphasis | Tag::Strong | Tag::Strikethrough | Tag::Superscript | Tag::Subscript => {
             None
         }
-        // Inline, and the text between the tags is the link text — which is
-        // what "text shown, URL hidden" already amounts to.
         Tag::Link { .. } | Tag::Image { .. } => None,
         Tag::MetadataBlock(_) => Some(RowKind::Metadata),
     }
 }
 
-/// One open block, leaf or container. A leaf (`Heading`, `Paragraph`, a
-/// quote's paragraph, a list item's own text) accumulates `segments`; a list
-/// item that holds a nested list is *also* one of these, because a tight
-/// item's text arrives with no `Paragraph` wrapper at all — `Tag::Item`
-/// pushes a frame directly rather than waiting for one.
-///
-/// Frames nest — a list item containing a nested list is two frames open at
-/// once — which `own_rows` is for: a child frame closing merges into its
-/// parent's `own_rows` rather than the document's rows directly, so an
-/// item's own text (still pending in `segments` when its nested list starts)
-/// lands *before* the nested list's rows instead of after, matching source
-/// order rather than close order.
 struct Frame {
     kind: RowKind,
     line: usize,
@@ -487,21 +314,10 @@ struct Frame {
     segments: Vec<Vec<Piece>>,
     emphasis: Vec<Emphasis>,
     own_rows: Vec<Row>,
-    /// The fence's language, `RowKind::Code` only — read by `flush` instead
-    /// of wrapping, and `None` for an indented block or an unnamed fence.
     language: Option<String>,
 }
 
-/// One open table. Never nested — a table's own frame is not on `stack` at
-/// all; a cell's content is, so that emphasis and inline code inside a cell
-/// reuse the same [`Frame`] machinery a paragraph does, and this only tracks
-/// the 2-D shape a `Frame` has nowhere to put: a header row set apart from a
-/// body of rows, each a list of cells, each cell a list of pieces.
-///
-/// The header has no `TableRow` of its own — `pulldown-cmark` nests
-/// `TableCell` directly under `TableHead`, unlike a body row, which nests
-/// cells under a `TableRow` under the table — so `current_row` is flushed
-/// into `header` on `TagEnd::TableHead` rather than on `TagEnd::TableRow`.
+/// pulldown-cmark nests header cells directly under TableHead with no TableRow
 struct TableBuild {
     line: usize,
     alignments: Vec<Alignment>,
@@ -510,47 +326,16 @@ struct TableBuild {
     current_row: Vec<Vec<Piece>>,
 }
 
-/// The document being built: everything one markdown event may change, in one
-/// place. The parse loop's arms are methods on this rather than a single
-/// match over nine locals, so that "what does a `Tag::Item` touch" is answered
-/// by a signature instead of by reading past every other tag.
 struct Build {
-    /// Byte offset of each source line, for [`Build::line`].
     starts: Vec<usize>,
     columns: usize,
     rows: Vec<Row>,
     stack: Vec<Frame>,
-    /// The ordinal a list's next item takes, `None` for a bulleted list — one
-    /// entry per open `Tag::List`, so a nested ordered list inside a bulleted
-    /// one keeps its own count. Depth is this stack's length, read fresh at
-    /// each `Tag::Item` rather than stored, so it never drifts from the lists
-    /// actually open.
     lists: Vec<Option<u64>>,
-    /// One entry per open `Tag::DefinitionList`, read fresh at each title or
-    /// definition to derive its indent — nothing is stored past this.
     definition_lists: Vec<()>,
-    /// The GFM alert kind of each open quote, `None` for a plain one — a
-    /// paragraph opened while this is non-empty reads its innermost entry
-    /// rather than becoming a plain `Paragraph`.
     quotes: Vec<Option<BlockQuoteKind>>,
-    /// The table currently open, if any. Tables do not nest, so `Option`
-    /// rather than a stack — unlike a cell's own content, which nests onto
-    /// `stack` exactly like any other frame.
     table: Option<TableBuild>,
-    /// A footnote's display number, assigned once per label regardless of
-    /// whether a reference or the definition is seen first. See
-    /// [`footnote_number`].
     footnotes: HashMap<String, usize>,
-    /// The number of each open footnote definition, `Some` until stamped onto
-    /// that definition's first paragraph and `None` after — a second
-    /// paragraph in the same definition is prose with nowhere left to carry
-    /// the number, the same way a list item's marker is cleared past its
-    /// first row. Deliberately scoped to a paragraph: a definition whose
-    /// first block is a list, a fence, a heading or a table would need the
-    /// same stamp threaded through every one of those frame openings for a
-    /// shape no sample in this repo or `CONSTRUCTS` uses, so it stays
-    /// unmarked there rather than earning that spread — the number is
-    /// dropped, never the definition's own text.
     footnote_defs: Vec<Option<usize>>,
 }
 
@@ -559,9 +344,6 @@ impl Build {
         line_of(&self.starts, offset)
     }
 
-    /// A tag opens: whatever emphasis, nesting depth and frame it brings, then
-    /// the block layout `block_kind` gives it. The three tag groups are
-    /// disjoint, so all three run rather than one being chosen.
     fn start(&mut self, tag: &Tag, line: usize) {
         self.open_emphasis(tag);
         self.open_depth(tag);
@@ -572,9 +354,6 @@ impl Build {
         }
     }
 
-    /// Tags that only style the text inside them. An image's alt text is the
-    /// text between its tags, exactly as a link's text is — the only
-    /// difference is the modifier it carries.
     fn open_emphasis(&mut self, tag: &Tag) {
         match tag {
             Tag::Emphasis => push_emphasis_on_top(&mut self.stack, |top| top.italic = true),
@@ -585,10 +364,6 @@ impl Build {
         }
     }
 
-    /// Tags that open a nesting level their children read back. The footnote
-    /// container itself carries no text — see `block_kind`'s
-    /// `Tag::FootnoteDefinition` arm — so only the number is tracked here, for
-    /// the definition's own `Tag::Paragraph` to pick up.
     fn open_depth(&mut self, tag: &Tag) {
         match tag {
             Tag::List(start) => self.lists.push(*start),
@@ -602,17 +377,12 @@ impl Build {
         }
     }
 
-    /// Tags that push a [`Frame`] of their own onto the stack.
     fn open_frame(&mut self, tag: &Tag, line: usize) {
         match tag {
             Tag::DefinitionListTitle | Tag::DefinitionListDefinition => {
                 self.open_definition(tag, line)
             }
             Tag::Item => self.open_item(line),
-            // Verbatim, one row per source line, unwrapped and highlighted
-            // with the empty language — the same treatment a fence with no
-            // language gets, which is what "shown literally and set apart"
-            // amounts to for markup rather than prose.
             Tag::HtmlBlock => push_frame(
                 &mut self.stack,
                 RowKind::Code,
@@ -620,8 +390,6 @@ impl Build {
                 TagEnd::HtmlBlock,
                 self.columns,
             ),
-            // A metadata block's own frame, so its lines land as rows set
-            // apart from the document rather than as text with nowhere to go.
             Tag::MetadataBlock(_) => push_frame(
                 &mut self.stack,
                 RowKind::Metadata,
@@ -641,11 +409,6 @@ impl Build {
         }
     }
 
-    /// Depth doubles per nesting level, one unit for the term and a second for
-    /// its own definition — the same `lists.len()`-reads-nesting-fresh pattern
-    /// `Tag::Item` uses, widened by one bit rather than stored, since a
-    /// definition list nested inside a definition must indent deeper than its
-    /// own outer term.
     fn open_definition(&mut self, tag: &Tag, line: usize) {
         let depth = 2 * self.definition_lists.len().saturating_sub(1)
             + usize::from(matches!(tag, Tag::DefinitionListDefinition));
@@ -661,10 +424,7 @@ impl Build {
         );
     }
 
-    /// A tight item's content is bare text with no `Paragraph` wrapper, so the
-    /// frame opens here rather than waiting for one. A loose item's nested
-    /// `Paragraph` finds this frame already open and stays transparent — see
-    /// [`Build::open_paragraph`].
+    /// pulldown-cmark gives a tight item's text no Paragraph wrapper, so the frame opens here
     fn open_item(&mut self, line: usize) {
         let marker = match self.lists.last_mut() {
             Some(Some(ordinal)) => {
@@ -681,14 +441,6 @@ impl Build {
         push_frame(&mut self.stack, kind, line, TagEnd::Item, self.columns);
     }
 
-    /// Verbatim text, pushed directly rather than through `block_kind`'s
-    /// generic `RowKind::Code` arm — that arm stays a no-op so
-    /// `Tag::HtmlBlock` does not also push a second frame here. The language
-    /// is the fence's info string's first word, or `None` for an indented
-    /// block, which is `flush`'s signal to highlight rather than wrap. A fence
-    /// whose language is exactly `mermaid` opens as `RowKind::Diagram` instead
-    /// — ticket 07's signal to `flush` to lay it out as a diagram rather than
-    /// highlight it as code.
     fn open_code_block(&mut self, kind: &CodeBlockKind, line: usize) {
         let language = match kind {
             CodeBlockKind::Fenced(info) => info.split_whitespace().next().map(str::to_string),
@@ -705,10 +457,6 @@ impl Build {
         }
     }
 
-    /// A table's own shape lives in `table`, never on `stack` — see
-    /// [`TableBuild`]. Only a cell's content goes through a real `Frame`,
-    /// pushed by [`Build::open_frame`], so its own emphasis and inline code
-    /// reuse the exact machinery a paragraph does.
     fn open_table(&mut self, tag: &Tag, line: usize) {
         match tag {
             Tag::Table(alignments) => {
@@ -729,10 +477,6 @@ impl Build {
         }
     }
 
-    /// Which kinds have a layout yet. Exhaustive on `RowKind`, so a kind added
-    /// for a construct is a compile error here until somebody decides how its
-    /// rows are built; the sweep's `UNRENDERED` list names the ticket that
-    /// owes each of the rest.
     fn open_block(&mut self, kind: RowKind, tag: &Tag, line: usize) {
         match kind {
             RowKind::Heading(_) => {
@@ -749,18 +493,11 @@ impl Build {
     }
 
     fn open_paragraph(&mut self, line: usize) {
-        // A loose item and a loose definition both wrap their content in a
-        // real `Tag::Paragraph`, and both must stay transparent for the same
-        // reason: the container's own frame already holds the text (a tight
-        // item's, with no wrapper at all), so a second frame here would render
-        // the definition at depth 0 instead of indented under its term.
         let transparent = matches!(
             self.stack.last().map(|frame| frame.closes),
             Some(TagEnd::Item | TagEnd::DefinitionListTitle | TagEnd::DefinitionListDefinition)
         );
         if transparent {
-            // A second paragraph in a loose item or definition still needs a
-            // break from the first, the same way a hard break does.
             if let Some(frame) = self.stack.last_mut() {
                 if !frame.own_rows.is_empty() || frame.segments != [Vec::new()] {
                     frame.segments.push(Vec::new());
@@ -773,19 +510,12 @@ impl Build {
             None => RowKind::Paragraph,
         };
         push_frame(&mut self.stack, kind, line, TagEnd::Paragraph, self.columns);
-        // The definition's own number, stamped onto this paragraph's first
-        // piece so `[1]` and its text land in the same row rather than two —
-        // `take` leaves a later paragraph in a loose definition unmarked.
         if let Some(n) = self.footnote_defs.last_mut().and_then(Option::take) {
             let frame = self.stack.last_mut().expect("just pushed above");
             push_piece(&mut frame.segments, &format!("[{n}] "), Emphasis::default());
         }
     }
 
-    /// The four table endings are handled apart from the generic
-    /// frame-closing below: a cell's frame closes into `table.current_row`
-    /// instead of into a parent frame or the document, and a row and the table
-    /// itself close into `table`'s own fields, never onto `stack`.
     fn end(&mut self, end: TagEnd) {
         match end {
             TagEnd::TableCell => self.close_cell(),
@@ -809,10 +539,6 @@ impl Build {
         let Some(frame) = self.stack.pop() else {
             return;
         };
-        // A cell's content is always one segment: a pipe-table row is confined
-        // to one source line, so nothing inside a cell can produce the
-        // `Event::HardBreak` that starts a second one — unlike a paragraph,
-        // which can span several lines.
         let pieces = frame.segments.into_iter().next().unwrap_or_default();
         if let Some(build) = self.table.as_mut() {
             build.current_row.push(pieces);
@@ -861,9 +587,6 @@ impl Build {
         }
     }
 
-    /// Prose, and an HTML block's own lines fed to the frame `Tag::HtmlBlock`
-    /// opened earlier — both plain text with whatever emphasis the open frame
-    /// already carries.
     fn push_text(&mut self, text: &str) {
         if let Some(frame) = self.stack.last_mut() {
             let style = *frame.emphasis.last().unwrap();
@@ -871,10 +594,6 @@ impl Build {
         }
     }
 
-    /// A span of backticks inside prose or a tag inside a sentence — `<br>`,
-    /// `<kbd>x</kbd>`, a comment — both set apart with `code` on top of
-    /// whatever emphasis already surrounds them, so `` *`x`* `` and
-    /// `*<b>x</b>*` both still carry the italic too.
     fn push_code(&mut self, text: &str) {
         if let Some(frame) = self.stack.last_mut() {
             let mut style = *frame.emphasis.last().unwrap();
@@ -883,17 +602,12 @@ impl Build {
         }
     }
 
-    /// A line ending the author asked for, which ends the row without ending
-    /// the block: a new segment starts, and wrapping never crosses into it.
     fn hard_break(&mut self) {
         if let Some(frame) = self.stack.last_mut() {
             frame.segments.push(Vec::new());
         }
     }
 
-    /// Fires as the first event inside a task item, before any text —
-    /// overriding the `Bullet` `Tag::Item` already set, since a task item is
-    /// still an item and needs a depth and ordinal exactly as any other.
     fn task_marker(&mut self, checked: bool) {
         if let Some(frame) = self.stack.last_mut() {
             if let RowKind::List(item) = &mut frame.kind {
@@ -902,9 +616,6 @@ impl Build {
         }
     }
 
-    /// The reference's own number, the same one its definition's paragraph
-    /// carries — plain text, since a reference is prose wearing a number
-    /// rather than a construct needing a modifier.
     fn footnote_reference(&mut self, label: &str) {
         if let Some(frame) = self.stack.last_mut() {
             let n = footnote_number(label, &mut self.footnotes);
@@ -913,9 +624,6 @@ impl Build {
         }
     }
 
-    /// A thematic break belongs to no frame — it interrupts whatever surrounds
-    /// it rather than being contained by it — so it is pushed straight onto
-    /// the document's rows.
     fn rule(&mut self, line: usize) {
         let follows_list = matches!(self.rows.last().map(|row| row.kind), Some(RowKind::List(_)));
         if !self.rows.is_empty() && !follows_list {
@@ -930,11 +638,6 @@ impl Build {
     }
 }
 
-/// The document `text` describes, laid out to `columns`.
-///
-/// `columns` of zero means the terminal has not reported its size yet, which is
-/// not a pane one column wide — it is no pane at all. Nothing is wrapped until
-/// a width arrives, and the first `Resized` reflows it.
 pub fn rows(text: &str, columns: usize) -> Vec<Row> {
     let mut build = Build {
         starts: line_starts(text),
@@ -956,18 +659,9 @@ pub fn rows(text: &str, columns: usize) -> Vec<Row> {
             Event::End(end) => build.end(end),
             Event::Code(text) | Event::InlineHtml(text) => build.push_code(&text),
             Event::Text(text) | Event::Html(text) => build.push_text(&text),
-            // The author's line ending, not the pane's — the row it belongs
-            // to is decided by the pane's width, so it becomes a space rather
-            // than a break.
             Event::SoftBreak => build.push_text(" "),
             Event::HardBreak => build.hard_break(),
             Event::TaskListMarker(checked) => build.task_marker(checked),
-            // Math arrives only under a flag [`FLAGS`] records as off for
-            // good, so this cannot fire today and dropping it changes
-            // nothing: `$x^2$` reaches the reader as itself. Collecting an
-            // `InlineMath`'s contents as prose would turn it into `x2`,
-            // which destroys more than it renders — the reason the flag
-            // stays off rather than a home ever being built for this.
             Event::InlineMath(_) | Event::DisplayMath(_) => {}
             Event::FootnoteReference(label) => build.footnote_reference(&label),
             Event::Rule => build.rule(line),
@@ -976,12 +670,6 @@ pub fn rows(text: &str, columns: usize) -> Vec<Row> {
     build.rows
 }
 
-/// A blank row: the separator between one block and the next, wherever a
-/// caller has already decided one belongs — `close_frame`'s "two list rows
-/// never separate", `Event::Rule`'s "a rule after a list doesn't either", and
-/// `TagEnd::Table`'s "always, since a table is never part of what precedes
-/// it" each keep their own guard; only the row itself was duplicated three
-/// times over.
 fn separator_row(line: usize) -> Row {
     Row {
         kind: RowKind::Paragraph,
@@ -991,10 +679,6 @@ fn separator_row(line: usize) -> Row {
     }
 }
 
-/// Opens a frame, first flushing the currently open one's pending text into
-/// its own rows — a nested frame (a list item's own text, then its nested
-/// list) would otherwise sit in the parent's `segments` past the point the
-/// child's rows are ready to merge in, reversing their order.
 fn push_frame(stack: &mut Vec<Frame>, kind: RowKind, line: usize, closes: TagEnd, columns: usize) {
     if let Some(top) = stack.last_mut() {
         flush(top, columns);
@@ -1010,21 +694,12 @@ fn push_frame(stack: &mut Vec<Frame>, kind: RowKind, line: usize, closes: TagEnd
     });
 }
 
-/// Closes a frame: flushes what is still pending, then either merges into
-/// the parent frame still open (a nested list closing back into its item) or,
-/// once the stack is empty, lands on the document's rows with the blank-row
-/// separator applied.
 fn close_frame(stack: &mut [Frame], rows: &mut Vec<Row>, mut frame: Frame, columns: usize) {
     flush(&mut frame, columns);
     if let Some(parent) = stack.last_mut() {
         parent.own_rows.extend(frame.own_rows);
         return;
     }
-    // A blank row before every block but the first: without it a heading and
-    // the paragraph under it run together and the document reads as one,
-    // which is the thing a Preview exists to undo. Two list rows in a row are
-    // the one exception — sibling items of the same list read as one list,
-    // not as a blank line between every bullet.
     let both_list = matches!(rows.last().map(|row| row.kind), Some(RowKind::List(_)))
         && matches!(frame.kind, RowKind::List(_));
     if !rows.is_empty() && !both_list {
@@ -1033,12 +708,6 @@ fn close_frame(stack: &mut [Frame], rows: &mut Vec<Row>, mut frame: Frame, colum
     rows.extend(frame.own_rows);
 }
 
-/// Lays out a frame's pending `segments` into its `own_rows` and resets
-/// `segments` to empty. A list item's marker — the bullet, ordinal or
-/// checkbox — belongs on the first row the item ever produces and nowhere
-/// else, so it is cleared on every row after that: the first flush's first
-/// row when `own_rows` is still empty, every row of a later flush (loose
-/// paragraph, or text following a nested list) once it is not.
 fn flush(frame: &mut Frame, columns: usize) {
     if frame.segments == [Vec::new()] {
         return;
@@ -1051,9 +720,6 @@ fn flush(frame: &mut Frame, columns: usize) {
             &frame.segments,
         ),
         RowKind::Diagram => diagram_rows(frame.line, columns, &frame.segments),
-        // Verbatim, one row per source line — the same shape a code block
-        // takes, since a metadata block is preformatted for the same reason
-        // a fence is.
         RowKind::Metadata => code_rows(RowKind::Metadata, frame.line, "", &frame.segments),
         _ => laid_out(frame.kind, frame.line, &frame.segments, columns),
     };
@@ -1070,11 +736,6 @@ fn flush(frame: &mut Frame, columns: usize) {
     frame.segments = vec![Vec::new()];
 }
 
-/// Enters a modifier on the currently open frame: pushes a copy of its active
-/// `Emphasis` with `set` applied, so the matching close only has to pop
-/// rather than know which field to clear. A snapshot per push is what keeps
-/// this correct under nesting no matter how deep, with no counter per field
-/// to keep in sync.
 fn push_emphasis_on_top(stack: &mut [Frame], set: impl FnOnce(&mut Emphasis)) {
     if let Some(frame) = stack.last_mut() {
         let mut top = *frame.emphasis.last().unwrap();
@@ -1083,9 +744,6 @@ fn push_emphasis_on_top(stack: &mut [Frame], set: impl FnOnce(&mut Emphasis)) {
     }
 }
 
-/// Appends `text` to the open segment, merging into the last piece when its
-/// emphasis already matches rather than growing a new one-character piece per
-/// word — a row of plain prose still ends up as the one piece it always was.
 fn push_piece(segments: &mut [Vec<Piece>], text: &str, emphasis: Emphasis) {
     if text.is_empty() {
         return;
@@ -1104,19 +762,6 @@ fn push_piece(segments: &mut [Vec<Piece>], text: &str, emphasis: Emphasis) {
     });
 }
 
-/// A verbatim block's segments as highlighted rows, one per source line and
-/// never wrapped — a line broken at the pane edge is a line the block's own
-/// syntax does not permit. `kind` is stamped onto every row this returns,
-/// which is what lets a metadata block reuse this rather than duplicating it
-/// — `RowKind::Metadata` with `language` empty, exactly as an unnamed fence
-/// already is. `language` is the fence's info string, or the empty string
-/// for an indented block, an unnamed fence, or a metadata block; either way
-/// [`highlight::highlight`] answers with plain tokens rather than failing.
-///
-/// The block's own trailing newline — the line ending before the closing
-/// fence — is stripped first, or it would surface as one extra empty row;
-/// `pulldown-cmark` hands the fence's lines with no other separator to split
-/// rows on, so a row here is a line of the highlighter's answer.
 fn code_rows(kind: RowKind, line: usize, language: &str, segments: &[Vec<Piece>]) -> Vec<Row> {
     let raw: String = segments
         .iter()
@@ -1142,16 +787,6 @@ fn code_rows(kind: RowKind, line: usize, language: &str, segments: &[Vec<Piece>]
         .collect()
 }
 
-/// A mermaid fence's segments, rendered as a diagram laid out to `columns` —
-/// or, when `mermaid-text` cannot draw it, or draws it wider than `columns`
-/// allows, the reason and the fence's raw source as one row of highlighted
-/// code. This is 05's fallback shape reached from a render failure instead
-/// of an unrecognised language, which is why ticket 07 was blocked on it.
-///
-/// The fallback source is joined onto a single row rather than split one per
-/// source line the way [`code_rows`] does: a diagram whose source could not
-/// be drawn is not offering syntax the reader is meant to read line by line,
-/// only a reference for what was attempted.
 fn diagram_rows(line: usize, columns: usize, segments: &[Vec<Piece>]) -> Vec<Row> {
     let raw: String = segments
         .iter()
@@ -1179,19 +814,10 @@ fn diagram_rows(line: usize, columns: usize, segments: &[Vec<Piece>]) -> Vec<Row
     }
 }
 
-/// Whether every line of a rendered diagram fits `width` — `None` (no width
-/// reported yet) always fits. Measured in display columns via
-/// [`UnicodeWidthStr`], not `chars().count()`: `mermaid-text` compacts to the
-/// budget it was given using the same measure internally, and a box-drawing
-/// diagram carrying a wide-character label (CJK text in a node) would count
-/// short on characters while still overflowing the pane it is measured
-/// against.
 fn fits(width: Option<usize>, diagram: &str) -> bool {
     width.is_none_or(|w| diagram.lines().all(|l| l.width() <= w))
 }
 
-/// The reason and the fence's raw source, as one highlighted [`RowKind::Code`]
-/// row — see [`diagram_rows`] for why it is one row rather than one per line.
 fn diagram_fallback(line: usize, source: &str, reason: DiagramRefusal) -> Vec<Row> {
     let joined = source.lines().collect::<Vec<_>>().join(" ");
     let pieces = highlight::highlight("mermaid", &joined)
@@ -1211,9 +837,6 @@ fn diagram_fallback(line: usize, source: &str, reason: DiagramRefusal) -> Vec<Ro
     }]
 }
 
-/// A block's segments as the rows they take. Each segment is one hard break's
-/// worth of pieces, laid out independently: wrapping never crosses a hard
-/// break, because that break is a line ending the author asked for.
 fn laid_out(kind: RowKind, line: usize, segments: &[Vec<Piece>], columns: usize) -> Vec<Row> {
     segments
         .iter()
@@ -1227,24 +850,12 @@ fn laid_out(kind: RowKind, line: usize, segments: &[Vec<Piece>], columns: usize)
         .collect()
 }
 
-/// One segment's pieces, split at the same points `textwrap` would break the
-/// flattened text at. `textwrap` wraps a string; it has no notion of a piece
-/// boundary, so the break is found in the flattened text first and then
-/// walked back onto the pieces that produced it — splitting one where a break
-/// falls inside it, and carrying its emphasis into both halves.
-///
-/// The caller passes `textwrap`'s own options rather than a width, because a
-/// table cell wants one of them different: it declines to break a word too
-/// long for its column, overflowing instead — see [`table_rows`].
 pub(crate) fn wrapped(pieces: &[Piece], options: textwrap::Options<'_>) -> Vec<Vec<Piece>> {
     if options.width == 0 {
         return vec![pieces.to_vec()];
     }
     let flat: String = pieces.iter().map(|piece| piece.text.as_str()).collect();
     if flat.is_empty() {
-        // An empty segment is a hard break immediately followed by another
-        // hard break or the block's end — still a row, just one with nothing
-        // on it, the same way a blank source line is still a line.
         return vec![Vec::new()];
     }
     let mut at = 0;
@@ -1259,12 +870,7 @@ pub(crate) fn wrapped(pieces: &[Piece], options: textwrap::Options<'_>) -> Vec<V
     let mut rows = Vec::new();
     let mut cursor = 0;
     for line in textwrap::wrap(&flat, options) {
-        // `textwrap` may trim whitespace at a break rather than returning an
-        // exact substring, so the break is located by searching forward
-        // rather than assumed to start where the last one ended. A miss is
-        // unreachable — every wrapped line is `textwrap`'s own subset of
-        // `flat` in order — and it fails loudly rather than quietly dropping
-        // a row of the document.
+        // textwrap may trim whitespace at a break, so search forward for each line rather than slicing
         let offset = flat[cursor..]
             .find(line.as_ref())
             .expect("a wrapped line is a substring of what was wrapped");
@@ -1289,28 +895,6 @@ pub(crate) fn wrapped(pieces: &[Piece], options: textwrap::Options<'_>) -> Vec<V
     rows
 }
 
-/// A finished table's rows, columns aligned to their widest cell and each
-/// column's declared alignment honoured. The header is set apart by marking
-/// its pieces bold rather than by drawing a rule of dashes: no ticket asks
-/// for one, and inventing a glyph nobody named is exactly what R26.5a's sweep
-/// exists to catch. Every row shares the table's own opening line, the same
-/// way a fenced code block's rows all carry the fence's line.
-///
-/// A column too wide for `columns` shrinks, and a cell too wide for the
-/// column it lands in wraps *inside* that column — one source row becoming as
-/// many display rows as its tallest cell needs, its shorter cells padded down
-/// the whole height so no column shifts. Wrapping within a fixed column width
-/// is what preserves the alignment a table exists to show; reflowing a
-/// laid-out row would destroy it, and this code once refused the first because
-/// it had rejected the second — see
-/// `docs/adr/0019-a-table-cell-wraps-inside-its-column.md`.
-///
-/// A word too long for its column is not broken: it overflows, the row renders
-/// wider than `columns` and is clipped, exactly as an unwrapped long code line
-/// already is. That is recoverable by scrolling sideways; a cut cell is gone
-/// from [`Row::text`] altogether. `columns` of zero means the terminal has not
-/// reported a size yet, the same convention [`rows`] itself uses, so nothing
-/// shrinks and nothing wraps before then.
 fn table_rows(build: TableBuild, columns: usize) -> Vec<Row> {
     let column_count = build
         .alignments
@@ -1370,18 +954,8 @@ fn table_rows(build: TableBuild, columns: usize) -> Vec<Row> {
     rows
 }
 
-/// The narrowest a column is shrunk to — below this a column is a stack of
-/// fragments rather than a column, and shrinking further buys nothing anyway;
-/// the argument is in `docs/adr/0019-a-table-cell-wraps-inside-its-column.md`.
 const MIN_COLUMN: usize = 4;
 
-/// The widths a table's columns actually draw at: `natural` unless the whole
-/// row — every column plus the gaps between them — would not fit `columns`,
-/// in which case the currently-widest column gives up one column at a time
-/// until it does, or until every column has reached [`MIN_COLUMN`] — or its
-/// own natural width, if that is narrower still. Shrinking the widest column
-/// first is what keeps a table of mostly-short cells and one very long one
-/// legible instead of squeezing every column equally.
 fn shrink_to_fit(natural: &[usize], columns: usize, gap: usize) -> Vec<usize> {
     let mut widths = natural.to_vec();
     if columns == 0 {
@@ -1406,13 +980,6 @@ fn shrink_to_fit(natural: &[usize], columns: usize, gap: usize) -> Vec<usize> {
     widths
 }
 
-/// One source row as the display rows it takes: each column's cell wrapped to
-/// its width, in source order, with a plain gap between columns. The row is as
-/// tall as its tallest cell, and a cell with fewer rows than that is padded to
-/// the full width on the rows it has nothing on — otherwise every column after
-/// a wrapped one would shift left on all but its first row. A row shorter than
-/// `column_count` — a ragged table row GFM still permits — reads its missing
-/// columns as empty cells rather than shifting the ones it has.
 fn row_pieces(
     row: &[Vec<Piece>],
     widths: &[usize],
@@ -1446,17 +1013,6 @@ fn row_pieces(
         .collect()
 }
 
-/// One display row of a cell padded to `width` by its declared alignment.
-/// Padding is a plain [`Piece`] with no modifier, appended or prepended around
-/// the cell's own pieces, which is what keeps a padded **bold** cell's padding
-/// unbold. The alignment applies to every display row a wrapped cell occupies,
-/// since it is a property of the column rather than of the first row.
-///
-/// A row can be wider than `width` — an unbreakable word [`wrapped`] declined
-/// to split — in which case it overflows rather than being cut; and it can
-/// fall short by more than its text, since a display-column budget does not
-/// divide evenly by a double-width glyph. Both are the same arithmetic: pad by
-/// whatever is left over, which for the overflowing row is nothing.
 fn pad_cell(cell: &[Piece], width: usize, alignment: Alignment) -> Vec<Piece> {
     let natural: usize = cell.iter().map(|piece| piece.text.width()).sum();
     let pad = width.saturating_sub(natural);
@@ -1476,8 +1032,6 @@ fn pad_cell(cell: &[Piece], width: usize, alignment: Alignment) -> Vec<Piece> {
     pieces
 }
 
-/// A plain run of `count` spaces, carrying no emphasis and no token — the
-/// shape padding and the gap between columns both need.
 fn plain_spaces(count: usize) -> Piece {
     Piece {
         text: " ".repeat(count),
@@ -1486,20 +1040,11 @@ fn plain_spaces(count: usize) -> Piece {
     }
 }
 
-/// A footnote's display number: assigned the first time its label is seen,
-/// by either a reference or a definition, whichever the parser hands back
-/// first. Real documents put the definition after the reference it belongs
-/// to, so first-seen order and reference order agree in practice; a
-/// definition that never had a reference still gets a number this way
-/// instead of one silently missing. `seen.len()` is the next number due —
-/// one counter, not two that could drift apart.
 fn footnote_number(label: &str, seen: &mut HashMap<String, usize>) -> usize {
     let next = seen.len() + 1;
     *seen.entry(label.to_string()).or_insert(next)
 }
 
-/// The byte offset each line starts at, so a block's offset can be turned into
-/// a line number without counting newlines from the top of the file per block.
 fn line_starts(text: &str) -> Vec<usize> {
     let mut starts = vec![0];
     starts.extend(text.match_indices('\n').map(|(at, _)| at + 1));
@@ -1522,20 +1067,6 @@ mod tests {
         rows.iter().map(Row::text).collect()
     }
 
-    /// One markdown sample per construct in the table in
-    /// `.scratch/markdown-preview/spec.md`, with the [`RowKind`] the
-    /// classification says it becomes. The sweep below holds each to three
-    /// mechanical things and to nothing else: it produces a row with text on
-    /// it, one of its rows has the kind it was classified as, and it leaks no
-    /// markup marker.
-    ///
-    /// No glyph and no colour is asserted anywhere here, for the reason
-    /// `highlighting.feature` asserts token kinds and never colours: a bullet
-    /// character is a theme decision exactly as a colour is, and a suite that
-    /// goes red when `•` becomes `‣` is a suite people learn to ignore. That
-    /// also means the sweep cannot see a heading drawn at one weight or an
-    /// emphasis drawn flat — those are ticket 12's, tracked in `spec.md`'s
-    /// table rather than here.
     const CONSTRUCTS: [(&str, &str, RowKind); 29] = [
         ("paragraph", "Prose in a paragraph.\n", RowKind::Paragraph),
         (
@@ -1644,28 +1175,10 @@ mod tests {
         ("wikilink", "See [[Setup]] for more.\n", RowKind::Paragraph),
     ];
 
-    /// The markers a Preview exists to consume. A row still holding one is a
-    /// row showing the reader the markup instead of the document. `~~` joined
-    /// the list once ticket 12 gave strikethrough a span to carry its
-    /// modifier in — before that its tildes were the one leak the other three
-    /// would have let through.
     const MARKERS: [&str; 9] = ["##", "**", "- ", "|", "`", "~~", "> ", "[!", "[ ]"];
 
-    /// Constructs the render does not reach yet, each with the ticket that owes
-    /// it. Not a progress checklist of the kind `AGENTS.md` bans: it is a list
-    /// of constructs deliberately not yet rendered, in the source beside the
-    /// code that would render them, and it cannot drift because the two sweeps
-    /// below fail the moment an entry is wrong in either direction. The ticket
-    /// that lands a construct deletes its entry; when the list is empty every
-    /// construct in the table renders as something.
     const UNRENDERED: [(&str, &str); 0] = [];
 
-    /// Whether a construct's sample renders. The three questions are
-    /// deliberately mechanical — see [`CONSTRUCTS`] for what that buys and
-    /// what it costs. The kind check compares variants, not full values: a
-    /// `List` row's exact marker or a `Quote` row's exact alert is what the
-    /// dedicated tests below pin, and this sweep only needs to know a row of
-    /// the right *kind* exists at all.
     fn unrendered(sample: &str, kind: RowKind) -> Option<String> {
         let rows = rows(sample, 200);
         if !rows.iter().any(|row| !row.text().trim().is_empty()) {
@@ -1677,11 +1190,6 @@ mod tests {
         {
             return Some(format!("renders no {kind:?} row"));
         }
-        // `Code` and `Metadata` rows are verbatim by design — a fence or a
-        // frontmatter block is supposed to keep the author's own characters,
-        // markers included, so a marker landing inside one is not a leak.
-        // Raw HTML is what makes this matter: `</b> ` legitimately contains
-        // `"> "`, the blockquote marker, with nothing left unconsumed.
         for marker in MARKERS {
             if let Some(row) = rows
                 .iter()
@@ -1694,10 +1202,6 @@ mod tests {
         None
     }
 
-    /// The reason this test exists: four formatting gaps in this feature were
-    /// found *by eye*, in a Preview of this repo's own documents, and two of
-    /// them were named in R26.5 from the start and owned by no ticket at all.
-    /// Nothing failed. R26.5b is that this cannot happen twice.
     #[test]
     fn every_construct_renders_something_or_is_a_recorded_omission() {
         let missing: Vec<String> = CONSTRUCTS
@@ -1714,10 +1218,6 @@ mod tests {
         );
     }
 
-    /// An omissions list nobody prunes is how the contract rots — the same
-    /// reason `keys.rs` holds its `UNLISTED` to still naming live bindings. An
-    /// entry for a construct that has started rendering excuses nothing, and
-    /// one naming a construct the sweep does not drive excuses nothing either.
     #[test]
     fn the_unrendered_list_holds_only_constructs_that_still_do_not_render() {
         for (owed, ticket) in UNRENDERED {
@@ -1732,10 +1232,6 @@ mod tests {
         }
     }
 
-    /// [`FLAGS`] is a hand-written table because a bitflags struct cannot be
-    /// matched exhaustively, so this is what `block_kind`'s missing `_ =>` arm
-    /// gets for free: a flag `pulldown-cmark` grows fails here until somebody
-    /// has decided it, rather than defaulting to off in silence.
     #[test]
     fn every_parser_flag_has_a_decision() {
         let decided = FLAGS
@@ -1752,12 +1248,6 @@ mod tests {
         }
     }
 
-    /// The reason this exists rather than trusting `every_parser_flag_has_a_decision`
-    /// alone: that test only checks the *reason* is non-empty, so a `bool`
-    /// flipped to `true` with its prose left unchanged — turning a construct
-    /// on with nowhere to put what comes back — would pass it silently. This
-    /// pins the fold `rows()` actually parses with, so flipping one without
-    /// also giving its events a home in the same commit fails here first.
     #[test]
     fn strikethrough_tasklists_gfm_tables_yaml_and_toml_metadata_footnotes_definition_lists_and_heading_attributes_are_the_only_flags_on(
     ) {
@@ -1808,12 +1298,6 @@ mod tests {
         assert!(fast.emphasis.struck, "{pieces:?}");
     }
 
-    /// The one the wrapping rewrite is for: a styled piece long enough to be
-    /// split by `textwrap` itself, not just to sit beside a break. `"bbbb
-    /// cccc"` is one `Piece` (no event separates the two words inside
-    /// `**...**`), and wrapping to 10 columns breaks between them — so both
-    /// halves have to come back still `strong`, proving the split carries
-    /// emphasis rather than dropping it at the row boundary.
     #[test]
     fn a_styled_piece_split_by_wrapping_carries_its_emphasis_into_both_halves() {
         let rows = rows("aaaa **bbbb cccc** dddd\n", 10);
@@ -1853,9 +1337,6 @@ mod tests {
         assert!(main.emphasis.code, "{:?}", rows[0].pieces);
     }
 
-    /// The load-bearing one: every row of a wrapped paragraph names the line the
-    /// paragraph started on, which is what the four consumers of the old
-    /// `row = line + scroll` identity read instead of deriving it.
     #[test]
     fn every_row_of_a_wrapped_paragraph_carries_the_block_line() {
         let rows = rows("# Setup\n\none two three four five six seven eight\n", 18);
@@ -1873,8 +1354,6 @@ mod tests {
         assert_eq!(texts(&rows), vec!["one two".to_string()]);
     }
 
-    /// A hard break ends the row without ending the block: two rows, both
-    /// still `Paragraph` and both still line 1, unlike a soft break's one row.
     #[test]
     fn a_hard_break_ends_the_row_and_a_soft_break_still_does_not() {
         let rows = rows("one  \ntwo\n", 40);
@@ -1883,9 +1362,6 @@ mod tests {
         assert!(rows.iter().all(|row| row.line == 1), "{rows:?}");
     }
 
-    /// A width of zero is no pane at all, not a pane one column wide: wrapping
-    /// to it would put every word on a row of its own before the terminal has
-    /// said anything about itself.
     #[test]
     fn no_width_yet_means_no_wrapping_yet() {
         let rows = rows("one two three four five six seven eight\n", 0);
@@ -1910,9 +1386,6 @@ mod tests {
             rows.iter().map(|row| row.line).collect::<Vec<_>>(),
             vec![1, 3, 3]
         );
-        // The separator is prose whitespace, not a second heading: a blank row
-        // that took the following block's kind would be counted by every
-        // "there is 1 <kind> row" assertion the later tickets make.
         assert_eq!(
             kinds(&rows),
             vec![
@@ -1951,9 +1424,6 @@ mod tests {
 
     #[test]
     fn ordered_items_keep_their_ordinal() {
-        // Starts at 3, not 1: a count from the item's position rather than a
-        // read of the author's own numbering would pass a list starting at 1
-        // and fail only here.
         let rows = rows("3. first\n4. second\n", 80);
         let ordinals: Vec<u64> = rows
             .iter()
@@ -1968,10 +1438,6 @@ mod tests {
         assert_eq!(ordinals, vec![3, 4]);
     }
 
-    /// The nested list ticket 03's own sample drives — a sibling item, then a
-    /// deeper one nested under it. Order matters as much as depth: "two"'s
-    /// own text is pending when its nested list opens, and has to land
-    /// *before* "nested" rather than after it.
     #[test]
     fn a_nested_list_item_is_indented_deeper_than_its_parent() {
         let rows = rows("- one\n- two\n  - nested\n", 80);
@@ -2009,8 +1475,6 @@ mod tests {
         );
     }
 
-    /// The marker belongs to the item, not to every row wrapping produces —
-    /// a bullet repeated down two wrapped rows would read as two items.
     #[test]
     fn a_wrapped_list_item_carries_its_marker_only_once() {
         let rows = rows("- aaaa bbbb cccc dddd\n", 10);
@@ -2047,9 +1511,6 @@ mod tests {
         );
     }
 
-    /// Each of GFM's five alert kinds, distinguishable from a plain quote and
-    /// from each other, with its `[!KIND]` marker consumed rather than left
-    /// as the first line of the quote's prose.
     #[test]
     fn every_gfm_alert_kind_is_distinguishable_and_its_marker_is_consumed() {
         let samples = [
@@ -2213,8 +1674,6 @@ mod tests {
         assert!(text.contains("Test"), "{text}");
     }
 
-    /// A narrower pane re-lays the same source out differently — proof the
-    /// diagram is not memoised past the width it was built for.
     #[test]
     fn a_diagram_relayouts_when_the_pane_resizes() {
         let source = "```mermaid\ngraph LR; A[Build] --> B[Test] --> C[Deploy]\n```\n";
@@ -2282,9 +1741,6 @@ mod tests {
         assert_eq!(table, vec!["a    bb".to_string(), "ccc  d ".to_string()]);
     }
 
-    /// One column of each declared alignment, each padded against a body row
-    /// wider than its own header — proving left pads on the right, right
-    /// pads on the left, and centre splits the padding between both.
     #[test]
     fn each_columns_declared_alignment_is_honoured() {
         let rows = rows("| a | b | c |\n|:--|--:|:-:|\n| 11 | 222 | 3333 |\n", 80);
@@ -2295,8 +1751,6 @@ mod tests {
         assert_eq!(header.text(), "a     b   c  ");
     }
 
-    /// Bold rather than a dashed rule — see [`table_rows`] for why no ticket
-    /// asks for the glyph a rule would invent.
     #[test]
     fn a_tables_header_row_is_bold_and_the_body_is_not() {
         let rows = rows("| a |\n|---|\n| b |\n", 80);
@@ -2317,10 +1771,6 @@ mod tests {
         );
     }
 
-    /// The whole of every cell survives a pane too narrow for the table: the
-    /// text moves onto further display rows instead of being cut away, which
-    /// is what makes it reachable at all — a truncated cell is gone from
-    /// `Row::text()` and no scroll can bring it back.
     #[test]
     fn a_table_wider_than_the_pane_wraps_its_cells_rather_than_dropping_text() {
         let rows = rows("| alpha beta | gamma delta |\n|---|---|\n| c | d |\n", 16);
@@ -2335,9 +1785,6 @@ mod tests {
         }
     }
 
-    /// A source row is as tall as its tallest cell, and its shorter cells are
-    /// padded down that whole height — otherwise the column after a wrapped
-    /// one would shift left on every row but the first.
     #[test]
     fn a_wrapped_source_rows_columns_stay_aligned_down_its_whole_height() {
         let rows = rows("| one two three | x |\n|---|---|\n| a | b |\n", 12);
@@ -2360,8 +1807,6 @@ mod tests {
         );
     }
 
-    /// Alignment is a property of the column, so it applies to a wrapped
-    /// cell's continuation rows exactly as it does to its first.
     #[test]
     fn a_wrapped_cells_alignment_is_honoured_on_every_display_row() {
         let rows = rows("| h |\n|--:|\n| one two |\n", 5);
@@ -2377,8 +1822,6 @@ mod tests {
         }
     }
 
-    /// The regression this change is likeliest to cause: a table the pane has
-    /// room for is laid out exactly as it was before wrapping existed.
     #[test]
     fn a_table_that_fits_the_pane_is_one_display_row_per_source_row() {
         let rows = rows("| a | bb |\n|---|---|\n| ccc | d |\n| e | ff |\n", 80);
@@ -2397,8 +1840,6 @@ mod tests {
         );
     }
 
-    /// `columns` of zero is a size the terminal has not reported yet, so
-    /// nothing shrinks and nothing wraps — the same convention [`rows`] uses.
     #[test]
     fn a_table_laid_out_against_no_reported_size_wraps_nothing() {
         let rows = rows("| alpha beta | gamma |\n|---|---|\n| c | d |\n", 0);
@@ -2416,10 +1857,6 @@ mod tests {
         );
     }
 
-    /// A token with nowhere to break is the one case wrapping cannot help.
-    /// It overflows its column rather than being cut: an overflowing row is
-    /// clipped at render and recoverable by scrolling sideways, where a cut
-    /// one is gone for good.
     #[test]
     fn an_unbreakable_token_wider_than_its_column_overflows_rather_than_truncating() {
         let rows = rows("| aaaaaaaaaaaaaaaaaaaa |\n|---|\n| b |\n", 6);
@@ -2434,9 +1871,6 @@ mod tests {
         );
     }
 
-    /// A pane too narrow for even the floor stops shrinking there rather than
-    /// squeezing on down to a column of single letters: the cell wraps at four
-    /// and the row overflows, which is the trade [`MIN_COLUMN`] names.
     #[test]
     fn a_column_stops_shrinking_at_the_narrowest_width_still_worth_wrapping_to() {
         let rows = rows("| ab cd efg | cc |\n|---|---|\n| x | y |\n", 3);
@@ -2452,8 +1886,6 @@ mod tests {
         );
     }
 
-    /// A wrapped cell keeps its emphasis on every row it occupies, exactly as
-    /// a wrapped paragraph's split piece does.
     #[test]
     fn a_wrapped_cell_carries_its_emphasis_onto_its_continuation_rows() {
         let rows = rows("| **one two** |\n|---|\n| x |\n", 5);
@@ -2470,10 +1902,6 @@ mod tests {
         assert!(carried.emphasis.strong, "{:?}", table[1].pieces);
     }
 
-    /// Two CJK glyphs are two display columns wide each — four total — same
-    /// as `aaaa`, so both columns land at the same width instead of one
-    /// counted short on characters and overflowing the pane it was measured
-    /// against.
     #[test]
     fn column_widths_are_measured_in_display_columns_not_characters() {
         let rows = rows("| 中文 |\n|---|\n| aaaa |\n", 80);
@@ -2485,11 +1913,6 @@ mod tests {
         assert_eq!(table[0].text().width(), table[1].text().width(), "{rows:?}");
     }
 
-    /// A display-column budget does not always divide evenly by a
-    /// double-width glyph, so a wrapped CJK cell's row can land one column
-    /// short of its column's width. Left unpadded, that shortfall drags every
-    /// column after it one to the left on just that row — comparing every
-    /// display row's total width against the others is what catches the drift.
     #[test]
     fn a_wrapped_wide_glyph_cells_rows_are_padded_back_up_to_its_column_width() {
         let rows = rows("| 中文文 | b |\n|---|---|\n| x | y |\n", 8);
@@ -2531,13 +1954,6 @@ mod tests {
         }
     }
 
-    /// Every spelling that arrives as `Tag::Link` with a different
-    /// `LinkType` — inline, full reference, collapsed reference, shortcut
-    /// reference — and the code never inspects which one it is: `Tag::Link`
-    /// is inline in [`block_kind`] regardless, so the text between the tags
-    /// is what shows and the `dest_url` field is never touched. A rule that
-    /// only handled the inline spelling would leave the rest showing their
-    /// URLs; this pins that no spelling is special-cased into that gap.
     #[test]
     fn every_link_spelling_hides_its_url() {
         let rows = rows(
@@ -2548,24 +1964,12 @@ mod tests {
              [short]: https://example.com/short\n",
             200,
         );
-        // Exact equality rather than `contains` — "ref" or "coll" would also
-        // be true as a substring of the URL each is meant to prove is gone,
-        // which would pass even if the URL leaked right next to it.
         assert_eq!(
             texts(&rows),
             vec!["inline and full and coll and short.".to_string()]
         );
     }
 
-    /// An autolink's visible text *is* its target — `<https://…>` and a bare
-    /// GFM autolink both show the author's own literal characters, so there
-    /// is nothing to hide, unlike every other spelling above. A bare URL with
-    /// no brackets is not one of these: `pulldown-cmark` 0.13.4's `ENABLE_GFM`
-    /// only turns on `[!NOTE]`-style alert parsing (see its own doc comment
-    /// on `Tag::BlockQuote`), not GitHub's separate "extended autolinks" —
-    /// there is no bare-URL `LinkType` this crate can produce for any flag
-    /// combination to leave un-driven, so `https://example.com/bare` below
-    /// stays plain `Event::Text`, same as any other word in the sentence.
     #[test]
     fn an_autolink_shows_its_url_because_that_is_its_own_text() {
         let rows = rows("See <https://example.com/auto> for more.\n", 200);
@@ -2625,10 +2029,6 @@ mod tests {
         assert!(!text.contains("---"), "{text}");
     }
 
-    /// `pulldown-cmark` itself refuses to open a metadata block that never
-    /// finds a closing `---`, falling back to ordinary parsing — this pins
-    /// that the fallback keeps every row after it rather than swallowing the
-    /// rest of the document into an unclosed block.
     #[test]
     fn frontmatter_with_no_closing_marker_does_not_swallow_the_document() {
         let rows = rows("---\ntitle: Setup\n\nStill here.\n", 80);
@@ -2666,9 +2066,6 @@ mod tests {
         assert!(!text.contains("[^1]"), "{text}");
     }
 
-    /// Numbering follows the order references appear in prose, not the order
-    /// definitions were written — the reader meets `[1]` before `[2]` in
-    /// text even though this document defines them the other way round.
     #[test]
     fn footnotes_are_numbered_in_reference_order_not_definition_order() {
         let rows = rows("One[^b] and two[^a].\n\n[^a]: second label, used first\n[^b]: first label, used second\n", 80);
@@ -2701,11 +2098,6 @@ mod tests {
         );
     }
 
-    /// A loose definition — one blank line between the term and `:` — wraps
-    /// its content in a real `Tag::Paragraph`, the same way a loose list item
-    /// does. Pinned because the paragraph-opening arm must treat that
-    /// wrapper as transparent or the definition renders as an ordinary
-    /// paragraph at depth 0, indistinguishable from prose.
     #[test]
     fn a_loose_definitions_paragraph_still_indents_under_its_term() {
         let rows = rows(
@@ -2744,11 +2136,6 @@ mod tests {
         );
     }
 
-    /// A definition list nested inside another's definition must indent
-    /// deeper than its own outer term — pinned because depth used to be
-    /// derived from the tag alone (0 for a title, 1 for a definition,
-    /// regardless of nesting), which drew every nested term as a sibling of
-    /// the outer one.
     #[test]
     fn a_nested_definition_list_indents_deeper_than_its_outer_term() {
         let rows = rows("outer\n: inner term\n  : inner def\n", 80);
@@ -2792,13 +2179,6 @@ mod tests {
         assert!(text.contains("$$y = mx + b$$"), "{text}");
     }
 
-    /// `ENABLE_STRIKETHROUGH` (ticket 12) strikes a single pair of tildes
-    /// too, and it cannot tell a struck word from a subscript by the flag
-    /// alone — only CommonMark's flanking rule decides. `H~2~O`'s tildes
-    /// touch a letter on both sides and stay literal; a tilde run set off by
-    /// whitespace is read as strikethrough regardless, which is a known
-    /// interaction recorded on `ENABLE_SUBSCRIPT`, not a regression this
-    /// ticket owns.
     #[test]
     fn a_whitespace_flanked_subscript_is_struck_because_strikethrough_claims_it_first() {
         let rows = rows("log ~2~ n is fine\n", 80);

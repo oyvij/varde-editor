@@ -1,9 +1,3 @@
-//! F14 — colouring code by token type.
-//!
-//! What this module decides is which *kind* a piece of text is. Colour is a
-//! theme's business and lives at the edge, which is why the scenarios assert
-//! kinds and never colours.
-
 use std::sync::OnceLock;
 use syntect::easy::ScopeRegionIterator;
 use syntect::parsing::{ParseState, ScopeStack, SyntaxSet};
@@ -32,32 +26,11 @@ pub struct Token {
     pub kind: Kind,
 }
 
-/// `bat`'s 220-grammar set, not syntect's default 75 — which languages and why
-/// is the `two-face` row in `docs/stack.md`. Two things bind the call: the
-/// no-newlines variant is the one the line-at-a-time parse below needs, and the
-/// set stays behind `OnceLock` because loading it is the whole cost.
 fn syntaxes() -> &'static SyntaxSet {
     static SYNTAXES: OnceLock<SyntaxSet> = OnceLock::new();
     SYNTAXES.get_or_init(two_face::syntax::extra_no_newlines)
 }
 
-/// Tokens for `source`, one entry per line, with the language taken from
-/// `name` — a file name's extension, or a language name given directly (a
-/// fenced code block's info string, which has no filename to invent). A
-/// language unknown to syntect comes back as one plain token per line, exactly
-/// as an unknown extension already does.
-///
-/// The two lookups are why *no extension* does not mean *no language*: `LICENSE`
-/// renders plain, but `Dockerfile` and `Makefile` are named by the grammar that
-/// wants them and colour on the name alone.
-///
-/// Grouped by line rather than flat, because *what colour is line N* is a
-/// question two surfaces ask — the editor's rows and Review's diff — and a flat
-/// stream makes each of them count newlines for itself. The parse is still one
-/// pass over the whole source, which is the only way a token that spans lines
-/// (a block comment, a multi-line string) colours the lines under it: highlight
-/// a line on its own and it restarts, and a row beginning inside a string reads
-/// as code.
 pub fn highlight(name: &str, source: &str) -> Vec<Vec<Token>> {
     let set = syntaxes();
     let syntax = name
@@ -69,11 +42,7 @@ pub fn highlight(name: &str, source: &str) -> Vec<Vec<Token>> {
     };
 
     let mut parse = ParseState::new(syntax);
-    // Both the parse and the scope stack outlive the line: `parse_line` reports
-    // only the scopes a line *changes*, so a stack rebuilt per line starts
-    // empty and knows nothing about the block comment or multi-line string the
-    // line is inside. That is what made a comment's second line read as code —
-    // a whole-file parse that was still, in effect, one line at a time.
+    // syntect's parse_line reports only scope changes, so the stack must outlive each line
     let mut stack = ScopeStack::new();
     let mut lines = Vec::new();
     for line in source.split('\n') {
@@ -110,22 +79,6 @@ fn plain_line(line: &str) -> Vec<Token> {
     }
 }
 
-/// Tokens for `source` out of the tokens of an earlier text of the same file,
-/// for as long as the parse of `source` itself is running off the main loop
-/// (#101). Every line the edit left alone keeps its colours — matched from the
-/// top and from the bottom, which is where an edit leaves lines alone — and the
-/// lines between are plain. The tokens carry the text they colour, so the old
-/// ones drawn as they were would show the file as it was before the key.
-///
-/// Owned, and cut rather than copied: it runs on the main loop once per edit,
-/// and a copy of every token of a big file would be the cost being moved off
-/// it.
-///
-/// The lines the parse's Run marks stand on are carried with the colours, for
-/// the same reason: a mark on a line the edit left alone moves with that line,
-/// so an edit that added a line above it does not leave it on the line before
-/// (#104), and one on a line the edit touched waits for the parse. Found again
-/// on the loop instead, they would be a syntax tree of the whole file per key.
 pub fn carried(
     mut tokens: Vec<Vec<Token>>,
     marks: Vec<usize>,
@@ -170,8 +123,6 @@ pub fn carried(
     (tokens, marks)
 }
 
-/// Adjacent text of the same kind is one token, so a quoted string arrives
-/// whole rather than split around its quote marks.
 fn push(tokens: &mut Vec<Token>, text: &str, kind: Kind) {
     match tokens.last_mut() {
         Some(last) if last.kind == kind => last.text.push_str(text),
@@ -182,13 +133,6 @@ fn push(tokens: &mut Vec<Token>, text: &str, kind: Kind) {
     }
 }
 
-/// Sublime scopes, innermost first — but a delimiter belongs to what it
-/// delimits (R14.6). A string's quotes are `punctuation.definition.string.begin`
-/// *inside* the `string` scope and a comment's `//` is punctuation inside the
-/// `comment` scope, so punctuation winning the innermost-first walk would split
-/// `"world"` into three tokens. It is the weakest kind: taken only when nothing
-/// else in the stack claims the text, and still beating plain — otherwise a `,`
-/// wrapped in nothing but `meta.group` and `source` would come back gray.
 fn classify(stack: &ScopeStack) -> Kind {
     let mut weakest = Kind::Plain;
     for scope in stack.scopes.iter().rev() {
@@ -201,21 +145,7 @@ fn classify(stack: &ScopeStack) -> Kind {
     weakest
 }
 
-/// The convention's fifteen families, total by construction (R14.5). The second
-/// segment is read only where a family is genuinely two things, which is the
-/// whole of the per-grammar variation.
-///
-/// `meta` stays plain deliberately: it is a *structural* scope covering whole
-/// regions — `meta.block`, `meta.function.parameters` — so colouring the family
-/// would colour half the file. It is the arm that makes a grammar's precision
-/// visible rather than one to work around: Sublime's default Rust grammar
-/// scoped `Vec` as nothing but `meta.generic`, so it came back gray, and the
-/// extended set names it `support.type` and it turns blue with no change here.
-/// A gap in a grammar is fixed by the grammar.
-///
-/// The `keyword.operator` arm must stay above the general `keyword` one: every
-/// grammar spells `=` and `+` inside the keyword family, so the broader arm
-/// swallows them and every operator in every language renders as `if` does.
+/// keep keyword.operator above the keyword arm: grammars put `=` and `+` in the keyword family
 fn scope_kind(name: &str) -> Kind {
     let rest = name
         .split_once('.')
@@ -232,9 +162,6 @@ fn scope_kind(name: &str) -> Kind {
         "constant" if rest.starts_with("numeric") => Kind::Number,
         "constant" => Kind::Constant,
         "entity" if rest.starts_with("name.function") => Kind::Function,
-        // A TOML or YAML mapping key is `entity.name.tag`, the same scope HTML
-        // uses for a tag name, so a key is markup and not a property: one scope
-        // cannot be two kinds without branching on the language.
         "entity"
             if rest.starts_with("name.tag")
                 || rest.starts_with("name.table")
@@ -256,8 +183,6 @@ fn scope_kind(name: &str) -> Kind {
             Kind::Property
         }
         "variable" => Kind::Plain,
-        // `meta`, `source`, `text` and `embedded` — and any family a grammar
-        // invents that nobody has named yet.
         _ => Kind::Plain,
     }
 }
@@ -266,9 +191,6 @@ fn scope_kind(name: &str) -> Kind {
 mod tests {
     use super::{carried, highlight, plain, scope_kind, Kind, Token};
 
-    /// #101: what an edit is drawn in while its parse runs on a thread. The
-    /// lines it left alone keep their colours, counted from the top and from
-    /// the bottom, and only what it changed is plain until the parse lands.
     #[test]
     fn an_edit_keeps_the_colours_of_every_line_it_left_alone() {
         let before = highlight("main.rs", "fn a() {}\nlet x = 1;\nfn b() {}");
@@ -282,9 +204,6 @@ mod tests {
         assert_eq!(after[3], before[2]);
     }
 
-    /// #104: a Run mark comes from the same parse, so it is carried with the
-    /// colours — on the line it stood on, wherever an edit above moved that
-    /// line, and gone from a line the edit touched until the parse lands.
     #[test]
     fn a_run_mark_moves_with_the_line_it_stands_on() {
         let before = "fn a() {}\nlet x = 1;\nfn b() {}";
@@ -297,10 +216,6 @@ mod tests {
         assert_eq!(marks(before), [1, 2, 3]);
     }
 
-    /// Whatever was carried, the text drawn is the text now: tokens carry the
-    /// text they colour, so a line matched wrongly would draw what the file
-    /// held before the key. Lines removed, lines repeated and an emptied file
-    /// are where counting from both ends overlaps.
     #[test]
     fn carried_tokens_hold_the_text_as_it_is_now() {
         let text = |tokens: &[Vec<Token>]| {
@@ -341,7 +256,6 @@ mod tests {
             .kind
     }
 
-    /// Every top-level scope family the grammar produces for `source`.
     fn families(name: &str, source: &str) -> Vec<String> {
         let set = super::syntaxes();
         let syntax = set
@@ -370,11 +284,6 @@ mod tests {
         seen
     }
 
-    /// The grouping both the editor's rows and Review's diff index by. Three
-    /// claims in one source, because they are the same claim: a line's tokens
-    /// sit at its own position, a line with nothing on it holds none, and a
-    /// comment opened on one line still colours the next — which is the whole
-    /// reason the parse runs over the source rather than over each line.
     #[test]
     fn tokens_are_grouped_by_line() {
         let lines = highlight("a.rs", "let x = 1;\n\n/* note\n   still */");
@@ -426,9 +335,6 @@ mod tests {
         assert_eq!(kind_of("a.rs", "let x = 1 + 2;", "+"), Kind::Operator);
     }
 
-    /// Rust spells every operator `keyword.operator`; JavaScript distinguishes
-    /// `.assignment`, `.arithmetic` and `.comparison`. Both must land here, and
-    /// the control keyword beside them must not move.
     #[test]
     fn assignment_arithmetic_and_comparison_operators_in_two_languages() {
         for (name, source) in [
@@ -442,8 +348,6 @@ mod tests {
         }
     }
 
-    /// The convention's fifteen top-level families. Every one maps, so a
-    /// language nobody anticipated is coloured on arrival (R14.5).
     const FAMILIES: [(&str, Kind); 15] = [
         ("comment", Kind::Comment),
         ("constant", Kind::Constant),
@@ -469,10 +373,6 @@ mod tests {
         }
     }
 
-    /// The guard on a sixteenth family: parse a language per family and assert
-    /// every top-level scope the grammars actually produce is one the table
-    /// names. A family nobody handled would arrive here before it arrived on
-    /// screen as gray.
     #[test]
     fn no_grammar_produces_a_family_the_table_does_not_name() {
         let corpus = [
@@ -521,10 +421,6 @@ mod tests {
         assert_eq!(kind_of("a.rs", "let x = 42;", "42"), Kind::Number);
     }
 
-    /// R14.6: a delimiter belongs to what it delimits. The quotes are
-    /// `punctuation.definition.string.begin` *inside* the string scope and the
-    /// `//` is punctuation inside the comment, so a punctuation arm that won
-    /// the innermost-first walk would split both.
     #[test]
     fn punctuation_is_the_weakest_kind() {
         let source = "let point: Pair = make(1, 2);";
@@ -538,8 +434,6 @@ mod tests {
         );
     }
 
-    /// A macro, annotation or decorator is `variable.annotation` — measured,
-    /// not the `entity.other.attribute-name` the convention suggests.
     #[test]
     fn an_annotation_is_an_attribute() {
         assert_eq!(
@@ -559,22 +453,11 @@ mod tests {
         assert_eq!(kind_of("index.html", source, "class"), Kind::Attribute);
     }
 
-    /// A mapping key is `entity.name.tag` — the same scope as an HTML tag —
-    /// so it takes markup, not property. One scope cannot be two kinds
-    /// without branching on the language.
     #[test]
     fn a_mapping_key_is_markup() {
         assert_eq!(kind_of("a.yaml", "key: value", "key"), Kind::Markup);
     }
 
-    /// The languages the default 75-syntax set did not name (R14.7), each with
-    /// one anchor whose kind is unambiguous. A row pins an *extension*, so two
-    /// rows sharing a snippet — `.tsx` and `.jsx` — are two grammars, not a
-    /// copied line. Resolution alone is not the claim:
-    /// a language that stopped resolving comes back as a single plain token, so
-    /// `kind_of` fails to find the anchor at all. The last two entries are
-    /// language *names* rather than file names — a fenced code block has no
-    /// filename to invent, and its info string must reach the same set.
     #[test]
     fn the_extended_set_colours_the_languages_the_default_set_missed() {
         let corpus = [

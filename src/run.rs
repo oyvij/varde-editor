@@ -1,7 +1,3 @@
-//! Run marks (F41): the ▶ beside whatever a `[run.*]` row's syntax-tree query
-//! says can be started, and what starting it runs. Which nodes count and what
-//! runs them is the rows'; nothing here names a `main` or a test.
-
 use crate::layout::{self, Area};
 use crate::preview::Refusal;
 use crate::startup::Run;
@@ -15,18 +11,12 @@ use unicode_width::UnicodeWidthStr;
 pub const RUN: &str = "run";
 pub const DEBUG: &str = "debug";
 
-/// A line a Run mark stands on: the row whose query put it there, and what
-/// that match captured, by capture name — the values `${…}` is filled from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Mark {
     row: String,
     captures: BTreeMap<String, String>,
 }
 
-/// The parser for a file's extension: the grammars `rust-code-analysis`
-/// already compiles in, so taking them costs no build (docs/stack.md). A
-/// grammar says how a language is shaped, never what in it can be started —
-/// that is the rows' — so an extension here with no row has no Run marks.
 fn grammar(extension: &str) -> Option<Language> {
     match extension {
         "rs" => Some(tree_sitter_rust::language()),
@@ -39,10 +29,6 @@ fn grammar(extension: &str) -> Option<Language> {
     }
 }
 
-/// Why a row could never mark anything, which start refuses rather than
-/// leaving a row that reads as configured and does nothing: an extension no
-/// grammar parses, a query that does not compile against one, or a query with
-/// no `@run` to say which line a match marks — or no extension at all.
 pub fn unusable(row: &Run) -> Option<String> {
     if row.extensions.is_empty() {
         return Some("claims no extensions".to_string());
@@ -62,9 +48,6 @@ pub fn unusable(row: &Run) -> Option<String> {
     None
 }
 
-/// The Run marks of the buffer on screen, by line. Parsed on every call, so
-/// the edge asks once per edit and the core once per offer, which then
-/// carries its mark.
 pub fn marks(state: &State) -> BTreeMap<usize, Mark> {
     let Some((path, buffer)) = state
         .current_buffer
@@ -76,9 +59,6 @@ pub fn marks(state: &State) -> BTreeMap<usize, Mark> {
     marks_in(&state.runs, path, buffer.shown())
 }
 
-/// [`marks`] handed its pieces rather than the state, for the edge's parse
-/// thread: a syntax tree of a big file is a parse the main loop does not wait
-/// on (#101).
 pub fn marks_in(runs: &BTreeMap<String, Run>, path: &Path, text: &str) -> BTreeMap<usize, Mark> {
     let mut marks = BTreeMap::new();
     let Some(extension) = path.extension().and_then(|extension| extension.to_str()) else {
@@ -99,8 +79,6 @@ pub fn marks_in(runs: &BTreeMap<String, Run>, path: &Path, text: &str) -> BTreeM
         return marks;
     };
     for (name, row) in claiming {
-        // Start refused a query that does not compile, so this is one that
-        // does for some other configuration than the one Varde started on.
         let Ok(query) = Query::new(language, &row.query) else {
             continue;
         };
@@ -137,8 +115,6 @@ pub fn marks_in(runs: &BTreeMap<String, Run>, path: &Path, text: &str) -> BTreeM
     marks
 }
 
-/// Clicking a Run mark, or `␣x` on its line: the offer of Run and Debug. A
-/// line with none is refused out loud, since the key was pressed at it.
 pub fn offer(next: &mut State, line: usize) {
     match marks(next).remove(&line) {
         Some(mark) => next.modal = Modal::RunMark { line, mark },
@@ -146,8 +122,6 @@ pub fn offer(next: &mut State, line: usize) {
     }
 }
 
-/// The offer's Chips, and nothing while no offer is up. Debug is dimmed for
-/// a row that names no way to debug it.
 pub fn chips(state: &State) -> Vec<Chip> {
     let Modal::RunMark { mark, .. } = &state.modal else {
         return Vec::new();
@@ -179,9 +153,6 @@ pub fn chips(state: &State) -> Vec<Chip> {
     ]
 }
 
-/// What the offer's box says: the row whose mark it is, and the name it
-/// captured — the file's own text, so stripped before a terminal draws it.
-/// Nothing while no offer is up.
 pub fn offered(state: &State) -> Option<String> {
     let Modal::RunMark { mark, .. } = &state.modal else {
         return None;
@@ -192,9 +163,6 @@ pub fn offered(state: &State) -> Option<String> {
     })
 }
 
-/// Where the offer is drawn on a `width` by `height` screen, centred as every
-/// question is, with its Chips on the top border: the one rectangle `ui` draws
-/// and `mouse` hit-tests.
 pub fn offer_area(state: &State, width: u16, height: u16) -> Option<Area> {
     let text = offered(state)?;
     let strip = layout::strip_width(&layout::chip_labels(&chips(state), u16::MAX, 0));
@@ -202,7 +170,6 @@ pub fn offer_area(state: &State, width: u16, height: u16) -> Option<Area> {
     Some(layout::overlay(width, height, 1, widest))
 }
 
-/// The Chip under a press on the offer's top border.
 pub fn chip_at(
     state: &State,
     width: u16,
@@ -216,9 +183,6 @@ pub fn chip_at(
     Some(chips[layout::strip_at(area, &labels, column)?].action)
 }
 
-/// Run or Debug on the offered mark. Run is a command for a shell whose
-/// prompt is waiting, which `update` finds or splits off (R38.5). Debug is a
-/// session launched from the row's `debug`, filled for exactly this match.
 pub fn choose(next: &mut State, action: &str) -> Vec<Effect> {
     let Modal::RunMark { mark, .. } = std::mem::take(&mut next.modal) else {
         return Vec::new();
@@ -231,10 +195,6 @@ pub fn choose(next: &mut State, action: &str) -> Vec<Effect> {
     };
     let file = file.to_string_lossy();
     match action {
-        // Quoted and stripped of control characters, because the captures are
-        // the file's own text and the path is the folder's: both untrusted,
-        // and both going to a shell through a terminal. The keyboard goes with
-        // the command, so the job it starts is one `C-c` away.
         RUN => {
             next.focus = crate::Pane::Terminal;
             vec![Effect::RunInTerminal(filled(
@@ -268,8 +228,6 @@ fn filled(template: &str, file: &str, mark: &Mark, quote: impl Fn(&str) -> Strin
     text
 }
 
-/// Every string in the launch arguments, filled as a command is but never
-/// quoted: they reach the adapter as JSON, not a shell.
 fn fill_json(value: &mut Value, file: &str, mark: &Mark) {
     match value {
         Value::String(text) => *text = filled(text, file, mark, str::to_string),
@@ -288,7 +246,6 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
-    /// The rows Varde ships, as start reads them.
     fn shipped() -> BTreeMap<String, Run> {
         crate::startup::start(&crate::startup::Startup::default())
             .expect("the defaults start")
@@ -322,8 +279,6 @@ mod tests {
         );
     }
 
-    /// `--exact` compares a test's whole path, so a test in a module is run
-    /// by `tests::adds` and never by `adds`, which would run nothing.
     #[test]
     fn a_rust_test_in_a_module_runs_by_its_path() {
         let state = opened(
@@ -369,8 +324,6 @@ mod tests {
         }
     }
 
-    /// The shipped rows over a buffer, and no language server, whose start
-    /// would be an effect of every event after the file opened.
     fn opened(path: &str, text: &str) -> State {
         let mut state = crate::startup::start(&crate::startup::Startup::default())
             .expect("the defaults start")

@@ -1,20 +1,9 @@
-//! F21 — searching file contents.
-//!
-//! The matching is pure and lives here; the edge only reads files. Which
-//! contents count is a rule, not an implementation detail: a file open with
-//! unsaved edits is searched as it stands on screen, not as it sits on disk.
-
 use crate::{Direction, State};
 
-/// One matching line.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Hit {
     pub file: String,
-    /// 1-based, as the editor counts.
     pub line: u32,
-    /// Where in the line the match starts, 1-based. Without it a hit can only
-    /// be opened at the start of its line, never on the word that was searched
-    /// for — which is what in-file search puts the cursor on.
     pub column: u32,
     pub text: String,
 }
@@ -22,17 +11,11 @@ pub struct Hit {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Results {
     pub hits: Vec<Hit>,
-    /// True when the cap stopped the search early, so the count can say so
-    /// rather than quietly showing a subset.
     pub truncated: bool,
 }
 
-/// The most hits worth rendering. Beyond this, narrow the query.
 pub const CAP: usize = 500;
 
-/// Whoever owns the file supplies its contents: the buffer if the file is open,
-/// disk otherwise. A clean buffer matches disk anyway, so there is no reason to
-/// treat it differently — and one rule is easier to trust than two.
 pub fn sources(state: &State, disk: Vec<(String, String)>) -> Vec<(String, String)> {
     let mut sources = disk;
     for (path, buffer) in &state.buffers {
@@ -46,22 +29,13 @@ pub fn sources(state: &State, disk: Vec<(String, String)>) -> Vec<(String, Strin
             None => sources.push((relative, contents)),
         }
     }
-    // A search started from a folder's icon is a search in that folder: filtered
-    // here, where the buffers have already been folded in, so an open file
-    // outside the folder is left out too.
     if let Some(scope) = state.search.as_ref().and_then(|s| s.scope.as_ref()) {
         sources.retain(|(name, _)| std::path::Path::new(name).starts_with(scope));
     }
-    // Alphabetical, so results are the same every run. A directory walk's order
-    // is whatever the filesystem felt like.
     sources.sort_by(|a, b| a.0.cmp(&b.0));
     sources
 }
 
-/// How a query treats case. `Smart` is ripgrep's rule — case-insensitive
-/// unless the query holds a capital — and it is where every search starts;
-/// the other two are an in-file search's `[Aa]` pressed, which then stays put
-/// while the query is edited.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Case {
     Smart,
@@ -70,7 +44,6 @@ pub enum Case {
 }
 
 impl Case {
-    /// Whether this query is matched case-sensitively — what `[Aa]` shows lit.
     pub fn exact(self, query: &str) -> bool {
         match self {
             Case::Smart => query.chars().any(char::is_uppercase),
@@ -80,11 +53,6 @@ impl Case {
     }
 }
 
-/// Where in a line the query matches, 1-based, every occurrence rather than
-/// only the first: a buffer highlights each match and `n` steps to each, while
-/// the results modal renders one line per hit. Literal matching, so a query
-/// arriving from a selection needs no escaping, and the rule lives here alone
-/// so finding here and finding everywhere cannot disagree.
 pub fn occurrences(query: &str, line: &str, case: Case) -> Vec<u32> {
     if query.is_empty() {
         return Vec::new();
@@ -99,8 +67,6 @@ pub fn occurrences(query: &str, line: &str, case: Case) -> Vec<u32> {
     while let Some(at) = haystack[from..].find(&needle) {
         let start = from + at;
         columns.push(haystack[..start].chars().count() as u32 + 1);
-        // Past the whole match, so "aa" in "aaa" is one match and not two
-        // overlapping ones.
         from = start + needle.len();
     }
     columns
@@ -110,8 +76,6 @@ pub fn scan(query: &str, files: &[(String, String)]) -> Results {
     let mut results = Results::default();
     for (path, contents) in files {
         for (index, line) in contents.split('\n').enumerate() {
-            // One hit per line: the modal renders lines, so a line matching
-            // twice is still one line to open.
             let Some(&column) = occurrences(query, line, Case::Smart).first() else {
                 continue;
             };
@@ -130,18 +94,9 @@ pub fn scan(query: &str, files: &[(String, String)]) -> Results {
     results
 }
 
-/// One row of the results modal. Hits are grouped under the file they are in,
-/// so a hit's row on screen is its index *plus the headings above it* — which
-/// is why the renderer and the scroll clamp read one derivation of it rather
-/// than each counting rows their own way. Counting only the hits is how the
-/// selection came to walk off the bottom of the box with the view standing
-/// still, and it took a fourth file with a hit before the arithmetic was wrong
-/// by a whole row.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Row<'a> {
-    /// The heading a file's hits sit under.
     File(&'a str),
-    /// Index into [`Results::hits`].
     Hit(usize),
 }
 
@@ -158,12 +113,6 @@ pub fn rows(results: &Results) -> Vec<Row<'_>> {
     rows
 }
 
-/// The hit to step to, file by file: the first hit of the next file, or of the
-/// file the selection is in when it is not on that file's first hit already —
-/// so stepping back from the middle of a file lands on its top rather than
-/// skipping past it. Stops at the first and last file rather than wrapping, the
-/// same way the arrows stop at the first and last hit. One file's hits can fill
-/// the box, so hit by hit is no way through a long result list.
 pub fn in_next_file(results: &Results, selected: usize, direction: Direction) -> usize {
     let starts = || {
         results
@@ -180,8 +129,6 @@ pub fn in_next_file(results: &Results, selected: usize, direction: Direction) ->
     .unwrap_or(selected)
 }
 
-/// The files with hits, in the order they first appear — the grouping the modal
-/// renders.
 pub fn files(results: &Results) -> Vec<String> {
     let mut seen: Vec<String> = Vec::new();
     for hit in &results.hits {
@@ -192,11 +139,6 @@ pub fn files(results: &Results) -> Vec<String> {
     seen
 }
 
-/// The word to complete the query to: the commonest token in the hits that
-/// starts with what has been typed. Completing from the results themselves
-/// means it is always a word that exists in the project.
-/// Every word the hits hold that the query is a prefix of, and how often each
-/// one turned up.
 fn candidates(query: &str, results: &Results) -> Vec<(String, usize)> {
     let lower = query.to_lowercase();
     let mut counts: Vec<(String, usize)> = Vec::new();
@@ -221,9 +163,6 @@ pub fn completion(query: &str, results: &Results) -> Option<String> {
         return None;
     }
     let mut counts = candidates(query, results);
-    // Commonest wins. Ties go to whichever matches the query's own case — type
-    // lowercase, get lowercase — then to the shorter word, then alphabetically,
-    // so the completion never depends on scan order.
     counts.sort_by(|a, b| {
         let exact = |word: &str| word.starts_with(query);
         b.1.cmp(&a.1)
@@ -271,13 +210,10 @@ mod tests {
         assert!(scan("", &corpus()).hits.is_empty());
     }
 
-    // A hit that names only its line cannot put a cursor on the word: in-file
-    // search moves to the match, not to the start of the line it is on.
     #[test]
     fn a_hit_names_where_in_the_line_the_match_starts() {
         let hits = scan("update", &corpus()).hits;
         assert_eq!((hits[0].line, hits[0].column), (1, 4));
-        // Case-folded matching still counts the original line's columns.
         assert_eq!((hits[1].line, hits[1].column), (2, 5));
     }
 
@@ -289,8 +225,6 @@ mod tests {
         );
     }
 
-    // Smart case is the default rule, and either setting of `[Aa]` overrides
-    // it in both directions: a capital can be ignored, a lowercase query exact.
     #[test]
     fn case_overrides_smart_case_either_way() {
         assert_eq!(occurrences("State", "state State", Case::Smart), vec![7]);
@@ -307,8 +241,6 @@ mod tests {
         assert_eq!(occurrences("aa", "aaa", Case::Smart), vec![1]);
     }
 
-    // A line matching twice is one line to open, however many matches a buffer
-    // highlights in it.
     #[test]
     fn one_line_matching_twice_is_one_hit() {
         let files = vec![("a.rs".to_string(), "state and state".to_string())];
@@ -330,8 +262,6 @@ mod tests {
         assert!(results.truncated, "a silent subset is worse than a count");
     }
 
-    /// Two files, one of them with two hits — the shape the row arithmetic used
-    /// to get wrong.
     fn grouped() -> Results {
         scan(
             "update",
@@ -342,8 +272,6 @@ mod tests {
         )
     }
 
-    // The bug this exists for: a hit's row is its index plus the headings above
-    // it, so the third hit is on the fifth row and not the third.
     #[test]
     fn a_hits_row_counts_the_headings_above_it() {
         assert_eq!(
@@ -373,7 +301,6 @@ mod tests {
         assert_eq!(in_next_file(&grouped(), 2, Direction::Up), 0);
     }
 
-    // Stops rather than wraps, the same way the arrows stop at the last hit.
     #[test]
     fn the_step_by_file_stops_at_the_first_and_last_file() {
         assert_eq!(in_next_file(&grouped(), 2, Direction::Down), 2);

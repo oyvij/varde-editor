@@ -22,22 +22,11 @@ use varde::{
     ReplaceFailed, Selection, State, Tap, View, PALETTE,
 };
 
-/// Where the pointer is when a scenario clicks or scrolls, in the pane's own
-/// grid. A scenario never cares which cell it is, only that the child is told
-/// about the one that was clicked.
 const POINTER: Place = Place { line: 3, column: 7 };
 
-/// Per-scenario state. Cucumber builds a fresh one for every scenario, so
-/// scenarios cannot leak into each other.
-///
-/// `terminal_input` and `executed` model the terminal, which lives at the edge:
-/// the World applies the effects `update` returns, exactly as the binary will.
 #[derive(Debug, Default, World)]
 pub struct VardeWorld {
     state: State,
-    /// The edge's own pointer, kept across steps rather than made fresh per
-    /// gesture: a drag held against a pane's edge is remembered there, and the
-    /// steps that hold it and release it are steps of their own.
     pointer: mouse::Pointer,
     terminal_input: String,
     executed: Vec<String>,
@@ -45,314 +34,114 @@ pub struct VardeWorld {
     rendered: Vec<View>,
     startup: Startup,
     config: Option<Config>,
-    /// Exactly what starting asked the edge to do. The Rule that a server is
-    /// only named — never started — is an assertion about this list.
     startup_effects: Vec<Effect>,
     error: Option<StartupError>,
-    /// What saving a config file while Varde runs asked the edge to do — the
-    /// list "nothing is started or stopped" is a statement about.
     config_effects: Vec<Effect>,
     dirs: BTreeSet<PathBuf>,
     files: BTreeMap<PathBuf, String>,
-    /// Every path a write reached, in order. What "unchanged" is a statement
-    /// about: a file a scenario never registered on the disk model above has no
-    /// contents to compare, and a buffer holding unsaved work is exactly that
-    /// case.
     wrote: Vec<PathBuf>,
-    /// Every path a scenario has ever named via "held:"/"holds:"/"now
-    /// holds:"/"is gone", kept even after "is gone" empties `files` — a file
-    /// that vanished still needs a `FileHunks` entry so staleness can tell
-    /// "gone" from "never diffed at all".
     known_files: BTreeSet<PathBuf>,
     opened: Vec<PathBuf>,
     disk: BTreeMap<PathBuf, Vec<Entry>>,
     ai_spawned: Vec<String>,
-    /// Whether the edge holds an AI pane. `main` derives `State::ai_running`
-    /// from the pane it holds rather than the core remembering it, so the world
-    /// does too.
     ai_pane: bool,
-    /// Whether the edge holds a synthesizer child, whether it found the
-    /// configured player, and whether the file the voice names is on disk.
-    /// Told to the core rather than set by it, exactly as `ai_pane` above is
-    /// and for the same reason.
     voice_child: bool,
     player_on_path: bool,
     voice_on_disk: bool,
-    /// What the edge is playing, and the stream it built to play it — the
-    /// words `Effect::Speak` handed over, cleared by `Effect::StopSpeaking`.
-    /// The stream file itself lives outside every workspace and is the edge's
-    /// (ADR 0014), so what a scenario can see of it is that it exists while a
-    /// player does and is gone with it.
     speaking: Option<String>,
-    /// Where each Utterance starts in the stream the stand-in edge built, and
-    /// how many players it holds. The offsets are told to the core, so the
-    /// World tells them; the count is what "exactly one reading is in flight"
-    /// is a statement about, and it goes to two the moment a Reading starts
-    /// over one already playing without stopping it first.
     stream: Vec<u32>,
     players: usize,
-    /// The speed the Reading being played was built at. Set by `Effect::Speak`
-    /// and by nothing else, which is what makes "the Reading in flight is
-    /// still at the old speed" an assertion a re-pacing would break.
     spoken_at: Option<f32>,
-    /// The offset a resume, a next or a previous asked the edge to play from.
     resumed_from: Option<u32>,
-    /// Where the sound was when a scenario paused it, so "resumes from where
-    /// it was paused" compares two values.
     paused_at: Option<u32>,
-    /// The tree as it stood when the Reading was asked for, so "unchanged"
-    /// compares two values rather than asserting an absence nothing could
-    /// have filled.
     tree_before: Vec<PathBuf>,
-    /// Set by a scenario where the CLI cannot be launched at all, so a spawn
-    /// leaves the edge holding no pane — the path that used to leave the core
-    /// believing a session was running.
     ai_spawn_fails: bool,
     notices: Vec<String>,
     scrolled: Vec<(Pane, Direction)>,
     clipboard: Option<String>,
     browser: Vec<String>,
     keys_sent: Vec<(Pane, Vec<u8>)>,
-    /// Which split each `:split` asked for a shell beside, 0-based.
     splits: Vec<usize>,
-    /// The tokens a `… is highlighted` step last produced, by line — the shape
-    /// the highlighter answers in.
     highlighted: Vec<Vec<varde::highlight::Token>>,
     highlighted_source: String,
-    /// The diff's two sides, each highlighted whole, exactly as the edge parses
-    /// them when it reads a diff. Empty where a side could not be read.
     diff_sides: (
         Vec<Vec<varde::highlight::Token>>,
         Vec<Vec<varde::highlight::Token>>,
     ),
     exited: bool,
     relaunched: bool,
-    /// Every `ReplaceBinary` asked for, which only the step that says the
-    /// replacement finished answers.
     replacing: Vec<Effect>,
     terminal_clipboard: Option<String>,
     ai_stopped: bool,
     project: Vec<(String, String)>,
-    /// The project's files as they stand on disk, which `Effect::IndexProject`
-    /// walks. Kept apart from the index the core holds: a filter walks afresh,
-    /// so a file added here after one has run must still turn up in the next.
     indexable: Vec<String>,
     diffs_read: Vec<PathBuf>,
-    /// What the terminal's grid holds, as the edge would read it off a pty.
     screen: Vec<String>,
-    /// What the AI session's grid holds. Separate from `screen` because they are
-    /// separate ptys: a drag that read the wrong one is the bug behind this.
     ai_screen: Vec<String>,
-    /// Every argv the edge was asked to run in the Debug group's own terminal.
     program: Vec<Vec<String>>,
-    /// The size of the pty the edge holds for it, `None` when it holds none.
-    /// Kept as a size rather than a flag because a hidden pane that was
-    /// resized to nothing is the failure the scenarios pin.
     output_pty: Option<(u16, u16)>,
-    /// What the edge is half-way through collecting — the key router needs it.
     drafts: Drafts,
-    /// The content last shown or held for a diffed file, so a `Then` can
-    /// recompute the blob oid it expects rather than hard-coding one.
     diff_contents: BTreeMap<String, String>,
-    /// Revisions a scenario says git cannot resolve — `Effect::ReadStories`
-    /// asks this instead of a real repository.
     unresolvable: BTreeSet<String>,
-    /// The review list as it stood the moment authoring began, so a later
-    /// `Then` can tell it was left untouched.
     repo_before: Option<Vec<String>>,
-    /// The old side of a change — what "held:" records, kept separate from
-    /// `files` (the current side) so "now holds:" overwriting the latter
-    /// still leaves both sides of the subtraction available.
     held: BTreeMap<PathBuf, String>,
-    /// What `refs/remotes/origin/HEAD` resolves to, per the scenario —
-    /// `Effect::ResolveStory` asks this instead of a real repository.
     origin_head: Option<String>,
     upstream_branch: Option<String>,
     default_branch_config: Option<String>,
-    /// Branch names a probe would find, for the `main`/`master` fallback.
     probes: BTreeSet<String>,
-    /// What a range spelling the offline ladder (or an explicit command)
-    /// produced resolves to on disk — the base and head a real repository
-    /// would give `revparse`. Only a spelling declared here can be seen as
-    /// already authored or as a valid explicit range, the same way
-    /// `unresolvable` stands in for git elsewhere.
     resolved_oids: BTreeMap<String, (String, String)>,
-    /// Every Scope an analysis was asked for, in order. The job itself is the
-    /// edge's: the world records the request and answers only when a scenario
-    /// says the figures arrived, so "computing" is a state a scenario can stand
-    /// in.
     analyses: Vec<Analysis>,
-    /// What `HEAD` resolves to, per the scenario — the edge tells the core the
-    /// commit, so the world does too.
     head: Option<String>,
-    /// The base and head most recently registered by "a story set exists for
-    /// the range", so "that range is what … resolves to" has something to
-    /// point a spelling at.
     last_authored_range: Option<(String, String)>,
-    /// The repository's branch refs, as a scenario declared them — what
-    /// `Effect::ReadBranches` answers with, since only the edge can read refs.
     branch_refs: Vec<story::BranchRef>,
-    /// The branch `HEAD` is on, and every branch a checkout moved it to. Both,
-    /// because "no branch was checked out" is a statement about the second.
     on_branch: String,
-    /// Each one with the repository it was made in: a Guest repo's branch is
-    /// checked out in the clone, and a checkout in the workspace instead is
-    /// exactly the plausible-looking miss.
     checkouts: Vec<(PathBuf, String)>,
-    /// Every test command the Gate ran, in order. The run itself is the edge's;
-    /// the world records it and answers only when a scenario says the tests
-    /// finished, so "waiting for the tests" is a state a scenario can stand in.
     tests_run: Vec<String>,
-    /// What each Iteration's snapshot holds, taken off the project's files the
-    /// moment the Iteration began — the edge copies files aside, so the world
-    /// does too.
     snapshots: BTreeMap<u32, BTreeMap<String, String>>,
-    /// Which Iterations were restored, and which files each restore put back.
-    /// Both, because "only the files it touched" is a statement about the
-    /// second, not the first.
     restores: Vec<u32>,
     restored: Vec<String>,
-    /// Every path a delete reached — what "the sentinel was deleted" is a
-    /// statement about, since a file that was never there leaves `files`
-    /// looking the same either way.
     deleted: Vec<PathBuf>,
-    /// Every directory a delete reached, kept apart from the files above
-    /// because "no directory was deleted" is an absence about a whole tree.
     dirs_deleted: Vec<PathBuf>,
-    /// What a file held at the last commit, and what the user's own uncommitted
-    /// edits left in it. Kept apart so a revert can be held to reaching
-    /// neither: not the commit, and not over the user's work.
     committed: BTreeMap<String, String>,
     mine: BTreeMap<String, String>,
-    /// Every language server the edge holds, and the command it was started
-    /// with. The world plays the edge: `State::lsp_running` is derived from
-    /// this in `tell_core`, exactly as `main.rs` derives it from the servers it
-    /// holds, so the core never remembers that a process exists.
     lsp_running: BTreeMap<String, String>,
-    /// What a probe of this machine's `PATH` would find, which is the edge's
-    /// answer and never the core's memory (R31.23). The world plays the edge
-    /// here exactly as it does for `lsp_running` above.
     on_path: BTreeSet<String>,
-    /// Whether a `git` binary is on this machine, which is the edge's answer
-    /// and never the core's memory — the world plays the edge here exactly as
-    /// it does for `on_path` above. `false` until a scenario says otherwise,
-    /// because a capability nobody has checked is not one.
     git_on_path: bool,
-    /// What the edge found in this workspace, by the name the library gave the
-    /// fact (R31.27). The world plays the edge here for the same reason it does
-    /// for `on_path`: a path on the machine is nothing the core may look up.
     workspace_facts: BTreeMap<String, String>,
-    /// Folders `Effect::ReadFolder` asked for, until the batch they came in is
-    /// finished — the edge queues the answer as an event rather than deciding
-    /// it mid-batch (`drain` in main.rs), because the rest of the batch has
-    /// facts still to tell the core.
     folders_to_read: Vec<PathBuf>,
-    /// Every spawn the edge was asked for, in order — including one that
-    /// produced no process, which is what "1 language server was started"
-    /// counts.
     lsp_started: Vec<(String, String)>,
-    /// The arguments each spawn was asked for, which is where an interpolated
-    /// name either arrived or did not.
     lsp_args: BTreeMap<String, Vec<String>>,
-    /// Every message sent to each language's server, in order. No scenario runs
-    /// a server, so this list and the canned replies are the whole of the
-    /// conversation.
     lsp_sent: Vec<(String, Value)>,
-    /// Languages whose canned server answers its handshake as soon as it is
-    /// asked — what "a language server for X is ready" stands for.
     lsp_answers: BTreeSet<String>,
-    /// Languages whose configured command does not exist, so the edge ends up
-    /// holding nothing.
     lsp_fails: BTreeSet<String>,
-    /// Every formatter the edge was asked to run, as it was asked — the
-    /// command, its arguments and the text that would have gone in on stdin.
-    /// Kept rather than answered here: what the command made of it is the fact
-    /// only the edge can observe, so a Scenario says it in a step of its own,
-    /// which is what makes an install that worked and one that has not
-    /// different Scenarios.
     formatter_runs: Vec<Effect>,
-    /// Whether the edge is holding a debounce for the candidate list. One flag
-    /// and not a queue, because the edge holds one timer that every keystroke
-    /// restarts: "the debounce window passes" fires once however many times the
-    /// core armed it, which is what makes the request count in
-    /// `features/language_intelligence.feature` a statement about debouncing
-    /// rather than about arithmetic.
     candidates_armed: bool,
-    /// The window the edge is holding before it asks what the pointer is
-    /// resting on, as the core asked for it. The number and not a flag: a
-    /// Scenario says how long a rest is, so the step that fires it can only
-    /// answer for a window the core actually armed.
     dwell_armed: Option<u64>,
-    /// Every notice reported, kept even after one is withdrawn: "reported once"
-    /// is a statement about the session, not about what the footer happens to
-    /// be saying now.
     reported: Vec<String>,
-    /// Whether the edge is holding back its answer about what the arriving
-    /// artifact's Sites hold — one flag, because the fill is one round trip
-    /// per artifact. Set by the Scenario that watches a set stay unwalkable
-    /// while the read is outstanding; every other Scenario answers at once,
-    /// the way a real edge does inside the batch that read the artifact.
     hold_site_texts: bool,
-    /// What each notice that names something has named. The slug alone cannot say
-    /// where a refused jump would have gone, and "naming where it went" is what
-    /// makes that refusal a decision rather than a key that did nothing.
     named: Vec<String>,
-    /// The scripted Debug adapter. No scenario runs one: the world plays the
-    /// edge and the adapter both, answering requests with canned replies and
-    /// sending the events a scenario names.
     dap: FakeAdapter,
 }
 
-/// What the scripted Debug adapter has been asked and holds ready to say.
 #[derive(Debug, Default)]
 struct FakeAdapter {
-    /// Every command the edge was asked to spawn, including one that
-    /// produced no process.
     spawned: Vec<String>,
-    /// Every port the edge was asked to connect to an adapter a language
-    /// server hosts on, which is spawned by nobody.
     dialed: Vec<u16>,
-    /// Whether the edge holds the adapter.
     held: bool,
-    /// Whether it answers `initialize` the moment it is asked — "is ready".
     ready: bool,
-    /// Every message sent to it, in order.
     sent: Vec<Value>,
-    /// The call stack each thread answers `stackTrace` with: name, file, line
-    /// and presentation hint.
     stacks: BTreeMap<i64, Vec<(String, PathBuf, usize, String)>>,
-    /// The scopes the chosen Frame answers `scopes` with, by name, and the
-    /// reference each is asked for its members by.
     scopes: Vec<(String, i64)>,
-    /// What each reference answers `variables` with. A scenario plants
-    /// members here; the adapter hands back whichever page was asked for.
     members: BTreeMap<i64, Vec<Value>>,
-    /// How many requests had been sent when the last pause brought the
-    /// Variables up, which is what "since the pause" counts from.
     since_pause: usize,
-    /// The `stopped` event that brought the last pause, kept so a scenario
-    /// that plants a member can drive the same pause again and have the
-    /// Variables hold it.
     stopped: Option<Value>,
-    /// The Exception filters it lists in its `initialize` answer, as the
-    /// protocol shapes them.
     filters: Vec<Value>,
-    /// What the next `stopped` event says paused the program.
     text: Option<String>,
-    /// Every child session's connection the edge was asked to open, and what
-    /// was sent over it, by the number it was opened under.
     children: BTreeMap<usize, Vec<Value>>,
-    /// The one thread a child session names, which stops as soon as the child
-    /// is configured, the way a worker started under a Breakpoint does.
     child_thread: String,
 }
 
 impl VardeWorld {
-    /// One file's two sides and the hunks between them, at Varde's pinned
-    /// options — for the poll and for an arriving artifact alike, so the two
-    /// never describe the same file differently. Identical bytes on both
-    /// sides diff to no hunks, so a bare "holds:" fixture with no "held:"
-    /// counterpart never needs excluding.
     fn read_file(&self, repo: &Path, file: &str) -> story::FileHunks {
         let path = repo.join(file);
         let old = self.held.get(&path).cloned().unwrap_or_default();
@@ -362,9 +151,6 @@ impl VardeWorld {
             hunks: story::hunks(old.as_bytes(), new.as_bytes()),
             old_exists: self.held.contains_key(&path),
             old_text: old,
-            // The world's ranges have no commit of their own: `held` is the
-            // base and `files` is both the head and the working tree, so a
-            // scenario about drift between them is one nothing here can play.
             head_exists: self.files.contains_key(&path),
             head_text: new.clone(),
             new_exists: self.files.contains_key(&path),
@@ -372,10 +158,6 @@ impl VardeWorld {
         }
     }
 
-    /// Plays the edge's own poll and its arrival read alike: every file the
-    /// range touches, the way `main.rs` reports them alongside `git_status`,
-    /// plus any the Story names that the range did not touch — a `context`
-    /// Site's file, or a citation pointing outside the change.
     fn read_files(&self, repo: &Path, named: &[String]) -> Vec<story::FileHunks> {
         let mut paths: BTreeSet<PathBuf> = self.held.keys().cloned().collect();
         paths.extend(self.files.keys().cloned());
@@ -406,9 +188,6 @@ impl VardeWorld {
         self.state.file_hunks = self.read_files(&repo, &[]).into();
     }
 
-    /// Marks a path `Modified` in `state.repo` if it isn't listed already —
-    /// what a real edge's next `git_status` poll would find once a file's
-    /// bytes differ from HEAD, whether it changed or disappeared.
     fn mark_modified(&mut self, path: &str) {
         let mut repo = self.state.repo.clone().unwrap_or_default();
         if !repo.iter().any(|file| file.path == path) {
@@ -420,8 +199,6 @@ impl VardeWorld {
         self.state.repo = Some(repo);
     }
 
-    /// A click at a place in a pane's text, routed the way the edge routes it:
-    /// press then release, because the child's click is decided on the release.
     fn click(&mut self, pane: Pane, at: (usize, usize), modifiers: terminput::KeyModifiers) {
         let panes = self.panes();
         let (column, row) = pointer_at(&self.state, &panes, pane, at);
@@ -441,8 +218,6 @@ impl VardeWorld {
             for event in outcome.events {
                 self.send(event);
             }
-            // The world plays the edge, as it does for a drag: the row the
-            // link request names is read off the grid the scenario gave the pane.
             if let Some((pane, at)) = outcome.link {
                 let row = self.pane_lines(pane)[at.line - 1].clone();
                 self.send(Event::ClickLink {
@@ -453,9 +228,6 @@ impl VardeWorld {
         }
     }
 
-    /// Two presses on the same cell, `apart` milliseconds apart, through one
-    /// pointer: the second press is only a double-click to the pointer that saw
-    /// the first, and the gap is what the double-tap window is measured against.
     fn click_twice(&mut self, pane: Pane, at: (usize, usize), apart: u64) {
         let panes = self.panes();
         let (column, row) = pointer_at(&self.state, &panes, pane, at);
@@ -481,9 +253,6 @@ impl VardeWorld {
         }
     }
 
-    /// The pointer moving with nothing pressed, routed the way the edge routes
-    /// it. `None` for the place is the pointer off the editor's text — over
-    /// another pane, since a move is reported wherever it happens.
     fn point(
         &mut self,
         pane: Pane,
@@ -511,8 +280,6 @@ impl VardeWorld {
         }
     }
 
-    /// The screen the drag and click steps hit-test against: what the scenario
-    /// reported, or a plain window if it never said.
     fn screen(&self) -> (u16, u16) {
         (
             match self.state.screen_width {
@@ -539,9 +306,6 @@ impl VardeWorld {
         )
     }
 
-    /// The world plays the edge for a drag: `mouse` says which pane and which
-    /// span, and the world reads the characters — out of the buffer, or out of
-    /// the grid the scenario gave the terminal.
     fn drag(&mut self, pane: Pane, from: (usize, usize), to: (usize, usize)) {
         self.pointer = mouse::Pointer::default();
         for place in [from, to] {
@@ -550,9 +314,6 @@ impl VardeWorld {
         }
     }
 
-    /// One mouse report, routed the way the edge routes it: the library says
-    /// which pane and which span, and only a pty's drag comes back unfinished
-    /// — the edge reads the grid of the pane the span names.
     fn report(&mut self, kind: mouse::Kind, column: u16, row: u16) {
         let panes = self.panes();
         let mut pointer = self.pointer;
@@ -583,7 +344,6 @@ impl VardeWorld {
         });
     }
 
-    /// The lines a pane holds, as the edge would read them.
     fn pane_lines(&self, pane: Pane) -> Vec<String> {
         match pane {
             Pane::Editor => self
@@ -629,14 +389,9 @@ impl VardeWorld {
         self.tell_core();
     }
 
-    /// What `main` does after every event: whether a session exists is the
-    /// edge's to know, so the core is told rather than remembering it.
     fn tell_core(&mut self) {
         self.state.ai_running = self.ai_pane;
         self.state.output_running = self.output_pty.is_some();
-        // What `resize_panes` does before every frame: fit the pty to the
-        // rectangle the layout gives it, and leave it alone when the layout
-        // gives it none.
         let output = self.panes().output;
         if let (true, Some(size)) = (
             self.output_pty.is_some(),
@@ -645,8 +400,6 @@ impl VardeWorld {
             self.output_pty = Some(size);
         }
         self.state.head = self.head.clone();
-        // Which branch HEAD is on is the edge's to read, so the world reads it
-        // too — the core never writes it.
         self.state.branch = (!self.on_branch.is_empty()).then(|| self.on_branch.clone());
         self.state.lsp_running = self.lsp_running.keys().cloned().collect();
         self.state.commands_on_path = self.on_path.clone();
@@ -654,10 +407,7 @@ impl VardeWorld {
         self.state.workspace_facts = self.workspace_facts.clone();
         self.state.voice_running = self.voice_child;
         self.state.player_installed = self.player_on_path;
-        // A blank voice names no file, so none is on disk.
         self.state.voice_installed = self.voice_on_disk && !self.state.speech.voice.is_empty();
-        // What `tell_traced` tells the core before every frame: the trace of
-        // the current revision.
         if let Some(path) = self.state.current_buffer.clone() {
             let committed = self.state.committed.get(&path).and_then(Option::as_deref);
             if let Some(buffer) = self.state.buffers.get(&path) {
@@ -667,8 +417,6 @@ impl VardeWorld {
         }
     }
 
-    /// What the edge does wherever it stops holding a pane: the core is told
-    /// the session is gone, so what was queued for it is dropped.
     fn ai_is_gone(&mut self) {
         self.ai_pane = false;
         let (state, effects) = update(&self.state, Event::AiExited);
@@ -676,11 +424,6 @@ impl VardeWorld {
         self.apply(effects);
     }
 
-    /// What the edge does wherever it *starts* holding one: the core is told,
-    /// and the conversation begins against the process rather than against the
-    /// asking. Whether the spawn was asked for in this scenario or the server
-    /// was already up before it makes no difference here, which is the whole
-    /// reason a Scenario can say a server is already running.
     fn lsp_is_running(&mut self, language: &str, command: &str) {
         self.lsp_running
             .insert(language.to_string(), command.to_string());
@@ -690,8 +433,6 @@ impl VardeWorld {
         });
     }
 
-    /// What the edge does wherever it stops holding a server: the core is told,
-    /// so what that conversation was holding goes with it.
     fn lsp_is_gone(&mut self, language: &str, why: Gone) {
         self.lsp_running.remove(language);
         self.tell_core();
@@ -701,9 +442,6 @@ impl VardeWorld {
         });
     }
 
-    /// The scripted adapter's canned replies: `initialize` with the one
-    /// capability Varde reads, a thread to pause, the stack a scenario gave a
-    /// thread, and a `disconnect` answered. Anything else it is only told.
     fn adapter_answers(&mut self, message: &Value) {
         if message["type"] != "request" {
             return;
@@ -736,8 +474,6 @@ impl VardeWorld {
                 json!({ "stackFrames": frames })
             }
             Some("disconnect") => json!({}),
-            // As an adapter that can run one thread alone answers: only what
-            // was asked for ran on.
             Some("continue") => json!({
                 "allThreadsContinued": message["arguments"]["singleThread"] != json!(true)
             }),
@@ -752,9 +488,6 @@ impl VardeWorld {
                     .collect();
                 json!({ "scopes": scopes })
             }
-            // The page asked for, or everything the reference holds when no
-            // page was named — which is what a real adapter does with a
-            // request carrying no `start`.
             Some("variables") => {
                 let reference = message["arguments"]["variablesReference"]
                     .as_i64()
@@ -783,7 +516,6 @@ impl VardeWorld {
         }));
     }
 
-    /// One message from the adapter, driven straight in as the edge would.
     fn adapter_says(&mut self, message: Value) {
         self.send_now(Event::DapReceived {
             json: message.to_string(),
@@ -791,9 +523,6 @@ impl VardeWorld {
         });
     }
 
-    /// A child session's side of the protocol: it starts when asked, names
-    /// its one thread, and that thread stops once it is configured. Its
-    /// thread is numbered 1, as the session's own is, which is the point.
     fn child_answers(&mut self, child: usize, message: &Value) {
         if message["type"] != "request" {
             return;
@@ -834,7 +563,6 @@ impl VardeWorld {
         }
     }
 
-    /// What the canned server said, driven straight in as the edge would.
     fn lsp_replies(&mut self, language: &str, message: Value) {
         self.send_now(Event::LspReceived {
             language: language.to_string(),
@@ -842,8 +570,6 @@ impl VardeWorld {
         });
     }
 
-    /// One event through `update` from inside an effect the world is playing
-    /// out — the three lines `apply` uses everywhere it feeds one back.
     fn send_now(&mut self, event: Event) {
         let (state, effects) = update(&self.state, event);
         self.state = state;
@@ -863,17 +589,12 @@ impl VardeWorld {
             };
             self.applied_to_jobs(effect);
         }
-        // What a folder read found, once the batch that asked for it is done:
-        // a read answered mid-batch decides the next event against facts the
-        // effects behind it have not told the core yet, which is how one
-        // opening asked for two language servers.
         for path in std::mem::take(&mut self.folders_to_read) {
             let entries = self.disk.get(&path).cloned().unwrap_or_default();
             self.send_now(Event::Expand { path, entries });
         }
     }
 
-    /// The shell, the AI pane, the clipboard and the status row.
     fn applied_to_panes(&mut self, effect: Effect) -> Option<Effect> {
         match effect {
             Effect::SetTerminalInput(text) => self.terminal_input = text,
@@ -938,9 +659,6 @@ impl VardeWorld {
             } => {
                 self.lsp_started.push((language.clone(), command.clone()));
                 self.lsp_args.insert(language.clone(), args);
-                // A command that does not exist leaves the edge holding
-                // nothing, which is the failure `ai_running` was: a spawn that
-                // was asked for is not a process that exists.
                 if self.lsp_fails.contains(&language) {
                     self.lsp_is_gone(&language, Gone::FailedToStart);
                 } else {
@@ -959,9 +677,6 @@ impl VardeWorld {
             }
             Effect::StartDap { command, .. } => {
                 self.dap.spawned.push(command.clone());
-                // A command that is not there is the spawn failing as the
-                // edge sees it; one that is starts only once the scenario's
-                // adapter is ready, so a Scenario can report the spawn itself.
                 if !self.on_path.contains(&command) {
                     self.send_now(Event::DapGone {
                         why: varde::debug::Gone::Missing,
@@ -976,8 +691,6 @@ impl VardeWorld {
                 self.dap.children.insert(child, Vec::new());
                 self.send_now(Event::DapStarted { from: child });
             }
-            // A child session's connection goes with the adapter's, so one
-            // let go hears what it was sent and answers nothing.
             Effect::DapSend { to, json } if to != 0 => {
                 let message: Value = serde_json::from_str(&json).expect("valid DAP");
                 self.dap
@@ -1002,9 +715,6 @@ impl VardeWorld {
             }
             Effect::StopDap => {
                 if std::mem::take(&mut self.dap.held) {
-                    // The debugged program goes with the session it belonged
-                    // to, which is what the edge does at every site that stops
-                    // holding an adapter.
                     self.output_pty = None;
                     self.send_now(Event::DapGone {
                         why: varde::debug::Gone::Exited,
@@ -1018,16 +728,8 @@ impl VardeWorld {
                 let id = message["id"].clone();
                 self.lsp_sent.push((language.clone(), message));
                 match self.lsp_running.contains_key(&language) {
-                    // The canned server answers its handshake at once, which is
-                    // what "is ready" means. Everything else it is told, it is
-                    // only told.
                     true => {
                         if handshake && self.lsp_answers.contains(&language) {
-                            // Declaring what it can do, because a capability is
-                            // the server's own answer about itself and Varde
-                            // asks for nothing it was not offered. A server
-                            // that declines one is configured by the Scenario
-                            // that is about declining.
                             self.lsp_replies(
                                 &language,
                                 json!({"jsonrpc": "2.0", "id": id, "result": {"capabilities": {
@@ -1038,9 +740,6 @@ impl VardeWorld {
                             );
                         }
                     }
-                    // Writing to a server the edge does not hold is how the edge
-                    // learns it is gone, and the core is told rather than left
-                    // believing in it.
                     false => self.lsp_is_gone(&language, Gone::Exited),
                 }
             }
@@ -1055,28 +754,17 @@ impl VardeWorld {
                 self.reported.push(slug.to_string());
                 self.named.push(about);
             }
-            // The edge holds one status line, so a withdrawal leaves
-            // nothing showing rather than the notice before it.
             Effect::ClearNotice => self.notices.clear(),
-            // What the edge does: start the program in the Debug group's own
-            // terminal, never in a shell. Its pty opens at the floor and is
-            // fitted by `tell_core` above, exactly as the edge does.
             Effect::RunProgram { argv, .. } => {
                 self.program.push(argv);
                 self.output_pty = Some((2, 1));
             }
-            // What the edge does: build the stream under `~/.varde/tmp` and
-            // play it. No path crosses the seam, so none is modelled — what a
-            // scenario can see is that words reached a voice.
             Effect::Speak { utterances, speed } => {
                 self.speaking = Some(reading::words(&utterances));
                 self.players += 1;
                 self.stream = built(&utterances);
                 self.spoken_at = Some(speed);
             }
-            // A resume, a next or a previous: the same words out of the stream
-            // that is already there, which is what "does not re-synthesize"
-            // is a statement about — nothing here rebuilds `stream`.
             Effect::SpeakFrom { at_ms } => {
                 self.speaking = self
                     .state
@@ -1086,7 +774,6 @@ impl VardeWorld {
                 self.players = 1;
                 self.resumed_from = Some(at_ms);
             }
-            // A pause keeps the stream and stops the sound; a stop takes both.
             Effect::PauseSpeaking => {
                 self.speaking = None;
                 self.players = 0;
@@ -1101,7 +788,6 @@ impl VardeWorld {
         None
     }
 
-    /// Buffers and the files under them.
     fn applied_to_files(&mut self, effect: Effect) -> Option<Effect> {
         match effect {
             Effect::Scrolled(pane, direction) => self.scrolled.push((pane, direction)),
@@ -1115,10 +801,6 @@ impl VardeWorld {
                 self.ai_is_gone();
             }
             Effect::ClipboardViaTerminal(text) => self.terminal_clipboard = Some(text),
-            // What the edge does: read the clipboard and hand the text back as
-            // the one edit a paste is. With nothing on it there is nothing to
-            // hand back, which is the same nothing a machine with no clipboard
-            // at all answers with.
             Effect::ReadClipboard => {
                 if let Some(text) = self.clipboard.clone().filter(|text| !text.is_empty()) {
                     let (state, effects) = update(&self.state, Event::EditorPaste(text));
@@ -1126,15 +808,12 @@ impl VardeWorld {
                     self.apply(effects);
                 }
             }
-            // What the edge does: load the diff, then hand it back.
-            // What the edge does: walk the project and hand back the list.
             Effect::IndexProject => {
                 let files = self.indexable.clone();
                 let (state, effects) = update(&self.state, Event::Indexed(files));
                 self.state = state;
                 self.apply(effects);
             }
-            // What the edge does: assemble the sources and scan them.
             Effect::RunSearch(query) => {
                 let disk = self.project.clone();
                 let sources = varde::search::sources(&self.state, disk);
@@ -1168,7 +847,6 @@ impl VardeWorld {
         None
     }
 
-    /// The effects that read something back and feed it in as an event.
     fn applied_to_lists(&mut self, effect: Effect) -> Option<Effect> {
         match effect {
             Effect::ReadBreakpointFile(path) => {
@@ -1212,8 +890,6 @@ impl VardeWorld {
                 self.apply(effects);
             }
             Effect::SaveState(contents) => self.startup.state_json = Some(contents),
-            // Recorded, never answered: the analysis runs off the main
-            // loop, so the figures arrive when a scenario says they do.
             Effect::AnalyseRisk {
                 scope,
                 generation,
@@ -1226,20 +902,9 @@ impl VardeWorld {
                 base,
             }),
             Effect::ReadFolder(path) => self.folders_to_read.push(path),
-            // The world plays the edge: the offline default-branch
-            // ladder, or an explicit range, resolved against whatever
-            // the scenario declared instead of a real repository.
-            // What the edge does: copy the whole tree aside under the
-            // Iteration's number — the same files for either Scope, because
-            // the restore puts back only what the Iteration touched and a
-            // snapshot narrower than the session's reach could not put back
-            // a file it edited outside the Scope it was given.
             Effect::Snapshot { iteration } => {
                 self.snapshots.insert(iteration, self.tree());
             }
-            // What the edge does: put back only the files whose bytes
-            // differ from the snapshot — which is exactly the files the
-            // Iteration touched.
             Effect::RestoreSnapshot { iteration } => {
                 self.restores.push(iteration);
                 let snapshot = self.snapshots.get(&iteration).cloned().unwrap_or_default();
@@ -1255,28 +920,13 @@ impl VardeWorld {
         None
     }
 
-    /// Whatever the three groups above did not take. Last, so its catch-all is
-    /// every effect they declined — which is none of them.
     fn applied_to_jobs(&mut self, effect: Effect) {
         match effect {
             Effect::RunTests { command } => self.tests_run.push(command),
             run @ Effect::RunFormatter { .. } => self.formatter_runs.push(run),
-            // Asked for, and answered by the step that says what `PATH` holds:
-            // the whole point of the re-check is that the answer arrives after
-            // the asking, so a world that answered it here would make an
-            // install that worked and one that did not the same scenario.
             Effect::ProbePath => {}
-            // Answered by the step that says what the Release is, for the
-            // reason the probe above is: the answer arrives after the asking.
             Effect::CheckRelease { .. } => {}
             fetch @ Effect::ReplaceBinary { .. } => self.replacing.push(fetch),
-            // The world plays the edge: the core says which files the arriving
-            // artifact names, and this diffs and reads each one — the old side
-            // out of what the range's base holds, the new side off the working
-            // tree, exactly the pair `story::staleness` compares against and
-            // the hunks the arrival checks run over. The same read
-            // `recompute_file_hunks` plays for the poll, narrowed to the files
-            // asked for.
             Effect::ReadStoryFiles {
                 repo,
                 base: _,
@@ -1291,10 +941,6 @@ impl VardeWorld {
                 self.state = state;
                 self.apply(effects);
             }
-            // The world plays the edge: what git would have answered about the
-            // range is not the core's decision, and `story::context_file` has
-            // its own unit tests. What a scenario can see from here is that the
-            // hand-over was written, beside the set, before the prompt went out.
             Effect::WriteStoryContext {
                 repo: _,
                 spelling,
@@ -1303,8 +949,6 @@ impl VardeWorld {
                 self.wrote.push(path.clone());
                 self.files.insert(path, format!("the change in {spelling}"));
             }
-            // The world plays git: the refs a scenario declared, and whether
-            // it said the folder is a repository with a clean tree at all.
             Effect::ReadBranches => {
                 let branching = match &self.state.repo {
                     None => story::Branching::NotARepository,
@@ -1313,8 +957,6 @@ impl VardeWorld {
                 };
                 self.send_now(Event::Branches(branching));
             }
-            // The world plays the edge reading its modelled disk: the file as
-            // a step last left it, or as Varde was started on.
             Effect::ReadGlobalConfig {
                 path,
                 kind,
@@ -1338,16 +980,10 @@ impl VardeWorld {
                 let status = self.files.get(&sentinel).cloned();
                 self.send_now(Event::InstallEnded(status));
             }
-            // The world plays the edge (ADR 0015): the exit status is what the
-            // sentinel holds, and a clone that worked is read like any other
-            // repository — the refs the scenario declared.
             Effect::ReadGuestBranches { sentinel, how, .. } => {
                 let status = self.files.get(&sentinel).cloned();
                 self.send_now(Event::Branches(match status.as_deref().map(str::trim) {
                     Some("0") => story::Branching::Listed(self.branch_refs.clone()),
-                    // A sentinel there is nothing to read is the failure with
-                    // no status to name, the way the edge reports one. `how`
-                    // is the core's, echoed back the way the edge echoes it.
                     failed => story::Branching::DownloadFailed {
                         how,
                         status: failed.map(str::to_string),
@@ -1370,8 +1006,6 @@ impl VardeWorld {
                 self.state = state;
                 self.apply(effects);
             }
-            // The world plays the edge: the folder's newest artifact, and
-            // git's answer about the range its name is written for.
             Effect::ReadStories { dir, repo: _ } => {
                 if let Some((path, contents)) = self
                     .files
@@ -1391,8 +1025,6 @@ impl VardeWorld {
         }
     }
 
-    /// The world plays git: which range a `:story` resolves to, and whether it
-    /// has been authored already.
     fn resolution(&self, dir: &Path, explicit: Option<String>, force: bool) -> story::Resolution {
         let dirty = self
             .state
@@ -1426,23 +1058,16 @@ impl VardeWorld {
         }
     }
 
-    /// The project's files as they stand, by relative name — the working tree
-    /// a snapshot is taken of and a revert is measured against.
     fn tree(&self) -> BTreeMap<String, String> {
         self.project.iter().cloned().collect()
     }
 
-    /// What the disk model holds for a path, whichever side of it a Scenario
-    /// wrote — the tree it listed, or the contents it spelled out.
     fn on_disk(&self, path: &Path) -> String {
         let relative = path
             .strip_prefix(&self.state.root)
             .unwrap_or(path)
             .to_string_lossy()
             .into_owned();
-        // Never a silent empty file: a read the disk model cannot answer would
-        // sync as nothing at all, and the assertions about what the server was
-        // told would pass on it without anybody having written the file.
         self.files
             .get(path)
             .cloned()
@@ -1528,8 +1153,6 @@ fn project_config(world: &mut VardeWorld, step: &Step) {
     world.startup.project_config = Some(step.docstring().expect("docstring").trim().to_string());
 }
 
-/// What the edge sends when either file changes on disk: both layers as they
-/// now are, the one that was not saved read as it stands.
 fn config_edited(world: &mut VardeWorld, global: Option<startup::OnDisk>) {
     let layer = |text: &Option<String>| match text {
         Some(text) => startup::OnDisk::Text(text.clone()),
@@ -1621,8 +1244,6 @@ fn no_project_config(world: &mut VardeWorld) {
     world.startup.project_config = None;
 }
 
-// ---- Staying up to date: the checkout's Version against the Running version ----
-
 #[given(expr = "Varde's checkout is at {string}")]
 fn checkout_at(world: &mut VardeWorld, path: String) {
     world.startup.checkout = Some(PathBuf::from(path));
@@ -1638,8 +1259,6 @@ fn checkout_manifest(world: &mut VardeWorld, step: &Step) {
     world.startup.checkout_manifest = Some(step.docstring().expect("docstring").trim().to_string());
 }
 
-/// The edge still found a directory above the binary — there is just nothing in
-/// it, which is the case the core has to rule out.
 #[given(expr = "there is no checkout manifest")]
 fn no_checkout_manifest(world: &mut VardeWorld) {
     world.startup.checkout_manifest = None;
@@ -1709,8 +1328,6 @@ fn release_answers(world: &mut VardeWorld, step: &Step) {
     world.send(Event::ReleaseAnswered(Some(body)));
 }
 
-/// Through the event the edge sends, so what is remembered is what the core
-/// made of an answer rather than a Release the scenario wrote into the state.
 #[given(expr = "a newer Release for this platform has been found")]
 fn newer_release_found(world: &mut VardeWorld) {
     let asset = format!("varde-{}-{}", world.startup.os, world.startup.arch);
@@ -1867,9 +1484,6 @@ fn reminder_not_shown(world: &mut VardeWorld) {
     assert_eq!(world.state.ai_slot, layout::Slot::Ai);
 }
 
-/// Through the mouse router at a screen cell, not as an event naming the
-/// pane: which pane the wheel is over is the hit-test's answer, and that is
-/// what puts the Cheatsheet rather than the session behind it under the wheel.
 #[when(expr = "I turn the wheel {word} over the AI pane's rectangle")]
 fn wheel_over_ai_rectangle(world: &mut VardeWorld, direction: String) {
     let ai = world.panes().ai;
@@ -1885,8 +1499,6 @@ fn cheatsheet_scrolled(world: &mut VardeWorld, rows: usize) {
     assert_eq!(world.state.cheatsheet_scroll, rows);
 }
 
-/// Against the rows `ui` draws and the rows the pane fits, so a list that
-/// already fits — which proves nothing about scrolling — fails here too.
 #[then(expr = "the Cheatsheet's last row is on screen")]
 fn cheatsheet_at_its_end(world: &mut VardeWorld) {
     let rows = keys::cheatsheet_rows(&world.state).len();
@@ -1968,11 +1580,6 @@ fn told_nothing_to_update(world: &mut VardeWorld) {
     assert_eq!(world.notices, vec!["nothing-to-update".to_string()]);
 }
 
-/// The write ledger, not the disk model, and minus the two writes no gesture
-/// makes: starting seeds the project's config file (R9.7) and the global one,
-/// so a scenario that starts carries writes it never asked for. Nothing but
-/// starting ever writes those paths, so leaving them out costs the promise
-/// nothing.
 #[then(expr = "no file was written")]
 fn nothing_written(world: &mut VardeWorld) {
     let seeds = [
@@ -1991,16 +1598,10 @@ fn nothing_written(world: &mut VardeWorld) {
 #[given(expr = "Varde starts in the project")]
 #[when(expr = "Varde starts in the project")]
 fn varde_starts(world: &mut VardeWorld) {
-    // A scenario that says nothing about the OS still needs one, since the
-    // install command a row offers is looked up under it. A fixed value rather
-    // than this machine's: a suite whose rows read differently on Linux is a
-    // suite that fails somewhere nobody is looking. Scenarios that care say
-    // "Varde was built for" themselves, which runs before this.
     if world.startup.os.is_empty() {
         world.startup.os = "macos".to_string();
     }
     world.startup.varde_home = Path::new(HOME).join(varde::VARDE_DIR);
-    // The world plays git, and the edge asks it before starting.
     world.startup.repo = world.state.repo.clone();
     match startup::start(&world.startup) {
         Ok((state, config, effects)) => {
@@ -2013,9 +1614,6 @@ fn varde_starts(world: &mut VardeWorld) {
     }
 }
 
-/// The seed is a write like any other, held to its contents as well as its
-/// path: "a file appeared" would pass on an empty one, and the file's whole
-/// job is the keys it names.
 #[then(expr = "the project {string} was seeded")]
 fn project_file_was_seeded(world: &mut VardeWorld, name: String) {
     let path = world.startup.root.join(&name);
@@ -2039,10 +1637,6 @@ fn global_file_unchanged(world: &mut VardeWorld) {
     assert!(!world.wrote.contains(&path), "written: {:?}", world.wrote);
 }
 
-/// The seeded text itself, read back off the modelled disk and handed to a
-/// second start as the project's layer. Feeding the constant in directly would
-/// prove the constant harmless; this proves the file Varde actually laid down
-/// is, which is the promise "every key is commented out" is really making.
 #[when(expr = "Varde starts again with the config file it seeded")]
 fn starts_again_with_the_seeded_config(world: &mut VardeWorld) {
     let path = world.startup.root.join(".varde/config.toml");
@@ -2056,8 +1650,6 @@ fn effective_setting(world: &mut VardeWorld, key: String, expected: String) {
     let config = world.config.as_ref().expect("Varde started");
     assert_eq!(config.get(&key).as_deref(), Some(expected.as_str()));
 }
-
-// ---- F31: which command serves which language ----
 
 fn servers(world: &VardeWorld) -> BTreeMap<String, Server> {
     world.config.as_ref().expect("Varde started").servers()
@@ -2108,9 +1700,6 @@ fn server_arguments_are(world: &mut VardeWorld, language: String, step: &Step) {
     assert_eq!(server.args, expected);
 }
 
-/// Two promises in one step: no spawn was asked for anywhere, and naming a
-/// server *configures nothing else* either — the allowlist is the two effects
-/// starting already returns, and the restored view it arrives in.
 #[then(expr = "no language server was started")]
 fn no_language_server_started(world: &mut VardeWorld) {
     assert!(
@@ -2161,9 +1750,6 @@ fn error_names_line(world: &mut VardeWorld, line: usize) {
     assert_eq!(config_error(world).line, line);
 }
 
-/// Which of the three faults it was, as a name rather than as the sentence the
-/// edge prints: the wording is pinned by a unit test beside `Display`, and a
-/// suite that failed on rewording would teach people to ignore it.
 #[then(expr = "the fault is {string}")]
 fn fault_is(world: &mut VardeWorld, expected: String) {
     let actual = match &config_error(world).fault {
@@ -2191,8 +1777,6 @@ fn reason_is(world: &mut VardeWorld, reason: String) {
         other => panic!("expected a path error, got {other:?}"),
     }
 }
-
-// ---- F1: opening on a folder ----
 
 #[given(expr = "the folder {string} exists")]
 #[given(expr = "the folder {string} exists and is empty")]
@@ -2229,9 +1813,6 @@ fn varde_opens(world: &mut VardeWorld, path: String) {
     }
 }
 
-/// On disk before Varde starts, so what the tree shows is what the folder held
-/// rather than what a step put there afterwards. The idiom `the workspace
-/// folder contains:` already uses, one file at a time.
 #[given(expr = "the workspace folder holds the file {string}")]
 fn workspace_folder_holds_file(world: &mut VardeWorld, name: String) {
     let root = world.state.root.clone();
@@ -2245,15 +1826,8 @@ fn workspace_folder_holds_file(world: &mut VardeWorld, name: String) {
     );
 }
 
-/// Where a Bare workspace's Sidecar is, as the edge derived it from the folder
-/// and the process id. Handed in rather than built here: how the two parts are
-/// spelled into one directory name is edge work with no scenario, and what a
-/// scenario is about is that the library wrote *there* and not into the folder.
 const SIDECAR: &str = "/home/me/.varde/paths/%home%me%projects%theirs-4242";
 
-/// The user's own directory, which `~` in a scenario names and `varde_home`
-/// below is under. The edge reads both; a scenario states them, so a path
-/// outside every workspace is a path a step can spell.
 const HOME: &str = "/home/me";
 
 #[given(expr = "Varde started with no folder in {string}")]
@@ -2263,9 +1837,6 @@ fn varde_starts_bare(world: &mut VardeWorld, path: String) {
     varde_opens(world, path);
 }
 
-/// The load-bearing absence: a folder Varde was not given is a folder Varde
-/// leaves alone. Every directory, not `.varde` by name — a site that missed the
-/// accessor would create some other one and this would still catch it.
 #[then(expr = "no directory was created in the folder")]
 fn no_directory_in_folder(world: &mut VardeWorld) {
     let inside: Vec<&PathBuf> = world
@@ -2276,9 +1847,6 @@ fn no_directory_in_folder(world: &mut VardeWorld) {
     assert!(inside.is_empty(), "created: {inside:?}");
 }
 
-/// The Sidecar is deleted at exit, so a review written into it is a review
-/// lost — and the folder is the one place a Bare workspace may not write at
-/// all. Both absences are held against every write, wherever it went.
 #[then(expr = "no file was written into the folder Varde was started in")]
 fn nothing_written_into_folder(world: &mut VardeWorld) {
     let inside: Vec<&PathBuf> = world
@@ -2299,20 +1867,12 @@ fn nothing_written_into_sidecar(world: &mut VardeWorld) {
     assert!(inside.is_empty(), "written: {inside:?}");
 }
 
-/// Held against the folder the scenario named, never against the workspace
-/// root the library came up with: a Bare workspace that made its Sidecar the
-/// workspace would move both sides of a root-relative assertion at once and
-/// pass while editing a copy of the file nobody can find.
 #[then(expr = "{string} was written into the folder Varde was started in")]
 fn written_into_folder(world: &mut VardeWorld, name: String) {
     let path = world.startup.root.join(name);
     assert!(world.wrote.contains(&path), "written: {:?}", world.wrote);
 }
 
-/// The folder is the obvious place a seed could land, and the Sidecar is the
-/// plausible-looking one: writing the file *somewhere* looks like the promise
-/// kept while the key is still in a directory deleted at exit. Held against
-/// every write of a config file but the global one, wherever it went.
 #[then(expr = "no config file was seeded in the workspace")]
 fn no_config_seeded_in_workspace(world: &mut VardeWorld) {
     let global = world.startup.varde_home.join(startup::CONFIG_FILE);
@@ -2324,9 +1884,6 @@ fn no_config_seeded_in_workspace(world: &mut VardeWorld) {
     assert!(seeded.is_empty(), "seeded: {seeded:?}");
 }
 
-/// Quitting a Bare workspace leaves nothing behind. Held against the Sidecar
-/// the edge handed in, so an implementation that deleted some other directory
-/// of its own choosing fails here.
 #[then(expr = "the Sidecar was deleted")]
 fn sidecar_was_deleted(world: &mut VardeWorld) {
     assert!(
@@ -2336,8 +1893,6 @@ fn sidecar_was_deleted(world: &mut VardeWorld) {
     );
 }
 
-/// The absence a project workspace is owed: the rule is that everything under
-/// Varde's global directory can go, and a project's `.varde/` is not under it.
 #[then(expr = "no directory was deleted")]
 fn no_directory_deleted(world: &mut VardeWorld) {
     let deleted: Vec<&PathBuf> = world
@@ -2348,17 +1903,10 @@ fn no_directory_deleted(world: &mut VardeWorld) {
     assert!(deleted.is_empty(), "deleted: {deleted:?}");
 }
 
-/// Varde's own scratch, which every start sweeps and remakes before anything
-/// can write into it (ADR 0014). Neither a workspace directory nor a Sidecar,
-/// so the absences those two promises are about are not about this one — and
-/// naming it here rather than dropping the effect keeps the sweep a value the
-/// suite can still see.
 fn is_scratch(world: &VardeWorld, path: &Path) -> bool {
     path == varde::tmp_dir(&world.startup.varde_home)
 }
 
-/// A Bare workspace forgets everything, so the write on the way out is not
-/// made rather than made into a directory that is about to go.
 #[then(expr = "no state was saved")]
 fn no_state_saved(world: &mut VardeWorld) {
     assert_eq!(world.startup.state_json, None);
@@ -2388,12 +1936,6 @@ fn tree_is_empty(world: &mut VardeWorld) {
     assert!(tree::rows(&world.state).is_empty());
 }
 
-// ---- F2 / F5: the tree ----
-
-/// A scenario's path, against the workspace root — unless it names the user's
-/// own directory, which nothing in a workspace can reach. `~` is the only way
-/// a scenario can say "outside every workspace" and still be read against the
-/// same home the edge hands in.
 fn abs(world: &VardeWorld, path: &str) -> PathBuf {
     match path.strip_prefix("~/") {
         Some(rest) => Path::new(HOME).join(rest),
@@ -2401,8 +1943,6 @@ fn abs(world: &VardeWorld, path: &str) -> PathBuf {
     }
 }
 
-/// Where the pointer sits when it is over a given line and column of a pane's
-/// text — the inverse of what `mouse` does with a screen position.
 fn pointer_at(
     state: &State,
     panes: &layout::Layout,
@@ -2422,8 +1962,6 @@ fn pointer_at(
         | Pane::Diagnostics
         | Pane::Conflicts => (panes.corner, 0, 0),
         Pane::Terminal | Pane::Variables => (panes.terminal, 0, 0),
-        // The window itself, not the Snippet's own rectangle: the `+ 1` below
-        // is the border every other pane's rectangle carries.
         Pane::Evaluator => (panes.evaluator, 0, 0),
     };
     (
@@ -2459,7 +1997,6 @@ fn workspace_contains(world: &mut VardeWorld, step: &Step) {
 
 #[given(expr = "{string} contains {string}")]
 fn folder_contains(world: &mut VardeWorld, folder: String, name: String) {
-    // Saying what a folder contains also says the folder is there.
     let root = world.state.root.clone();
     put_on_disk(
         world,
@@ -2480,8 +2017,6 @@ fn folder_contains(world: &mut VardeWorld, folder: String, name: String) {
     );
 }
 
-/// Every folder on the way is on disk as a folder, and none of them is
-/// expanded: the tree as it stands before anyone has walked into it.
 #[given(expr = "{string} is on disk under collapsed folders")]
 fn on_disk_under_collapsed(world: &mut VardeWorld, path: String) {
     let root = world.state.root.clone();
@@ -2557,8 +2092,6 @@ fn collapse_the_tree(world: &mut VardeWorld) {
 
 #[when(expr = "the file tree is rendered")]
 fn render_tree(world: &mut VardeWorld) {
-    // What the edge does on startup: read the root, plus every folder that was
-    // restored as expanded. Nothing else is read — the tree is lazy.
     let mut folders = vec![world.state.root.clone()];
     folders.extend(world.state.expanded.iter().cloned());
     for folder in folders {
@@ -2679,18 +2212,8 @@ fn deleted_on_disk(world: &mut VardeWorld, path: String) {
     world.send(Event::FilesRemoved(vec![absolute]));
 }
 
-// ---- F5: buffers ----
-
-/// Opens a file the way the edge does — through the event, so whatever
-/// `update` decides at open time (which shape a markdown file arrives in, for
-/// one) is decided once and not a second time here. A step that built a
-/// `Buffer` and inserted it was a step that could go green over a default
-/// `main.rs` never applies.
 fn open_buffer(world: &mut VardeWorld, path: &str, contents: &str) -> PathBuf {
     let absolute = abs(world, path);
-    // What was opened is what is on disk: a jump reads the file again and the
-    // buffer follows it, so a disk the scenario never described would read as
-    // an empty file and blank the buffer the scenario set up.
     world
         .files
         .entry(absolute.clone())
@@ -2706,8 +2229,6 @@ fn open_buffer(world: &mut VardeWorld, path: &str, contents: &str) -> PathBuf {
 
 #[given(expr = "{string} is open in the editor with no unsaved edits")]
 fn open_clean(world: &mut VardeWorld, path: String) {
-    // Whatever the scenario put on disk, and a stand-in for a file it never
-    // described — the same rule "I open" follows.
     let contents = world
         .files
         .get(&abs(world, &path))
@@ -2716,9 +2237,6 @@ fn open_clean(world: &mut VardeWorld, path: String) {
     open_buffer(world, &path, &contents);
 }
 
-/// A file with nothing in it, for the Scenarios that assert on the whole of
-/// what the buffer holds: a stand-in line would leave every one of them
-/// asserting the stand-in as well as what was typed.
 #[given(expr = "{string} is open in the editor holding nothing")]
 fn open_empty(world: &mut VardeWorld, path: String) {
     open_buffer(world, &path, "");
@@ -2735,9 +2253,6 @@ fn open_dirty(world: &mut VardeWorld, path: String) {
         .draft = Some("my edits".to_string());
 }
 
-/// Unsaved edits over whatever the project holds on disk: a clean buffer
-/// holding text the disk does not is a stale one, and follows the disk the
-/// moment anything reads the file again.
 #[given(expr = "{string} is open in the editor with unsaved edits holding:")]
 fn open_dirty_holding(world: &mut VardeWorld, path: String, step: &Step) {
     let draft = step
@@ -2807,10 +2322,6 @@ fn is_not_flagged(world: &mut VardeWorld, path: String) {
     assert!(!buffer(world, &path).changed_on_disk);
 }
 
-/// The contract between the core and the watcher at the edge: `main` adds and
-/// drops watches to match `watched_folders`, so a file whose folder is not in
-/// that set is a file nothing will ever report a change to. Folders, never
-/// files — a watch on a file is lost when a tool replaces it by rename.
 #[then(expr = "{string} is followed for changes")]
 fn is_followed(world: &mut VardeWorld, path: String) {
     let absolute = abs(world, &path);
@@ -2831,8 +2342,6 @@ fn notice_is(world: &mut VardeWorld, expected: String) {
     );
 }
 
-/// Through the real key router, so the picker's own bindings are what the
-/// scenario exercises rather than the event they happen to send.
 #[when(expr = "I resolve the divergence with {string}")]
 fn resolve_divergence(world: &mut VardeWorld, key: String) {
     route_key(world, &key, 0);
@@ -2847,9 +2356,6 @@ fn unsaved_edits_written(world: &mut VardeWorld, path: String) {
     );
 }
 
-/// A path alone would not be enough: the buffer's version exists nowhere on
-/// disk for the CLI to read, so a prompt that only names the file asks the AI
-/// to merge against something it cannot see.
 #[then(expr = "the prompt carries both versions")]
 fn prompt_carries_both_versions(world: &mut VardeWorld) {
     let sent = ai_sends(world);
@@ -2905,15 +2411,8 @@ fn enter_name(world: &mut VardeWorld, name: String) {
 #[when(expr = "I press {string}")]
 #[given(expr = "I pressed {string}")]
 fn press(world: &mut VardeWorld, key: String) {
-    // Through the router: what a tapped Space means is where the keyboard is
-    // and what mode it is in, which no one event stands for — and in Stepping
-    // mode that is true of every key, since the mode claims four letters and
-    // hands the rest back to whatever they always were.
     if key == "Space"
         || world.state.stepping
-        // The Snippet is a buffer being typed into, so what a key means there
-        // is the router's answer too: Enter runs it in normal mode and opens a
-        // line while inserting, which no one event stands for.
         || world.state.focus == Pane::Evaluator
         || named_key(&key).is_some_and(|event| matches!(event.code, terminput::KeyCode::F(_)))
     {
@@ -2936,10 +2435,6 @@ fn press(world: &mut VardeWorld, key: String) {
     });
 }
 
-/// A real keypress, routed the way the edge routes it: converted losslessly and
-/// handed to the key router, which decides whether Varde claims it or the
-/// child receives it. `I press` above sends the event a key stands for; this
-/// sends the key.
 #[given(expr = "I press the key {string}")]
 #[when(expr = "I press the key {string}")]
 fn press_the_key(world: &mut VardeWorld, key: String) {
@@ -2952,8 +2447,6 @@ fn press_the_key_twice(world: &mut VardeWorld, key: String, gap: u64) {
     route_key(world, &key, gap);
 }
 
-/// The key a Scenario names, for the names that are not a single character.
-/// `None` is a key spelled as itself.
 fn named_key(key: &str) -> Option<terminput::KeyEvent> {
     let alt = |code| terminput::KeyEvent::new(code).modifiers(terminput::KeyModifiers::ALT);
     let plain = terminput::KeyEvent::new;
@@ -2961,8 +2454,6 @@ fn named_key(key: &str) -> Option<terminput::KeyEvent> {
         "Alt+Enter" => alt(terminput::KeyCode::Enter),
         "Alt+h" => alt(terminput::KeyCode::Char('h')),
         "Alt+Left" => alt(terminput::KeyCode::Left),
-        // Ctrl+Option: the terminal reports both modifiers, which is the
-        // shape the router reads for the jump alias.
         "Ctrl+Alt+Left" => plain(terminput::KeyCode::Left)
             .modifiers(terminput::KeyModifiers::ALT | terminput::KeyModifiers::CTRL),
         "Ctrl+Alt+Right" => plain(terminput::KeyCode::Right)
@@ -2976,9 +2467,6 @@ fn named_key(key: &str) -> Option<terminput::KeyEvent> {
         "Ctrl+c" => plain(terminput::KeyCode::Char('c')).modifiers(terminput::KeyModifiers::CTRL),
         "Ctrl+Enter" => plain(terminput::KeyCode::Enter).modifiers(terminput::KeyModifiers::CTRL),
         "Ctrl+v" => plain(terminput::KeyCode::Char('v')).modifiers(terminput::KeyModifiers::CTRL),
-        // Command, which the host terminal reports as Super where it reports
-        // it at all: the alias the copy and paste keys inspect and nothing
-        // else does.
         "Cmd+c" => plain(terminput::KeyCode::Char('c')).modifiers(terminput::KeyModifiers::SUPER),
         "Cmd+v" => plain(terminput::KeyCode::Char('v')).modifiers(terminput::KeyModifiers::SUPER),
         "Ctrl+d" => plain(terminput::KeyCode::Char('d')).modifiers(terminput::KeyModifiers::CTRL),
@@ -2987,8 +2475,6 @@ fn named_key(key: &str) -> Option<terminput::KeyEvent> {
         "Ctrl+p" => plain(terminput::KeyCode::Char('p')).modifiers(terminput::KeyModifiers::CTRL),
         "Ctrl+s" => plain(terminput::KeyCode::Char('s')).modifiers(terminput::KeyModifiers::CTRL),
         "Ctrl+z" => plain(terminput::KeyCode::Char('z')).modifiers(terminput::KeyModifiers::CTRL),
-        // The base key and Shift as separate facts, the way the Kitty protocol
-        // reports it: the router applies the shift on the way in.
         "Ctrl+Shift+z" => plain(terminput::KeyCode::Char('z'))
             .modifiers(terminput::KeyModifiers::CTRL | terminput::KeyModifiers::SHIFT),
         "Escape" => plain(terminput::KeyCode::Esc),
@@ -2996,8 +2482,6 @@ fn named_key(key: &str) -> Option<terminput::KeyEvent> {
         "Backspace" => plain(terminput::KeyCode::Backspace),
         "Alt+Backspace" => alt(terminput::KeyCode::Backspace),
         "Tab" => plain(terminput::KeyCode::Tab),
-        // What a terminal sends for a back-tab, converted: the code is Tab
-        // and the shift is a modifier, which is the shape the router reads.
         "Shift+Tab" => plain(terminput::KeyCode::Tab).modifiers(terminput::KeyModifiers::SHIFT),
         "Up" => plain(terminput::KeyCode::Up),
         "Down" => plain(terminput::KeyCode::Down),
@@ -3007,7 +2491,6 @@ fn named_key(key: &str) -> Option<terminput::KeyEvent> {
             plain(terminput::KeyCode::Char(' ')).modifiers(terminput::KeyModifiers::CTRL)
         }
         "Space" => plain(terminput::KeyCode::Char(' ')),
-        // A function key, bare or with the one modifier a binding inspects.
         other => {
             let (modifiers, name) = match other.split_once('+') {
                 Some(("Ctrl", name)) => (terminput::KeyModifiers::CTRL, name),
@@ -3128,8 +2611,6 @@ fn palette_offers(_world: &mut VardeWorld, step: &Step) {
     assert_eq!(actual, expected);
 }
 
-/// The row and the letter beside it are the same gesture, so the step names
-/// the entry the palette draws and the click carries the key that row offers.
 fn palette_key(entry: &str) -> char {
     PALETTE
         .iter()
@@ -3139,9 +2620,6 @@ fn palette_key(entry: &str) -> char {
         .unwrap_or_else(|| panic!("no palette entry {entry:?}"))
 }
 
-/// The palette is up for any click on one of its rows — the mouse hit-tests
-/// them only while it is — so a step that reaches for an entry opens it first
-/// rather than relying on the core to.
 fn pick_palette_entry(world: &mut VardeWorld, entry: &str) {
     world.state.modal = Modal::Palette;
     world.send(Event::ClickPaletteEntry(palette_key(entry)));
@@ -3158,10 +2636,7 @@ fn not_rerendered(world: &mut VardeWorld) {
 }
 
 #[given(expr = "the terminal is in {string}")]
-fn terminal_is_in(_world: &mut VardeWorld, _dir: String) {
-    // Intentionally inert: R3.3 makes injected paths absolute precisely so the
-    // shell's current directory cannot change the outcome.
-}
+fn terminal_is_in(_world: &mut VardeWorld, _dir: String) {}
 
 #[then(expr = "the terminal input is {string}")]
 fn terminal_input_should_be(world: &mut VardeWorld, expected: String) {
@@ -3197,8 +2672,7 @@ fn name_box_not_shown(world: &mut VardeWorld) {
 #[tokio::main]
 async fn main() {
     VardeWorld::cucumber()
-        // Undefined and skipped steps must fail the build. Without this, a
-        // mistyped step name reads as a pass. See AGENTS.md.
+        // Without this, cucumber passes undefined or skipped steps, so a mistyped step reads green.
         .fail_on_skipped()
         .run_and_exit("features")
         .await;
@@ -3240,8 +2714,6 @@ fn checkout_files(world: &mut VardeWorld, count: usize) {
     world.send(Event::FilesAppeared(paths));
 }
 
-// ---- F7: review view ----
-
 #[given(expr = "the project is a git repository")]
 fn is_git_repo(world: &mut VardeWorld) {
     world.state.repo = Some(Vec::new());
@@ -3277,11 +2749,6 @@ fn working_tree_contains(world: &mut VardeWorld, step: &Step) {
             },
         })
         .collect();
-    // On disk as well as in git's answer: a file git reports a status for is a
-    // file that exists, and a snapshot is taken off the tree. Without them a
-    // revert has nothing to put back and "only the touched files were restored"
-    // would pass for a tree that held none of them. Only where the scenario has
-    // not said what the file holds.
     for file in &files {
         if !world.project.iter().any(|(name, _)| *name == file.path) {
             world.write_tree(&file.path, "the file as it stands\n");
@@ -3338,8 +2805,6 @@ fn review_view_state(world: &mut VardeWorld, expected: String) {
     assert_eq!(review::view_state(&world.state), expected);
 }
 
-// ---- F8: submitting ----
-
 #[given(expr = "{string} is changed at revision {string}")]
 fn changed_at_revision(world: &mut VardeWorld, path: String, _revision: String) {
     world.state.repo = Some(vec![GitFile {
@@ -3348,9 +2813,6 @@ fn changed_at_revision(world: &mut VardeWorld, path: String, _revision: String) 
     }]);
 }
 
-/// A blob oid, computed exactly as the edge computes one — over content bytes,
-/// not a fixture string — so a scenario's expectation is real git hashing, not
-/// a hard-coded stand-in for it.
 fn blob_oid(content: &str) -> String {
     git2::Oid::hash_object(git2::ObjectType::Blob, content.as_bytes())
         .expect("hash content")
@@ -3414,8 +2876,6 @@ fn shown_in_diff_as_deleted(world: &mut VardeWorld, file: String, step: &Step) {
 fn ai_running(world: &mut VardeWorld) {
     world.ai_pane = true;
     world.tell_core();
-    // A session that is up has printed something; a just-started one has not,
-    // which is what `I start the AI with` leaves behind.
     world.state.ai_spoken = true;
 }
 
@@ -3453,11 +2913,6 @@ fn drag_gutter(world: &mut VardeWorld, file: String, from_line: u32, to_line: u3
     });
 }
 
-/// The whole gesture the reviewer performs: the letter that picks the type,
-/// the body typed into the box, and the key that files it. Routed as real
-/// keypresses rather than sent as one event, because the box's own routing —
-/// which letters pick a type, and which key files rather than starting a new
-/// line — is what these scenarios are about.
 #[when(expr = "I choose the type {word} and enter {string}")]
 fn choose_type(world: &mut VardeWorld, kind: String, body: String) {
     pick_comment_type(world, kind);
@@ -3510,10 +2965,6 @@ fn file_comment(world: &mut VardeWorld) {
     route_key(world, "Ctrl+s", 0);
 }
 
-/// A paste the comment box takes, routed by `keys::on_paste` as `main` routes
-/// one. Any other destination fails the step rather than being replayed as
-/// keystrokes: a paste replayed as keys is the defect this scenario exists for,
-/// since the first newline in it was read as the key that filed the comment.
 #[given("I paste into the comment body:")]
 #[when("I paste into the comment body:")]
 fn paste_into_comment_body(world: &mut VardeWorld, step: &Step) {
@@ -3574,8 +3025,6 @@ fn review_empty(world: &mut VardeWorld) {
 fn review_holds_comment(world: &mut VardeWorld, step: &Step) {
     let comment = world.state.comments.first().expect("a comment");
     let rows = &step.table().expect("table").rows;
-    // Two shapes: a vertical list of (field, value) rows, or a header row of
-    // field names followed by one row of values.
     let pairs: Vec<(&str, &str)> = if rows.first().is_some_and(|row| row.len() > 2) {
         rows[0]
             .iter()
@@ -3612,9 +3061,6 @@ fn comment_on_current_step(world: &mut VardeWorld, kind: String, body: String) {
     file_comment(world);
 }
 
-/// Story view's own code surface, not the review artifact: the artifact holds
-/// the comment either way, so asserting on it would pass without a single row
-/// being drawn. This asks where the row *sits* — under the line it covers.
 #[then(expr = "the code shows a comment on line {int} of {string}")]
 fn code_shows_comment_on_line(world: &mut VardeWorld, line: u32, file: String) {
     assert_eq!(
@@ -3726,8 +3172,6 @@ fn file_absent(world: &mut VardeWorld, path: String) {
     );
 }
 
-/// Whatever reached the AI's child, as text. The review injection is the only
-/// thing these scenarios send it.
 fn ai_sends(world: &VardeWorld) -> Vec<String> {
     world
         .keys_sent
@@ -3763,7 +3207,6 @@ fn prompt_not_submitted(world: &mut VardeWorld) {
     );
 }
 
-/// The one thing the AI's prompt was handed, with the paste markers taken off.
 fn pasted(world: &VardeWorld) -> String {
     let sent = ai_sends(world);
     let [prompt] = sent.as_slice() else {
@@ -3788,8 +3231,6 @@ fn snapshot_bracketed(world: &mut VardeWorld) {
     assert!(prompt.ends_with("\x1b[201~"), "{prompt:?}");
 }
 
-/// The quoted source is every line carrying the gutter's bar, each ending in
-/// the text the buffer holds on that line.
 #[then(
     expr = "the Pause snapshot holds {string} lines {int} to {int} with line {int} marked as the Paused line"
 )]
@@ -3881,9 +3322,6 @@ fn retention_limit(world: &mut VardeWorld, limit: usize) {
 fn seed_reviews(world: &mut VardeWorld, dir: String, _count: usize, first: String, last: String) {
     let (first, last): (u32, u32) = (first.parse().unwrap(), last.parse().unwrap());
     for number in first..=last {
-        // Both sides: a scenario that seeds before starting is stating what the
-        // edge found on disk, and one that seeds after is stating what the
-        // session already wrote.
         world.startup.reviews.insert(number);
         world.state.reviews.insert(number);
         let path = abs(world, &format!("{dir}/{number:04}.json"));
@@ -3901,8 +3339,6 @@ fn holds_reviews(world: &mut VardeWorld, dir: String, expected: usize) {
         .count();
     assert_eq!(count, expected);
 }
-
-// ---- F10: mouse ----
 
 fn parse_pane(name: &str) -> Pane {
     match name {
@@ -3938,8 +3374,6 @@ fn pane_still_has_focus(world: &mut VardeWorld, pane: String) {
 #[given(expr = "I click in the {word} pane")]
 #[when(expr = "I click in the {word} pane")]
 fn click_pane(world: &mut VardeWorld, pane: String) {
-    // A click is a press and a release: the press is ours, and the release is
-    // what a child that asked for mouse events gets.
     let pane = parse_pane(&pane);
     world.send(Event::ClickPane(pane));
     world.send(Event::ClickThrough { pane, at: POINTER });
@@ -3950,13 +3384,8 @@ fn click_text(world: &mut VardeWorld, line: usize, column: usize) {
     world.click(Pane::Editor, (line, column), terminput::KeyModifiers::NONE);
 }
 
-/// The jump gesture: Cmd where a terminal reports it, and Ctrl — which every
-/// terminal reports — is what the scenarios drive, since the two are one
-/// gesture to `mouse`.
 const JUMP: terminput::KeyModifiers = terminput::KeyModifiers::CTRL;
 
-/// The toggle sits in the gutter, which `pointer_at` measures *past* — so the
-/// column is named here, against the same constant the renderer draws it at.
 #[when(expr = "I click the fold toggle on row {int} in the editor")]
 fn click_fold_toggle(world: &mut VardeWorld, row: usize) {
     let panes = world.panes();
@@ -4065,9 +3494,6 @@ fn scroll_over(world: &mut VardeWorld, direction: String, pane: String) {
     });
 }
 
-/// The same notch, several times over. A wheel notch is one row, so a
-/// scenario about where the clamp stops needs more than a scenario about where
-/// one notch lands — spelling each one out is the same step six times.
 #[given(expr = "I scroll {word} {int} times with the pointer over the {word} pane")]
 #[when(expr = "I scroll {word} {int} times with the pointer over the {word} pane")]
 fn scroll_over_times(world: &mut VardeWorld, direction: String, times: usize, pane: String) {
@@ -4107,8 +3533,6 @@ fn pane_scrolled(world: &mut VardeWorld, pane: String, direction: String) {
 fn pane_did_not_scroll(world: &mut VardeWorld, pane: String) {
     let pane = parse_pane(&pane);
     assert!(!world.scrolled.iter().any(|(which, _)| *which == pane));
-    // The panes the core scrolls itself leave no effect behind, so the offset
-    // is the only thing that can prove they stayed put.
     match pane {
         Pane::Tree => assert_eq!(world.state.tree_scroll, 0),
         Pane::Editor => assert_eq!(world.state.editor_scroll, 0),
@@ -4146,8 +3570,6 @@ fn program_asked_for_mouse(world: &mut VardeWorld, pane: String, encoding: Strin
     }
 }
 
-// The encoding, not the exact report: which one the child reads is the whole
-// point, and the bytes of each are pinned in the mouse router's unit tests.
 #[then(expr = "the click reached the {word} program in {string} encoding")]
 #[then(expr = "the scroll reached the {word} program in {string} encoding")]
 fn reached_in_encoding(world: &mut VardeWorld, pane: String, encoding: String) {
@@ -4190,9 +3612,6 @@ fn cursor_on_line(world: &mut VardeWorld, line: usize) {
         .go_to_place(varde::Place { line, column: 1 });
 }
 
-/// Where the cursor ended up, for a jump that was asked for by a row rather
-/// than typed: the buffer clamps to what it holds, so a file too short for the
-/// line would answer line 1 and this would fail rather than pass quietly.
 #[then(expr = "the cursor is on line {int}")]
 fn cursor_should_be_on_line(world: &mut VardeWorld, line: usize) {
     let path = world.state.current_buffer.clone().expect("an open buffer");
@@ -4201,8 +3620,6 @@ fn cursor_should_be_on_line(world: &mut VardeWorld, line: usize) {
         line
     );
 }
-
-// ---- Folding a block away ----
 
 #[then(expr = "the editor hides lines {int} to {int}")]
 fn hides_lines(world: &mut VardeWorld, from: usize, to: usize) {
@@ -4237,9 +3654,6 @@ fn no_fold_toggle(world: &mut VardeWorld, line: usize) {
     assert!(!toggles.contains_key(&line), "{toggles:?}");
 }
 
-/// One offset, two words for it. They agree everywhere but Story view, where
-/// a comment row sits between two lines: `editor_scroll` counts the rows the
-/// surface draws, which is what a scenario about framing has to say.
 #[then(expr = "the editor view starts at line {int}")]
 #[then(expr = "the editor view starts at row {int}")]
 fn editor_view_starts(world: &mut VardeWorld, first: usize) {
@@ -4276,9 +3690,6 @@ fn open_with_wide_lines(world: &mut VardeWorld, path: String, lines: usize, widt
     open_buffer(world, &path, &contents.join("\n"));
 }
 
-/// A file taller than the editor with one word on two lines of it, and filler
-/// that never holds that word everywhere else — so where an occurrence is
-/// found is decided by the scenario rather than by the filler.
 #[given(
     expr = "{string} is open in the editor with {int} lines, {string} on lines {int} and {int}"
 )]
@@ -4319,9 +3730,6 @@ fn open_with_long_line(world: &mut VardeWorld, path: String, width: usize) {
     open_buffer(world, &path, &contents);
 }
 
-/// A markdown file whose one code fence holds a line wider than the pane —
-/// the case the sideways gesture exists for, since a fence is laid out one row
-/// per source line and never wrapped (ADR 0007).
 #[given(expr = "{string} is open in the editor holding a code fence {int} characters wide")]
 fn open_with_wide_fence(world: &mut VardeWorld, path: String, width: usize) {
     let contents = format!("```rust\n{}\n```\n", "x".repeat(width));
@@ -4377,13 +3785,6 @@ fn drag_ai_edge(world: &mut VardeWorld, column: u16) {
     }
 }
 
-// ---- The minimap ----
-
-/// Driven through the hit-test rather than by sending the event, so what the
-/// scenario presses is the strip's own columns: a travel that works only when
-/// the event is posted by hand is a travel nobody can perform with a mouse.
-///
-/// The row is 1-based, the way a scenario counts rows of a pane.
 #[given(expr = "I drag the minimap to row {int}")]
 #[when(expr = "I drag the minimap to row {int}")]
 fn drag_minimap(world: &mut VardeWorld, row: u16) {
@@ -4408,9 +3809,6 @@ fn drag_minimap(world: &mut VardeWorld, row: u16) {
     }
 }
 
-/// A move, not a press: what lights the slider is where the pointer is, and
-/// the event only fires when that answer changes — so this drives the hit-test
-/// rather than the field, the same way the drag step does.
 #[given(expr = "I move the pointer onto the minimap")]
 #[when(expr = "I move the pointer onto the minimap")]
 fn pointer_onto_minimap(world: &mut VardeWorld) {
@@ -4463,13 +3861,6 @@ fn minimap_mirrors(world: &mut VardeWorld, first: usize, last: usize) {
     assert_eq!(varde::minimap::mirrored(&world.state), Some((first, last)));
 }
 
-/// A scenario about the editor's own geometry says this rather than carrying
-/// the mirror's twelve columns through its arithmetic: what it pins is the
-/// slide, the box or the caret clamp, and a number that moves when an
-/// unrelated strip is widened is a number nobody can read.
-///
-/// Apart from the `Then` below on purpose — one step that set the flag and then
-/// asserted it would be an assertion that cannot fail.
 #[given(expr = "the minimap is turned off")]
 fn minimap_turned_off(world: &mut VardeWorld) {
     world.state.minimap = false;
@@ -4481,8 +3872,6 @@ fn minimap_hidden(world: &mut VardeWorld) {
     assert_eq!(varde::minimap::width(&world.state), 0);
 }
 
-/// The columns the clamp lets a line of text reach — what the mirror costs,
-/// measured where it is paid.
 #[then(expr = "the editor shows {int} columns of text")]
 fn editor_text_columns(world: &mut VardeWorld, columns: usize) {
     assert_eq!(varde::fits(&world.state).2, columns);
@@ -4499,17 +3888,7 @@ fn make_ai_pane_tall(world: &mut VardeWorld) {
     world.send(Event::ToggleTallAi);
 }
 
-// ---- F45: the Strip ----
-
-/// A `[dap.<language>]` row in the programs template's layer, which is where
-/// ADR 0021 puts a Debug adapter.
 #[given(expr = "a Debug adapter for {string} is configured")]
-///
-/// The template's row where it ships one — so a scenario's `codelldb` is the
-/// command the rust row really names — and installed, since that is what
-/// "configured" is short for here: `the command … is not on PATH` takes it
-/// away. Into the running workspace as well as the file, for the reason
-/// `load_debug_config` gives.
 fn debug_adapter_configured(world: &mut VardeWorld, language: String) {
     let adapter = shipped()
         .adapters
@@ -4527,8 +3906,6 @@ fn debug_adapter_configured(world: &mut VardeWorld, language: String) {
         Some(config) => format!("{config}\n{row}"),
         None => row,
     });
-    // And what installs it, so a scenario that takes the command away is left
-    // with a row an install would fix rather than one needing an installer.
     let installer = adapter
         .install
         .get("macos")
@@ -4537,9 +3914,6 @@ fn debug_adapter_configured(world: &mut VardeWorld, language: String) {
         world.on_path.insert(command.clone());
         world.state.commands_on_path.insert(command);
     }
-    // Spawned whatever the template says, since the scripted adapter is what
-    // answers: the Rule about adapters a language server hosts configures its
-    // own row.
     let adapter = startup::Adapter {
         server: None,
         plugin: None,
@@ -4548,7 +3922,6 @@ fn debug_adapter_configured(world: &mut VardeWorld, language: String) {
     world.state.adapters.insert(language, adapter);
 }
 
-/// A World starts with none, and nothing in these steps starts one.
 #[given(expr = "no Debug session exists")]
 fn no_debug_session(_world: &mut VardeWorld) {}
 
@@ -4566,8 +3939,6 @@ fn strip_is(world: &mut VardeWorld, rows: u32) {
     world.state.strip_height = Some(rows);
 }
 
-/// Through the hit-test, from the Strip's own top border, so the handle is
-/// one a pointer can reach.
 #[when(expr = "I drag the border above the Strip {word} {int} rows")]
 fn drag_strip(world: &mut VardeWorld, way: String, rows: u16) {
     let border = world.panes().terminal.y;
@@ -4582,8 +3953,6 @@ fn drag_strip(world: &mut VardeWorld, way: String, rows: u16) {
     world.report(mouse::Kind::LeftUp, 2, to);
 }
 
-/// The state and the rectangle both: what is remembered has to be what is
-/// drawn.
 #[then(expr = "the Strip is {int} rows tall")]
 fn strip_should_be(world: &mut VardeWorld, rows: u16) {
     assert_eq!(world.state.strip_height, Some(u32::from(rows)));
@@ -4636,10 +4005,6 @@ fn strip_shows_shells(world: &mut VardeWorld) {
     assert_eq!(lit, vec![layout::Group::Shells]);
 }
 
-// ---- F45: Breakpoints ----
-
-/// Through the hit-test, in the gutter's Breakpoint column, so the column is
-/// one a pointer can reach.
 #[given(expr = "I click the Breakpoint column on line {int}")]
 #[when(expr = "I click the Breakpoint column on line {int}")]
 fn click_breakpoint_column(world: &mut VardeWorld, line: usize) {
@@ -4650,8 +4015,6 @@ fn click_breakpoint_column(world: &mut VardeWorld, line: usize) {
     world.report(mouse::Kind::LeftDown, column, row);
     world.report(mouse::Kind::LeftUp, column, row);
 }
-
-// ---- F41: Run marks ----
 
 #[then(expr = "line {int} carries a Run mark")]
 fn carries_run_mark(world: &mut VardeWorld, line: usize) {
@@ -4673,7 +4036,6 @@ fn no_run_marks(world: &mut VardeWorld) {
     assert_eq!(varde::run::marks(&world.state), BTreeMap::new());
 }
 
-/// Through the hit-test, on the Breakpoint column the ▶ is drawn in.
 #[when(expr = "I click the Run mark on line {int}")]
 fn click_run_mark(world: &mut VardeWorld, line: usize) {
     load_debug_config(world);
@@ -4696,8 +4058,6 @@ fn run_mark_offers(world: &mut VardeWorld, step: &Step) {
     assert_eq!(offered, expected);
 }
 
-/// The click, then the key the chosen Chip names. The adapter answers, so a
-/// Debug session gets as far as its launch request.
 #[when(expr = "I choose {string} on the Run mark on line {int}")]
 fn choose_on_run_mark(world: &mut VardeWorld, choice: String, line: usize) {
     click_run_mark(world, line);
@@ -4721,7 +4081,6 @@ fn launch_arguments_do_not_name(world: &mut VardeWorld, name: String) {
     assert!(!arguments.contains(&name), "launch arguments: {arguments}");
 }
 
-/// The column right of the Breakpoint column, where the number starts.
 #[when(expr = "I click the line number of line {int}")]
 fn click_line_number(world: &mut VardeWorld, line: usize) {
     let panes = world.panes();
@@ -4732,11 +4091,6 @@ fn click_line_number(world: &mut VardeWorld, line: usize) {
     world.report(mouse::Kind::LeftUp, column, row);
 }
 
-/// Set as the core holds one, against what the file holds on the line. A file
-/// the scenario never described is given lines enough to hold it, so going to
-/// the Breakpoint lands on its line rather than clamping to an empty file's.
-/// Recorded in the project's state too, as setting it would have: a Then about
-/// what is remembered has to have something to find unchanged.
 #[given(expr = "a Breakpoint on {string} line {int}")]
 fn breakpoint_on(world: &mut VardeWorld, file: String, line: usize) {
     let relative = file.clone();
@@ -4775,8 +4129,6 @@ fn breakpoint_on(world: &mut VardeWorld, file: String, line: usize) {
     });
 }
 
-/// Written straight onto the Breakpoint the step before it set, the way a
-/// project that remembered one with its properties would hold it.
 fn with_property(
     world: &mut VardeWorld,
     file: String,
@@ -4809,8 +4161,6 @@ fn logpoint_with_message(world: &mut VardeWorld, file: String, line: usize, text
     });
 }
 
-/// The Breakpoint as the adapter was told of it, found by its line among
-/// every `setBreakpoints` request sent.
 fn sent_breakpoint(world: &VardeWorld, line: usize) -> Value {
     dap_requests(world, "setBreakpoints")
         .into_iter()
@@ -4866,8 +4216,6 @@ fn breakpoint_suspends(world: &mut VardeWorld, file: String, line: usize, scope:
     assert_eq!(suspends, scope);
 }
 
-/// Through `␣B`'s event, on the buffer on screen: the box is only ever opened
-/// on a Breakpoint somebody is looking at.
 #[given(expr = "the Breakpoint box is open for {string} line {int}")]
 fn breakpoint_box_opened(world: &mut VardeWorld, file: String, line: usize) {
     assert_eq!(world.state.current_buffer, Some(abs(world, &file)));
@@ -4888,8 +4236,6 @@ fn breakpoint_box_is_open(world: &mut VardeWorld, file: String, line: usize) {
     }
 }
 
-/// Tab to the switch, then Space: the keys, so the switch is one a keyboard
-/// can reach.
 #[when("I switch the Breakpoint's suspend scope")]
 fn switch_suspend_scope(world: &mut VardeWorld) {
     while !matches!(
@@ -4904,8 +4250,6 @@ fn switch_suspend_scope(world: &mut VardeWorld) {
     press_key(world, terminput::KeyCode::Char(' '));
 }
 
-/// Typed a key at a time into the row the box opens on, which is the
-/// condition's.
 #[given(expr = "I write the condition {string} in the Breakpoint box")]
 #[when(expr = "I write the condition {string} in the Breakpoint box")]
 fn write_condition(world: &mut VardeWorld, text: String) {
@@ -4926,9 +4270,6 @@ fn confirm_breakpoint_box(world: &mut VardeWorld) {
     press_key(world, terminput::KeyCode::Enter);
 }
 
-/// The `✎` on the line is drawn on the cursor's line while the editor has the
-/// keyboard, so both are put there first; the click then lands on the cell
-/// `debug::edit_chip` names, which `ui` draws it at.
 #[when(expr = "I click the {string} Chip on line {int}'s Breakpoint")]
 fn click_line_chip(world: &mut VardeWorld, chip: String, line: usize) {
     assert_eq!(chip, "edit", "unknown line Chip {chip:?}");
@@ -4975,8 +4316,6 @@ fn has_no_breakpoints(world: &mut VardeWorld, file: String) {
     assert_eq!(breakpoint_lines(world, &file), Vec::<usize>::new());
 }
 
-/// Added to whatever the project's state already records, the way a project
-/// that set a Breakpoint last time also recorded everything else.
 #[given(expr = "the project {string} records a Breakpoint on {string} line {int} holding {string}")]
 fn state_records_breakpoint(
     world: &mut VardeWorld,
@@ -5008,17 +4347,12 @@ fn records_breakpoint(world: &mut VardeWorld, path: String, file: String, line: 
     );
 }
 
-/// The folder is the one the scenario already opened; what makes it Bare is
-/// that its state goes to a Sidecar.
 #[given(expr = "the workspace is a Bare workspace")]
 fn workspace_is_bare(world: &mut VardeWorld) {
     world.startup.sidecar = Some(PathBuf::from(SIDECAR));
     world.state.sidecar = Some(PathBuf::from(SIDECAR));
 }
 
-/// What the edge does between two runs: a Bare workspace's state went to its
-/// Sidecar, which is deleted at exit, and the next run is another process
-/// with a Sidecar of its own — so what it reads is nothing.
 #[when(expr = "Varde starts again in the same folder")]
 fn starts_again_in_same_folder(world: &mut VardeWorld) {
     if world.startup.sidecar.is_some() {
@@ -5028,7 +4362,6 @@ fn starts_again_in_same_folder(world: &mut VardeWorld) {
     varde_starts(world);
 }
 
-/// Read off the rows the Breakpoint list draws.
 #[then(expr = "the Breakpoint list marks {string} line {int} as {string}")]
 fn breakpoint_list_marks(world: &mut VardeWorld, file: String, line: usize, mark: String) {
     let file = abs(world, &file);
@@ -5043,9 +4376,6 @@ fn breakpoint_list_marks(world: &mut VardeWorld, file: String, line: usize, mark
     assert_eq!(marked, mark);
 }
 
-/// Through the palette's event rather than by poking the field, as every other
-/// Corner occupant's Given is: the only way the list comes to be on screen is
-/// being asked for.
 #[given("the Corner shows the Breakpoint list")]
 #[when("the Corner shows the Breakpoint list")]
 fn corner_shows_breakpoint_list(world: &mut VardeWorld) {
@@ -5064,8 +4394,6 @@ fn breakpoint_list_has_focus(world: &mut VardeWorld) {
     world.state.focus = Pane::Breakpoints;
 }
 
-/// Headerless: each row is a path relative to the root and a line, in the
-/// order the list draws them.
 #[then("the Breakpoint list rows are:")]
 fn breakpoint_list_rows(world: &mut VardeWorld, step: &Step) {
     let expected: Vec<(String, usize)> = step
@@ -5087,9 +4415,6 @@ fn breakpoint_list_rows(world: &mut VardeWorld, step: &Step) {
     assert_eq!(drawn, expected);
 }
 
-/// The row's icon is drawn on the row the keyboard is on, so the keyboard is
-/// put there first; the click then goes through the hit-test at the icon's
-/// columns, hard against the right-hand border.
 #[when(expr = "I click the {string} Chip on the row for {string} line {int}")]
 fn click_breakpoint_row_chip(world: &mut VardeWorld, chip: String, file: String, line: usize) {
     assert_eq!(chip, "remove", "unknown row Chip {chip:?}");
@@ -5108,11 +4433,6 @@ fn click_breakpoint_row_chip(world: &mut VardeWorld, chip: String, file: String,
     );
 }
 
-/// A Chip on the Transport along the top border of the Corner's occupant or of
-/// the Variables, found by the hit-test that answers a click there — never
-/// driven as an event, so a Chip nobody could reach with a pointer fails here.
-/// The focused Variables row's when no Transport offers the name: `ask-ai` is
-/// on both, and the row's is asked for as "the row's".
 #[given(expr = "I click the {string} Chip")]
 #[when(expr = "I click the {string} Chip")]
 fn click_chip(world: &mut VardeWorld, chip: String) {
@@ -5186,9 +4506,6 @@ fn breakpoint_list_lists(world: &mut VardeWorld, file: String, line: usize) {
     assert!(rows.contains(&(file, line)), "rows: {rows:?}");
 }
 
-/// The last `setBreakpoints` answered the way a real adapter answers it: one
-/// entry per line asked for, in order, each bound where it was set except the
-/// one the scenario names.
 fn answer_set_breakpoints(world: &mut VardeWorld, line: usize, verdict: Value) {
     let request = last_request(world, "setBreakpoints").clone();
     let breakpoints: Vec<Value> = request["arguments"]["breakpoints"]
@@ -5228,7 +4545,6 @@ fn adapter_binds_elsewhere(world: &mut VardeWorld, line: usize, bound: usize) {
     answer_set_breakpoints(world, line, json!({ "verified": true, "line": bound }));
 }
 
-/// Through the hit-test, resting on the Breakpoint column the gutter draws it in.
 #[then(expr = "line {int}'s Breakpoint explains {string} on hover")]
 fn breakpoint_explains_on_hover(world: &mut VardeWorld, line: usize, reason: String) {
     let panes = world.panes();
@@ -5241,9 +4557,6 @@ fn breakpoint_explains_on_hover(world: &mut VardeWorld, line: usize, reason: Str
     );
 }
 
-// ---- F38: terminal splits ----
-
-/// What the edge tells: how many shells it holds, after a spawn or an exit.
 #[given(expr = "the terminal holds {int} shell(s)")]
 #[when(expr = "the terminal holds {int} shell(s)")]
 fn terminal_holds(world: &mut VardeWorld, shells: usize) {
@@ -5255,7 +4568,6 @@ fn terminal_busy(world: &mut VardeWorld, split: usize) {
     world.state.terminals[split - 1] = varde::Shell::Busy;
 }
 
-/// The same two as claims: what the Debug group hides, it does not stop.
 #[then(expr = "the terminal holds {int} shell(s)")]
 fn terminal_should_hold(world: &mut VardeWorld, shells: usize) {
     assert_eq!(world.state.terminals.len(), shells);
@@ -5333,8 +4645,6 @@ fn copy_selection(world: &mut VardeWorld) {
     world.send(Event::Copy);
 }
 
-/// Something else already put text there — another application, or an earlier
-/// copy — which is what a paste reads.
 #[given(expr = "the clipboard holds {string}")]
 fn clipboard_seeded(world: &mut VardeWorld, text: String) {
     world.clipboard = Some(text);
@@ -5355,13 +4665,9 @@ fn give_tree_pane_focus(world: &mut VardeWorld) {
     world.state.focus = Pane::Tree;
 }
 
-// ---- F11 / F12: keyboard and row actions ----
-
 #[given(expr = "I type {string}")]
 #[when(expr = "I type {string}")]
 fn type_text(world: &mut VardeWorld, text: String) {
-    // Bytes are what a hosted pane's child receives. The Snippet is Varde's
-    // own buffer, so the same typing reaches it as the editor's keys do.
     if world.state.focus == Pane::Evaluator {
         for key in text.chars() {
             world.send(Event::EditorKey(key));
@@ -5378,11 +4684,6 @@ fn paste_text(world: &mut VardeWorld, text: String) {
     ));
 }
 
-/// A paste the buffer takes, routed by `keys::on_paste` as `main` routes one.
-/// Any other destination fails the step rather than being replayed as
-/// keystrokes: a paste that stopped being the buffer's is the defect these
-/// scenarios exist for, and replaying it here would hide that behind whatever
-/// the keys then did.
 #[given(expr = "I paste {string} into the editor")]
 #[when(expr = "I paste {string} into the editor")]
 fn paste_into_editor(world: &mut VardeWorld, text: String) {
@@ -5392,9 +4693,6 @@ fn paste_into_editor(world: &mut VardeWorld, text: String) {
     }
 }
 
-/// The copy-paste round trip, routed exactly as `main` routes a paste —
-/// keystroke replay included, since a paste that reaches the buffer as keys is
-/// what the scenario is about rather than a step failure.
 #[when("I paste what was copied into the editor")]
 fn paste_what_was_copied(world: &mut VardeWorld) {
     let text = world
@@ -5426,9 +4724,6 @@ fn terminal_received(world: &mut VardeWorld, text: String) {
     );
 }
 
-/// A key Varde did not claim, as the child received it: the bytes, pinned, so
-/// a key that quietly stops reaching the shell fails here rather than reading
-/// as a pass because something arrived.
 #[then(expr = "the terminal program received the key {string}")]
 fn terminal_received_key(world: &mut VardeWorld, key: String) {
     let expected: &[u8] = match key.as_str() {
@@ -5443,8 +4738,6 @@ fn terminal_received_key(world: &mut VardeWorld, key: String) {
     );
 }
 
-/// The way out of a hosted pane is free only if the child still gets the key,
-/// so the count and the pane are both the assertion.
 #[then(expr = "the terminal received the escape twice")]
 fn terminal_received_two_escapes(world: &mut VardeWorld) {
     assert_eq!(
@@ -5516,9 +4809,6 @@ fn click_row_action(world: &mut VardeWorld, action: String, _row: String) {
     world.send(Event::RowAction(action));
 }
 
-// ---- F13: editing ----
-
-/// What HEAD holds for the file, as the edge would have told the core.
 #[given(expr = "the last commit holds {string} as:")]
 fn commit_holds(world: &mut VardeWorld, path: String, step: &Step) {
     let contents = step
@@ -5545,9 +4835,6 @@ fn no_line_marked_changed(world: &mut VardeWorld) {
     assert!(varde::changed_lines(&world.state).is_empty());
 }
 
-/// The Authorship the edge read off the commit, one row per line of the file *as the
-/// commit holds it* — the same shape and the same key as the commit's text
-/// above, because the core is told both on the same poll and never reads git.
 #[given(expr = "the last commit authored {string} as:")]
 fn commit_authored(world: &mut VardeWorld, path: String, step: &Step) {
     let authors = step
@@ -5635,11 +4922,6 @@ fn mode_should_be(world: &mut VardeWorld, mode: String) {
 #[given(expr = "I press {string} in the editor")]
 #[when(expr = "I press {string} in the editor")]
 fn press_in_editor(world: &mut VardeWorld, keys: String) {
-    // A key with a name rather than a spelling goes through the real router,
-    // because what Escape, Enter and the arrows mean depends on what is on
-    // screen: a candidate list claims them and the buffer answers them
-    // otherwise, and a step that decided for itself would prove whichever it
-    // picked instead of what the router does.
     if named_key(&keys).is_some() {
         return route_key(world, &keys, 0);
     }
@@ -5648,9 +4930,6 @@ fn press_in_editor(world: &mut VardeWorld, keys: String) {
     }
 }
 
-/// The same key, held. Written as a count rather than as twelve steps because
-/// what the Scenario is about is a selection running past the window, and
-/// twelve identical lines would bury it.
 #[given(expr = "I press {string} in the editor {int} times")]
 #[when(expr = "I press {string} in the editor {int} times")]
 fn press_in_editor_times(world: &mut VardeWorld, keys: String, times: usize) {
@@ -5673,8 +4952,6 @@ fn buffer_holds(world: &mut VardeWorld, step: &Step) {
     assert_eq!(current_buffer(world).shown(), expected);
 }
 
-/// `is_dirty` is the assertion that distinguishes refusing an edit from doing
-/// it: a buffer a refused key left alone never grew a draft.
 #[then(expr = "the buffer is unchanged")]
 fn buffer_unchanged(world: &mut VardeWorld) {
     assert!(!current_buffer(world).is_dirty(), "buffer was edited");
@@ -5726,8 +5003,6 @@ fn has_unsaved(world: &mut VardeWorld, path: String) {
 
 #[then(expr = "{string} has no unsaved edits")]
 fn has_no_unsaved(world: &mut VardeWorld, path: String) {
-    // A file with no buffer open trivially has no unsaved edits, which is the
-    // case when a read-only diff is what is on screen.
     let absolute = abs(world, &path);
     match world.state.buffers.get(&absolute) {
         Some(buffer) => assert!(!buffer.is_dirty()),
@@ -5752,8 +5027,6 @@ fn written_with(world: &mut VardeWorld, path: String, step: &Step) {
     let written = world.files.get(&abs(world, &path)).expect("a written file");
     assert_eq!(written, expected);
 }
-
-// ---- F14: highlighting ----
 
 #[given(expr = "{string} contains:")]
 fn file_contains(world: &mut VardeWorld, path: String, step: &Step) {
@@ -5856,10 +5129,6 @@ fn all_plain(world: &mut VardeWorld) {
         .all(|token| token.kind == varde::highlight::Kind::Plain));
 }
 
-/// A unified diff of two texts at Varde's pinned options, built the way the
-/// edge builds one — `git2` over the two buffers, the same origins kept and
-/// the same trailing whitespace trimmed. A scenario that hand-wrote its rows
-/// would be asserting against its own idea of a diff.
 fn unified(name: &str, old: &str, new: &str) -> Vec<DiffLine> {
     let mut options = git2::DiffOptions::new();
     options.context_lines(story::CONTEXT_LINES);
@@ -5892,10 +5161,6 @@ fn unified(name: &str, old: &str, new: &str) -> Vec<DiffLine> {
     lines
 }
 
-/// The whole of what the edge does when it reads a diff: diff the two sides,
-/// highlight each of them whole, and hand the rows to the core. A file the
-/// scenario never said HEAD held has no old side at all, which is the case a
-/// removed row cannot be coloured from.
 #[given(expr = "the diff for {string} is shown against HEAD")]
 fn show_diff_against_head(world: &mut VardeWorld, file: String) {
     let full = world.state.root.join(&file);
@@ -5956,8 +5221,6 @@ fn selected_lines(world: &mut VardeWorld, from: usize, to: usize) {
     assert_eq!(current_buffer(world).selected_lines(), Some((from, to)));
 }
 
-// ---- F15: quitting ----
-
 #[given(expr = "I quit")]
 #[when(expr = "I quit")]
 fn quit(world: &mut VardeWorld) {
@@ -5988,8 +5251,6 @@ fn state_saved(world: &mut VardeWorld) {
 fn told_unsaved(world: &mut VardeWorld) {
     assert!(world.notices.contains(&"unsaved-changes".to_string()));
 }
-
-// ---- F16: selection and clipboard ----
 
 #[given(expr = "a system clipboard is available")]
 fn clipboard_available(world: &mut VardeWorld) {
@@ -6054,11 +5315,6 @@ fn drag_span(
     world.drag(pane, (from_line, from_column), (to_line, to_column));
 }
 
-/// The button going down where a scenario names a place, which is what starts
-/// a drag: the pane the press lands in is the pane the drag belongs to for as
-/// long as it is held.
-// Spelled out because `{word}` is one word and the tree's name is two — the
-// same reason "the file tree pane has focus" has a step of its own above.
 #[when(expr = "I press at line {int} column {int} in the file tree pane")]
 fn press_at_in_tree(world: &mut VardeWorld, line: usize, column: usize) {
     press_at(world, line, column, "file tree".to_string());
@@ -6084,9 +5340,6 @@ fn drag_to(world: &mut VardeWorld, line: usize, column: usize, pane: String) {
     world.report(mouse::Kind::LeftDrag, at_column, at_row);
 }
 
-/// The pointer taken off the pane entirely, one cell past the border on the
-/// side named — which is where a neighbouring pane begins, so this is also what
-/// proves the drag stays with the pane it started in.
 #[when(expr = "I drag past the {word} of the {word} pane")]
 fn drag_past(world: &mut VardeWorld, side: String, pane: String) {
     let area = match parse_pane(&pane) {
@@ -6104,9 +5357,6 @@ fn drag_past(world: &mut VardeWorld, side: String, pane: String) {
         | Pane::Conflicts => world.panes().corner,
         Pane::Evaluator => world.panes().evaluator,
     };
-    // Straight out from where the button went down, which is the gesture a
-    // person makes: aiming at the middle of the pane instead would move the
-    // other axis too and hide which edge the scroll answered.
     let (at_column, at_row) = world.pointer.drag_from.expect("a button is down");
     let (column, row) = match side.as_str() {
         "bottom" => (at_column, area.bottom()),
@@ -6119,8 +5369,6 @@ fn drag_past(world: &mut VardeWorld, side: String, pane: String) {
     world.report(mouse::Kind::LeftDrag, column, row);
 }
 
-/// The cadence the edge replays a held drag on, fired by hand: no clock, and
-/// nothing moves in between, which is the case the feature exists for.
 #[when(expr = "I hold the drag still for {int} ticks")]
 fn hold_drag(world: &mut VardeWorld, ticks: usize) {
     for _ in 0..ticks {
@@ -6162,20 +5410,12 @@ fn drag_row(world: &mut VardeWorld, path: String) {
     world.drag(Pane::Tree, (line, 1), (line, 3));
 }
 
-// `markdown_preview.feature`'s own wording for the same assertion — stacked
-// rather than a duplicate function, the way `add_issue`/`add_typed` already do
-// it in this file.
 #[then(expr = "the selection holds {string}")]
 #[then(expr = "the selection is {string}")]
 fn selection_holds(world: &mut VardeWorld, text: String) {
     assert_eq!(world.state.selected_text(), Some(text));
 }
 
-/// Drags across whichever Preview row holds `text` — a row, never a source
-/// line, since markup is consumed and a heading's row is not its line. The
-/// drag resolves in-core: `mouse::dragged` never hands the editor pane back as
-/// a `Selection` request, so nothing here plays the edge the way `drag` does
-/// for a pty.
 #[given(expr = "I drag across the row holding {string}")]
 #[when(expr = "I drag across the row holding {string}")]
 fn drag_preview_row(world: &mut VardeWorld, text: String) {
@@ -6191,9 +5431,6 @@ fn drag_preview_row(world: &mut VardeWorld, text: String) {
     world.drag(Pane::Editor, (index + 1, column), (index + 1, last));
 }
 
-/// Where a word sits in the editor: a Preview's row while previewing, and a
-/// source line otherwise — the same distinction the drag steps make, since a
-/// heading's row is not its line.
 fn word_at(world: &mut VardeWorld, text: &str) -> (usize, usize) {
     let lines: Vec<String> = match varde::previewing(&world.state) {
         true => preview_rows(world)
@@ -6270,10 +5507,7 @@ fn clipboard_holds_lines(world: &mut VardeWorld, step: &Step) {
     assert_eq!(world.clipboard.as_deref(), Some(expected));
 }
 
-/// A linewise span's text ends with the break that ends its last line, which
-/// the two docstring assertions above cannot express: cucumber trims the
-/// newlines around a docstring, so an end that was quietly dropped would still
-/// read as a pass. These add it back.
+/// cucumber trims the newlines around a docstring, so the trailing line break is added back here.
 #[given("the selection holds the lines:")]
 #[then("the selection holds the lines:")]
 fn selection_holds_whole_lines(world: &mut VardeWorld, step: &Step) {
@@ -6306,8 +5540,6 @@ fn terminal_clipboard(world: &mut VardeWorld, text: String) {
     assert_eq!(world.terminal_clipboard.as_deref(), Some(text.as_str()));
 }
 
-// ---- F17: reaching the review flow ----
-
 #[given(expr = "the diff for {string} is shown")]
 #[when(expr = "the diff for {string} is shown")]
 fn show_diff(world: &mut VardeWorld, file: String) {
@@ -6326,9 +5558,6 @@ fn show_diff(world: &mut VardeWorld, file: String) {
     });
 }
 
-/// A diff of one row, as wide as the scenario needs — the case the sideways
-/// gesture exists for, since the mock diff above holds nothing that reaches the
-/// pane's right edge.
 #[given(expr = "the diff for {string} is shown holding a {int}-character line")]
 fn show_wide_diff(world: &mut VardeWorld, file: String, width: usize) {
     world.send(Event::ShowDiff {
@@ -6453,11 +5682,6 @@ fn start_ai(world: &mut VardeWorld) {
     });
 }
 
-/// The one scenario that names exact bytes, because the reported symptom is
-/// exactly that a modifier went missing: the old path sent a bare carriage
-/// return for Option+Enter, which is why the AI submitted the prompt instead of
-/// growing a line. Non-empty bytes would not have caught that. `\e` is the
-/// escape byte the Alt prefix is made of.
 #[then(expr = "the AI received the bytes {string}")]
 fn ai_received_the_bytes(world: &mut VardeWorld, bytes: String) {
     let expected: Vec<u8> = bytes
@@ -6505,8 +5729,6 @@ fn ai_stopped(world: &mut VardeWorld) {
     assert!(world.ai_stopped);
 }
 
-/// The absence: authoring a Story set for a repository the session knows
-/// nothing about must not cost the reviewer the session they already had.
 #[then(expr = "no AI session was stopped")]
 fn ai_not_stopped(world: &mut VardeWorld) {
     assert!(!world.ai_stopped, "the AI session was stopped");
@@ -6594,9 +5816,6 @@ fn force_close_buffer(world: &mut VardeWorld) {
     world.send(Event::CloseBuffer { force: true });
 }
 
-/// Through the `:` line rather than the event behind it, so the command that
-/// spells the gesture is what these Scenarios exercise: an event sent by hand
-/// goes green over a command nobody can type.
 #[when(expr = "I close every clean buffer")]
 fn close_clean_buffers(world: &mut VardeWorld) {
     run_story_command(world, ":qa".to_string());
@@ -6617,8 +5836,6 @@ fn no_buffer_shown(world: &mut VardeWorld) {
     assert_eq!(world.state.current_buffer, None);
 }
 
-/// The command line is a draft the edge holds, not core state, so a scenario
-/// asks the drafts the router was handed.
 #[then(expr = "the command line is open")]
 fn command_line_open(world: &mut VardeWorld) {
     assert_eq!(world.drafts.command.as_deref(), Some(""));
@@ -6629,14 +5846,10 @@ fn command_line_closed(world: &mut VardeWorld) {
     assert_eq!(world.drafts.command, None);
 }
 
-// ---- F19: several buffers ----
-
 #[given(expr = "I open {string}")]
 #[when(expr = "I open {string}")]
 fn open_named(world: &mut VardeWorld, path: String) {
     let absolute = abs(world, &path);
-    // What the edge reads off disk: whatever the scenario put there, and a
-    // stand-in for a file it never described.
     let contents = world
         .files
         .get(&absolute)
@@ -6706,8 +5919,6 @@ fn buffer_mark_is(world: &mut VardeWorld, path: String, expected: String) {
     assert_eq!(actual, expected);
 }
 
-// ---- F20: filtering the tree ----
-
 #[given("the project contains:")]
 fn project_contains(world: &mut VardeWorld, step: &Step) {
     let files: Vec<String> = step
@@ -6723,8 +5934,6 @@ fn project_contains(world: &mut VardeWorld, step: &Step) {
 
 #[given(expr = "the project gains {string}")]
 fn project_gains(world: &mut VardeWorld, path: String) {
-    // Only on disk: whether the core comes to know about it is the behaviour
-    // under test.
     world.indexable.push(path);
 }
 
@@ -6769,10 +5978,6 @@ fn best_match_is(world: &mut VardeWorld, path: String) {
     );
 }
 
-/// What the pane draws, not what the tree remembers. A filtered row is shown
-/// open so its match is visible without the filter expanding the tree behind
-/// it — conflating the two is what left every folder a match sat under
-/// standing open once the filter was cleared.
 #[then(expr = "the row {string} is expanded")]
 fn row_is_expanded(world: &mut VardeWorld, path: String) {
     let wanted = abs(world, &path);
@@ -6797,8 +6002,6 @@ fn accept_filter(world: &mut VardeWorld) {
 fn tree_filter_state(world: &mut VardeWorld, expected: String) {
     assert_eq!(varde::filter::view_state(&world.state), expected);
 }
-
-// ---- F21: content search ----
 
 #[given("the project holds:")]
 fn project_holds(world: &mut VardeWorld, step: &Step) {
@@ -6868,8 +6071,6 @@ fn search_query_is(world: &mut VardeWorld, expected: String) {
     assert_eq!(search(world).query.shown(), expected);
 }
 
-/// Key by key through the router, as the box receives them: a whole query sent
-/// at once could not land in the middle of one already typed.
 #[given(expr = "I type {string} into the search")]
 #[when(expr = "I type {string} into the search")]
 fn type_into_search(world: &mut VardeWorld, query: String) {
@@ -6942,11 +6143,6 @@ fn previous_file_in_search(world: &mut VardeWorld) {
     world.send(Event::MoveHitFile(Direction::Up));
 }
 
-/// A click on a row of the box as it is drawn, 1-based, routed through the
-/// mouse the way the edge routes one: the box is not a pane, so the row is
-/// turned into a screen position off the box's own rectangle, and `mouse`
-/// resolves it back into whatever the row holds. Row 6 of a box that draws 5 is
-/// its bottom border — the chrome scenario relies on that.
 #[given(expr = "I click result row {int}")]
 #[when(expr = "I click result row {int}")]
 fn click_result_row(world: &mut VardeWorld, row: u16) {
@@ -6972,8 +6168,6 @@ fn click_result_row(world: &mut VardeWorld, row: u16) {
     }
 }
 
-/// The first row of the list the box shows, 1-based — rows and not hits,
-/// because the files are headings between them.
 #[then(expr = "the results start at row {int}")]
 fn results_start_at_row(world: &mut VardeWorld, row: usize) {
     assert_eq!(search(world).scroll + 1, row);
@@ -7001,8 +6195,6 @@ fn complete_search(world: &mut VardeWorld) {
     world.send(Event::CompleteSearch);
 }
 
-// ---- F21: finding inside the buffer ----
-
 #[then(expr = "the in-file search is open")]
 fn find_is_open(world: &mut VardeWorld) {
     assert!(world.state.find.is_some());
@@ -7018,9 +6210,6 @@ fn there_are_no_matches(world: &mut VardeWorld) {
     assert!(varde::matches(&world.state, ..).is_empty());
 }
 
-/// Key by key through the router, because that is what the editor sees: the
-/// cursor moves as the query grows, so a whole query sent at once would prove
-/// nothing — and a key lands wherever the query's caret is.
 #[given(expr = "I type {string} into the in-file search")]
 #[when(expr = "I type {string} into the in-file search")]
 #[given(expr = "I type {string} into the replace box")]
@@ -7082,8 +6271,6 @@ fn replace_box_closed(world: &mut VardeWorld) {
     assert!(!matches!(find_keys(world), varde::FindKeys::Replace(_)));
 }
 
-/// Through the mouse, at the column `find_line` draws the icon in — the pieces
-/// the renderer draws and the hit-test walks.
 #[given(expr = "I click the {string} icon on the in-file search line")]
 #[when(expr = "I click the {string} icon on the in-file search line")]
 fn click_find_icon(world: &mut VardeWorld, icon: String) {
@@ -7118,8 +6305,6 @@ fn nothing_highlighted(world: &mut VardeWorld) {
     assert_eq!(varde::matches(&world.state, ..), Vec::new());
 }
 
-/// Every match, not only the one the cursor is on — walking the file is not the
-/// only way to know how many there are.
 #[then(expr = "the highlighted matches are:")]
 fn highlighted_matches(world: &mut VardeWorld, step: &Step) {
     let expected: Vec<(usize, usize)> = step
@@ -7186,12 +6371,6 @@ fn tree_not_focused(world: &mut VardeWorld) {
     world.state.tree_selection = None;
 }
 
-// ---- F22: the story artifact, and the spine it becomes ----
-
-/// A story artifact, serialised straight from a `serde_json::Value` tree
-/// rather than through the library's own (`Deserialize`-only) types — the
-/// world plays the CLI that writes one, and the CLI has no reason to link
-/// against `varde`.
 fn build_story(
     base: &str,
     head: &str,
@@ -7225,9 +6404,6 @@ fn build_step(
     to: u32,
     text: &str,
 ) -> Value {
-    // An empty text is no `text` field at all: the AI stopped writing one, so
-    // the artifact a Scenario hands over should not carry an empty string the
-    // real thing would never write.
     let mut site = json!({ "file": file, "side": side, "kind": kind, "from": from, "to": to });
     if !text.is_empty() {
         site["text"] = json!(text);
@@ -7241,13 +6417,6 @@ fn build_step(
     })
 }
 
-/// The already-loaded artifact, back into the JSON a re-authoring run would
-/// write — needed only so "the story set is re-authored" can resend whatever
-/// a `Given` step (e.g. one that attaches a Prediction) left the in-memory
-/// artifact holding. The library's own types stay `Deserialize`-only, same
-/// reason `build_story`/`build_step` above go through `serde_json::Value`
-/// rather than the library's types: nothing in `src/` ever writes an
-/// artifact back out, so nothing there should know how.
 fn artifact_to_json(artifact: &story::Artifact) -> Value {
     json!({
         "protocolVersion": artifact.protocol_version,
@@ -7317,8 +6486,6 @@ fn step_to_json(step: &story::Step) -> Value {
     value
 }
 
-/// A table cell by header name rather than position, since `story` and `text`
-/// are optional columns a scenario may leave out.
 fn column<'a>(headers: &[String], row: &'a [String], name: &str) -> Option<&'a str> {
     headers
         .iter()
@@ -7326,9 +6493,6 @@ fn column<'a>(headers: &[String], row: &'a [String], name: &str) -> Option<&'a s
         .map(|index| row[index].as_str())
 }
 
-// "held:" is the old side of a change, so it also seeds `held` for the
-// Remainder's subtraction; "holds:" is a file's current content unrelated to
-// any change, so it only ever touches `files`.
 #[given(expr = "{string} held:")]
 fn file_held(world: &mut VardeWorld, path: String, step: &Step) {
     let contents = step
@@ -7355,8 +6519,6 @@ fn file_holds(world: &mut VardeWorld, path: String, step: &Step) {
     world.files.insert(full, contents);
 }
 
-/// A file long enough to be scrolled, without a forty-line docstring in the
-/// feature saying nothing but its own length.
 #[given(expr = "{string} holds {int} numbered lines")]
 fn file_holds_numbered_lines(world: &mut VardeWorld, path: String, lines: usize) {
     let contents: Vec<String> = (1..=lines).map(|line| format!("line {line}")).collect();
@@ -7389,9 +6551,6 @@ fn file_is_gone(world: &mut VardeWorld, path: String) {
     world.recompute_file_hunks();
 }
 
-/// Seeds a file with a real hunk no Story's Site names, so the Remainder has
-/// something bare to walk — real subtraction over real hunks, never a
-/// fictional count.
 #[given(expr = "{string} has an unclaimed hunk")]
 fn file_has_an_unclaimed_hunk(world: &mut VardeWorld, path: String) {
     let full = world.state.root.join(&path);
@@ -7402,13 +6561,6 @@ fn file_has_an_unclaimed_hunk(world: &mut VardeWorld, path: String) {
     world.recompute_file_hunks();
 }
 
-/// The same bare seeding, shaped so the hunk git finds spans exactly `from`
-/// to `to`: the file ends at `to` and differs from `from + CONTEXT_LINES`
-/// onward, so the leading context opens the hunk at `from` and the end of
-/// the file closes it at `to`. A span too short to hold that much context
-/// leaves the two sides identical and git finds no hunk at all, which would
-/// fail at the scenario's `Then` with nothing pointing back here — so it
-/// refuses out loud instead.
 #[given(expr = "{string} has an unclaimed hunk covering lines {int} to {int}")]
 fn file_has_an_unclaimed_hunk_covering(world: &mut VardeWorld, path: String, from: u32, to: u32) {
     assert!(
@@ -7517,8 +6669,6 @@ fn story_holds_the_steps(world: &mut VardeWorld, name: String, step: &Step) {
     });
 }
 
-/// The already-loaded story set's own steps, found by claim rather than by
-/// index — a scenario names a Step the way a reviewer would.
 fn step_named<'a>(artifact: &'a mut story::Artifact, claim: &str) -> &'a mut story::Step {
     artifact
         .stories
@@ -7651,8 +6801,6 @@ fn story_set_claims(world: &mut VardeWorld, step: &Step) {
             .expect("a number");
         let text = column(headers, row, "text").unwrap_or("");
         let mut claimed = build_step(&format!("s{index}"), file, side, kind, from, to, text);
-        // A cited value, written as the value and the `file:line` it is
-        // claimed to come from — the pair the arrival check compares.
         if let (Some(value), Some(cite)) =
             (column(headers, row, "value"), column(headers, row, "cite"))
         {
@@ -7715,9 +6863,6 @@ fn story_set_holds(world: &mut VardeWorld, step: &Step) {
     });
 }
 
-/// Back to the editing view, so the next "I open Story view" is a real
-/// switch: `switch_view` returns early for the view already on screen, so
-/// re-opening without leaving reads nothing off disk.
 #[given(expr = "I leave Story view")]
 #[when(expr = "I leave Story view")]
 fn leave_story_view(world: &mut VardeWorld) {
@@ -7731,9 +6876,6 @@ fn open_story_view(world: &mut VardeWorld) {
     pick_palette_entry(world, "Story");
 }
 
-/// The Story's index in `story::spine`'s order — the same order
-/// `Event::EnterStory` reads by, so a scenario can name a Story rather than
-/// its position.
 fn story_index(world: &VardeWorld, name: &str) -> usize {
     let story::Set::Loaded(artifact) = &world.state.story_set else {
         panic!("no story set loaded");
@@ -7770,8 +6912,6 @@ fn cursor_is_in(world: &mut VardeWorld, path: String) {
     assert_eq!(world.state.current_buffer, Some(expected));
 }
 
-/// Walking the Remainder is never a Story: it has no Step, so the band has
-/// nothing to claim.
 #[then(expr = "the band has no claim")]
 fn band_has_no_claim(world: &mut VardeWorld) {
     assert!(story::current_step(&world.state).is_none());
@@ -7783,10 +6923,6 @@ fn no_prediction_is_offered(world: &mut VardeWorld) {
     assert!(prediction.is_none());
 }
 
-/// Walking a Story, set up directly rather than through `Event::EnterStory`:
-/// this is scenario setup, not the thing under test, and going through the
-/// real effect would record an open the later "no file was opened" scenarios
-/// must not see.
 #[given(expr = "I am walking {string}")]
 fn set_walking(world: &mut VardeWorld, name: String) {
     world.state.view = View::Story;
@@ -7831,7 +6967,6 @@ fn still_walking(world: &mut VardeWorld, name: String) {
     assert_eq!(walking_story, Some(index));
 }
 
-/// Enters the story, then steps forward until the given (1-based) Step.
 #[given(expr = "I walked to step {int} of {string}")]
 #[when(expr = "I walk to step {int} of {string}")]
 fn walk_to_step(world: &mut VardeWorld, target: usize, name: String) {
@@ -7841,8 +6976,6 @@ fn walk_to_step(world: &mut VardeWorld, target: usize, name: String) {
     }
 }
 
-/// The current Story's Step by its 1-based position — the same numbering a
-/// scenario reads the spine or the walkthrough by.
 fn nth_step(world: &VardeWorld, index: usize) -> &story::Step {
     let Some(story::Walking::Story { story, .. }) = world.state.walking else {
         panic!("walking a story");
@@ -7853,9 +6986,6 @@ fn nth_step(world: &VardeWorld, index: usize) -> &story::Step {
     &artifact.stories[story].steps[index - 1]
 }
 
-/// Reads the loaded set straight through rather than through `nth_step`: the
-/// text Varde filled in is a fact about the set, and a Scenario should not
-/// have to start walking a Story to see it.
 #[then(expr = "the site text of step {int} is {string}")]
 fn site_text_of_step_is(world: &mut VardeWorld, index: usize, expected: String) {
     let story::Set::Loaded(artifact) = &world.state.story_set else {
@@ -7869,15 +6999,11 @@ fn site_text_of_step_is(world: &mut VardeWorld, index: usize, expected: String) 
     assert_eq!(sites[index - 1].text, expected);
 }
 
-/// Holds back the edge's answer about what the Sites hold, so a Scenario can
-/// watch a parsed set stay unwalkable while the read is outstanding.
 #[given(expr = "Varde has not yet read what the sites hold")]
 fn sites_not_yet_read(world: &mut VardeWorld) {
     world.hold_site_texts = true;
 }
 
-/// By position, not by name: a set that is not loaded has no spine to look a
-/// name up in, which is exactly the Scenario this exists for.
 #[when(expr = "I choose the first story from the spine")]
 fn choose_first_story(world: &mut VardeWorld) {
     world.send(Event::EnterStory(0));
@@ -7937,9 +7063,6 @@ fn reindent_line_in_editor(world: &mut VardeWorld, line: usize, path: String) {
     buffer.escape();
 }
 
-/// Clears a whole line, then types replacement text into it — used to make an
-/// in-editor edit that genuinely changes a Site's text, as opposed to a
-/// reindent that only shifts its whitespace.
 fn edit_line(world: &mut VardeWorld, path: &str, line: usize, text: &str) {
     let full = world.state.root.join(path);
     let buffer = world.state.buffers.get_mut(&full).expect("buffer open");
@@ -7952,11 +7075,6 @@ fn edit_line(world: &mut VardeWorld, path: &str, line: usize, text: &str) {
     buffer.escape();
 }
 
-// ---- The Site mark ----
-
-/// The mark names a file the way a Site spells it; the file on screen has to
-/// be spelt the same way or the bar lands on nothing. A Guest repo's file was
-/// spelt from the workspace root and never matched.
 #[then(expr = "the site mark is drawn on the file on screen")]
 fn site_mark_is_on_screen(world: &mut VardeWorld) {
     let marked = story::mark(&world.state);
@@ -7988,11 +7106,6 @@ fn site_mark_covers(world: &mut VardeWorld, from: u32, to: u32, path: String) {
     );
 }
 
-/// The promise framing makes, asked of the rows the pane actually shows: a
-/// Site is a range, so "in view" is a claim about both its ends. In rows, via
-/// `story::row_of`, and against `varde::fits` rather than a count of its own —
-/// a scenario recomputing the pane's size would be asserting its own
-/// arithmetic.
 #[then(expr = "the whole site is in view")]
 fn whole_site_is_in_view(world: &mut VardeWorld) {
     let marked = story::mark(&world.state);
@@ -8037,8 +7150,6 @@ fn no_site_mark(world: &mut VardeWorld) {
     );
 }
 
-// ---- The Site's diff ----
-
 #[then(expr = "line {int} of {string} is marked as added")]
 fn line_is_marked_as_added(world: &mut VardeWorld, line: u32, path: String) {
     assert_eq!(story::shown_file(&world.state), path);
@@ -8059,9 +7170,6 @@ fn line_is_not_marked_as_added(world: &mut VardeWorld, line: u32, path: String) 
     );
 }
 
-/// Every removed row the code surface draws, with the line it sits under —
-/// read off `story::rows`, the map the renderer, the caret and the scroll
-/// clamp all read.
 fn removed_rows(world: &VardeWorld) -> Vec<(u32, String)> {
     let lines = current_buffer(world).shown().split('\n').count();
     let mut under = 0;
@@ -8098,8 +7206,6 @@ fn code_shows_no_removed_rows(world: &mut VardeWorld) {
     assert_eq!(removed_rows(world), vec![]);
 }
 
-/// What the pane title says keys will do — the buffer's own mode everywhere but
-/// a walk, which claims every editor key before the buffer sees one.
 #[then(expr = "the editor mode label is {string}")]
 fn editor_mode_label_is(world: &mut VardeWorld, expected: String) {
     let label = varde::mode_label(&world.state, current_buffer(world));
@@ -8111,15 +7217,11 @@ fn step_view_state_is(world: &mut VardeWorld, expected: String) {
     assert_eq!(story::mark(&world.state).as_str(), expected);
 }
 
-/// Dimming is not a query of its own: a line is dimmed exactly when it is
-/// outside the mark, so this asserts the same answer the renderer derives.
 #[then(expr = "line {int} of {string} is dimmed")]
 fn line_is_dimmed(world: &mut VardeWorld, line: u32, path: String) {
     assert!(!story::mark(&world.state).covers(&path, line));
 }
 
-/// Widens a Step's Site, carrying its stored text with it — a range moved
-/// without its text would read as stale, which is a different scenario.
 #[given(expr = "the step {string} covers lines {int} to {int}")]
 fn step_covers_lines(world: &mut VardeWorld, claim: String, from: u32, to: u32) {
     let file = {
@@ -8164,8 +7266,6 @@ fn step_points_at_context(world: &mut VardeWorld, claim: String) {
     step_named(artifact, &claim).site.kind = story::Kind::Context;
 }
 
-/// A Prediction with no scenario-visible content: these scenarios care that
-/// the overlay is up at all, not what it offers.
 #[given(expr = "the step {string} carries a prediction")]
 fn step_carries_a_prediction(world: &mut VardeWorld, claim: String) {
     let choices = ["a", "b", "c"]
@@ -8207,9 +7307,6 @@ fn story_set_range_is(world: &mut VardeWorld, spelling: String) {
     };
 }
 
-/// What committing does to an old-side Site: `HEAD` moves to whatever the
-/// working tree currently holds, which is what makes an old-side Site over
-/// an uncommitted range vulnerable to staleness in the first place.
 #[given(expr = "the working tree is committed")]
 #[when(expr = "the working tree is committed")]
 fn working_tree_is_committed(world: &mut VardeWorld) {
@@ -8221,8 +7318,6 @@ fn working_tree_is_committed(world: &mut VardeWorld) {
 
 #[given(expr = "authoring has begun for {string}")]
 fn authoring_begun(world: &mut VardeWorld, spelling: String) {
-    // The snapshot "the review list is unchanged" compares against, taken
-    // before the real confirm flow runs.
     world.repo_before = Some(review::list(&world.state));
     world.state.modal = Modal::ConfirmStory {
         spelling,
@@ -8273,8 +7368,6 @@ fn artifact_with_choice_count(world: &mut VardeWorld, count: u32) {
 fn story_set_exists_for_range(world: &mut VardeWorld, spelling: String) {
     let (base, head, _) = story::revisions(&spelling).expect("a range");
     let claimed = build_step("s1e1", "src/keys.rs", "new", "changed", 1, 1, "x");
-    // The Step has to point at real, changed code, or the arrival checks
-    // refuse the set before any of this scenario's question is reached.
     let file = world.state.root.join("src/keys.rs");
     world.known_files.insert(file.clone());
     world.files.insert(file, "x".to_string());
@@ -8291,9 +7384,6 @@ fn story_set_exists_for_range(world: &mut VardeWorld, spelling: String) {
     world.last_authored_range = Some((base.to_string(), head.to_string()));
 }
 
-/// A story set already in the folder, writing no `site.text` — the shape the
-/// AI leaves behind now that Varde fills the text in. Written into the folder
-/// rather than sent as an event, so opening Story view really re-reads it.
 #[given(expr = "a story set on disk claims lines {int} to {int} of {string}")]
 fn story_set_on_disk_claims(world: &mut VardeWorld, from: u32, to: u32, path: String) {
     let claimed = build_step("s1e1", &path, "new", "changed", from, to, "");
@@ -8396,9 +7486,6 @@ fn story_view_state(world: &mut VardeWorld, expected: String) {
     assert_eq!(story::view_state(&world.state), expected);
 }
 
-/// A refused set has to say which Step failed and how, or the reviewer is
-/// left rereading a 70KB artifact. The Step's id and the fault's own word,
-/// never the sentence around them.
 #[then(expr = "the refusal names step {string} as {string}")]
 fn refusal_names_step(world: &mut VardeWorld, id: String, fault: String) {
     let story::Set::Refused { because } = &world.state.story_set else {
@@ -8407,10 +7494,6 @@ fn refusal_names_step(world: &mut VardeWorld, id: String, fault: String) {
     assert!(because.contains(&format!("{id}: {fault}")), "{because}");
 }
 
-/// The fix request is the send after the authoring prompt, so it is read off
-/// the end rather than the front. The Step's id and the fault's own word,
-/// never the sentence around them — the same pair a refusal names, because the
-/// two must not drift apart.
 #[then(expr = "the fix request names step {string} as {string}")]
 fn fix_request_names_step(world: &mut VardeWorld, id: String, fault: String) {
     assert!(
@@ -8422,8 +7505,6 @@ fn fix_request_names_step(world: &mut VardeWorld, id: String, fault: String) {
     assert!(request.contains(&format!("`{id}`: {fault}")), "{request}");
 }
 
-/// A fix request that named a passing Step would have the AI rewriting the
-/// whole set, which is the ten minutes this exists to save.
 #[then(expr = "the fix request does not name step {string}")]
 fn fix_request_does_not_name_step(world: &mut VardeWorld, id: String) {
     let request = fix_request(world);
@@ -8587,8 +7668,6 @@ fn spine_is_empty(world: &mut VardeWorld) {
     assert!(story::spine(&world.state).is_empty());
 }
 
-// ---- F22: resolving a story range ----
-
 #[given(expr = "I run {string} in the editor")]
 #[when(expr = "I run {string} in the editor")]
 #[given(expr = "I run {string}")]
@@ -8645,9 +7724,6 @@ fn ladder_candidate_resolves_to(world: &mut VardeWorld, source: String, branch: 
     }
 }
 
-// Narrative only: the offline ladder resolves by existence, never by
-// ancestry — a candidate that resolves is used as-is, and where the two have
-// parted is git's question, asked by the three dots the spelling carries.
 #[given(expr = "{string} has commits {string} does not")]
 fn has_commits_the_other_does_not(_world: &mut VardeWorld, _branch: String, _of: String) {}
 
@@ -8659,9 +7735,6 @@ fn no_default_branch_resolves(world: &mut VardeWorld) {
     world.probes.clear();
 }
 
-/// The refs the repository states about itself. `seconds` is the commit date,
-/// which is what the list is ordered by — a bare number, because a scenario
-/// about ordering is about which is newer and nothing else.
 #[given(expr = "the repository has branches:")]
 fn repository_has_branches(world: &mut VardeWorld, step: &Step) {
     let rows = step.table().expect("a table of branches").rows.clone();
@@ -8680,9 +7753,6 @@ fn repository_has_branches(world: &mut VardeWorld, step: &Step) {
         .collect();
 }
 
-/// A branch pushed to the remote after the clone — the one thing only a fetch
-/// puts in the picker. Newer than every branch the scenario declared, because
-/// a branch pushed after the clone is the newest thing there is to list.
 #[when(expr = "the branch {string} appears on the remote")]
 fn branch_appears_on_the_remote(world: &mut VardeWorld, name: String) {
     let when = world
@@ -8705,24 +7775,14 @@ fn git_is_installed(world: &mut VardeWorld) {
     world.tell_core();
 }
 
-/// The one runtime dependency a Guest repo adds. Stated rather than assumed,
-/// because the core is told what is on the machine and never remembers it.
 #[given(expr = "git is not installed")]
 fn git_is_not_installed(world: &mut VardeWorld) {
     world.git_on_path = false;
     world.tell_core();
 }
 
-/// The command, held to the three things that make it the user's own git in
-/// the shell pane (ADR 0015): the URL as pasted, a destination inside the
-/// Sidecar, and the exit status written to the sentinel last. Where the
-/// Sidecar is spelled is not a scenario's business, so the step derives it
-/// the way the step for a review written outside every workspace does.
 #[then(expr = "the terminal has cloned {string} into the Sidecar")]
 fn terminal_has_cloned(world: &mut VardeWorld, url: String) {
-    // The last command, not the only one: a session that has already cloned
-    // one repository can clone a second. Cloning this URL *twice* is still
-    // held against, since that is the whole of what a fetch exists to avoid.
     let command = world.executed.last().expect("a command");
     assert_eq!(
         world
@@ -8744,19 +7804,12 @@ fn terminal_has_cloned(world: &mut VardeWorld, url: String) {
         command.contains(&guest.display().to_string()),
         "not a clone into the Sidecar: {command}"
     );
-    // Never `&& touch`: a clone that failed has to leave a file that says so.
-    // How the line is spelled is `story::clone_command`'s own unit test; what
-    // a scenario is held to is that the status is what lands in the sentinel.
     assert!(
         command.contains("echo $? >") && command.contains(&sentinel.display().to_string()),
         "the sentinel carries no exit status: {command}"
     );
 }
 
-/// The second `:story?` on a URL already downloaded: one clone for the
-/// session, and a fetch aimed at the copy the clone left. `origin` and not the
-/// URL, because a fetch given a URL updates no remote-tracking ref — how the
-/// line is spelled is `story::download_command`'s own unit test.
 #[then(expr = "the terminal has fetched {string}")]
 fn terminal_has_fetched(world: &mut VardeWorld, url: String) {
     let guest = Path::new(SIDECAR).join(story::guest_name(&url));
@@ -8784,9 +7837,6 @@ fn terminal_has_fetched(world: &mut VardeWorld, url: String) {
     );
 }
 
-/// A fetch that failed is a fetch: the copy on disk is still the repository
-/// under review, and nothing about it is thrown away because a download of
-/// something newer did not arrive.
 #[then(expr = "the Guest repo is still there")]
 fn guest_repo_is_still_there(world: &mut VardeWorld) {
     let guest = PathBuf::from(SIDECAR).join(story::guest_name("git@github.com:them/theirs.git"));
@@ -8800,10 +7850,6 @@ fn guest_repo_is_still_there(world: &mut VardeWorld) {
     );
 }
 
-/// Absolute and in the Sidecar, both of them: the prompt goes to a session
-/// whose working directory Varde did not set and does not move, so a relative
-/// path names a file somewhere nobody agreed on — and in the workspace it
-/// would be a file in a folder Varde promises to write nothing into.
 #[then(expr = "the authoring prompt names the story set in the Sidecar")]
 fn prompt_names_the_set_in_the_sidecar(world: &mut VardeWorld) {
     let prompt = ai_sends(world).first().cloned().expect("a prompt");
@@ -8824,8 +7870,6 @@ fn prompt_names_the_set_in_the_sidecar(world: &mut VardeWorld) {
     }
 }
 
-/// Written beside the set, which for a Guest repo means beside it in the
-/// Sidecar: the prompt has already pointed the AI at this exact path.
 #[then(expr = "the story context file was written into the Sidecar")]
 fn context_written_into_the_sidecar(world: &mut VardeWorld) {
     let written: Vec<&PathBuf> = world
@@ -8843,8 +7887,6 @@ fn context_written_into_the_sidecar(world: &mut VardeWorld) {
     );
 }
 
-/// The clone and nothing else: the authoring session's working directory is
-/// nothing Varde moves, so no `cd` and no second command follow it.
 #[then(expr = "the terminal has run nothing but the clone")]
 fn terminal_ran_only_the_clone(world: &mut VardeWorld) {
     let [clone] = world.executed.as_slice() else {
@@ -8853,8 +7895,6 @@ fn terminal_ran_only_the_clone(world: &mut VardeWorld) {
     assert!(clone.contains("git clone"), "not a clone: {clone}");
 }
 
-/// A file in the clone rather than in the workspace — the Sidecar path the
-/// core derived, so a scenario never spells the Sidecar itself.
 fn guest_path(world: &VardeWorld, file: &str) -> PathBuf {
     world
         .state
@@ -8875,13 +7915,9 @@ fn guest_file_holds(world: &mut VardeWorld, file: String, step: &Step) {
     let path = guest_path(world, &file);
     world.known_files.insert(path.clone());
     world.files.insert(path, contents);
-    // The poll the edge runs against the repository under review, which for a
-    // Guest repo is the clone: a Site's staleness is judged against what its
-    // lines hold there.
     world.recompute_file_hunks();
 }
 
-/// A Guest repo's file as its range's base held it — the "held:" of the clone.
 #[given(expr = "the Guest repo's file {string} held:")]
 #[when(expr = "the Guest repo's file {string} held:")]
 fn guest_file_held(world: &mut VardeWorld, file: String, step: &Step) {
@@ -8920,11 +7956,6 @@ fn guest_file_was_opened(world: &mut VardeWorld, file: String) {
     );
 }
 
-/// The watcher that already exists is what sees a clone end: the directory
-/// git made in the Sidecar and the sentinel it wrote there, arriving as the
-/// same event a file landing in any other watched folder does. The status is
-/// the sentinel's contents, so a clone that failed is a file that says so
-/// rather than a file that never comes.
 #[when(expr = "the clone finishes with exit status {string}")]
 #[when(expr = "the fetch finishes with exit status {string}")]
 fn clone_finishes(world: &mut VardeWorld, status: String) {
@@ -8945,9 +7976,6 @@ fn on_the_branch(world: &mut VardeWorld, name: String) {
     world.on_branch = name;
 }
 
-/// Walked to with the arrows and picked with Enter, never reached into: what
-/// the picker answers to is the router's answer, and walking is what holds the
-/// selection to being reachable with no modifier (R31.11).
 #[when(expr = "I pick the branch {string}")]
 fn pick_the_branch(world: &mut VardeWorld, name: String) {
     let row = |world: &VardeWorld| match &world.state.modal {
@@ -8968,9 +7996,6 @@ fn pick_the_branch(world: &mut VardeWorld, name: String) {
     press_key(world, terminput::KeyCode::Enter);
 }
 
-/// Typed a character at a time through the router, for the reason picking a
-/// branch is walked to rather than reached into: what narrows the list is the
-/// keys a reviewer presses.
 #[when(expr = "I type {string} in the picker")]
 fn type_in_the_picker(world: &mut VardeWorld, text: String) {
     for character in text.chars() {
@@ -9015,8 +8040,6 @@ fn branch_was_checked_out(world: &mut VardeWorld, name: String) {
     assert_eq!(world.checkouts, [(world.state.root.clone(), name)]);
 }
 
-/// In the clone, not in the workspace: the branch belongs to a repository the
-/// folder Varde was opened on knows nothing about.
 #[then(expr = "the branch {string} was checked out in the Guest repo")]
 fn branch_was_checked_out_in_the_guest(world: &mut VardeWorld, name: String) {
     let guest = world
@@ -9041,8 +8064,6 @@ fn no_branch_was_checked_out(world: &mut VardeWorld) {
     );
 }
 
-/// Both branches, because Varde does not check the original one back out: the
-/// promise is that Story view says where the reviewer is *and* where they were.
 #[then(expr = "the story view is on the branch {string} and left the branch {string}")]
 fn story_view_names_the_branches(world: &mut VardeWorld, onto: String, left: String) {
     assert_eq!(world.state.branch, Some(onto));
@@ -9108,8 +8129,6 @@ fn overlay_shows_feedback_for_choice(world: &mut VardeWorld, choice: usize) {
     assert_eq!(story::prediction_feedback(&world.state), Some(expected));
 }
 
-/// A wrong pick's feedback is its own choice's, never the correct choice's —
-/// the one thing revealing it would remove any reason to think afterwards.
 #[then(expr = "the overlay does not show the correct choice")]
 fn overlay_does_not_show_correct_choice(world: &mut VardeWorld) {
     let step = story::current_step(&world.state).expect("a step");
@@ -9136,10 +8155,6 @@ fn walkthrough_records_step_as_put(world: &mut VardeWorld, step_number: usize) {
         .contains(&(story, step_number - 1)));
 }
 
-/// `predictions_put` is a set of `(story, step)` pairs — there is no field a
-/// choice could live in, so this reuses the same check
-/// `walkthrough_records_step_as_put` makes rather than inventing a second one
-/// that could tell a different story.
 #[then(expr = "the walkthrough holds no choice")]
 fn walkthrough_holds_no_choice(world: &mut VardeWorld) {
     let Some(story::Walking::Story { step, .. }) = world.state.walking else {
@@ -9170,8 +8185,7 @@ fn ai_not_running_bare(world: &mut VardeWorld) {
     ai_not_running(world);
 }
 
-// "And I ran ..." continues whatever concrete keyword came before it, so this
-// needs registering as a Given as well as the When `run_story_command` already is.
+// `And I ran` can follow a Given, so this step is registered as a Given as well as a When
 #[given(expr = "I ran {string}")]
 fn ran_story_command(world: &mut VardeWorld, line: String) {
     run_story_command(world, line);
@@ -9202,10 +8216,6 @@ fn prompt_names_the_file(world: &mut VardeWorld, path: String) {
     prompt_contains(world, path);
 }
 
-/// The edge's own answer for what a spelling resolves to (ADR 0005): the
-/// `Effect::ResolveStory` fake reads this to compute the exact `{OUT}` path a
-/// confirmed range is authored to, the same map "that range is what … resolves
-/// to" already populates for an already-authored range.
 #[given(expr = "{string} resolves to base {string} and head {string}")]
 fn spelling_resolves_to_oids(world: &mut VardeWorld, spelling: String, base: String, head: String) {
     world.resolved_oids.insert(spelling, (base, head));
@@ -9320,8 +8330,6 @@ fn review_list_unchanged(world: &mut VardeWorld) {
     assert_eq!(Some(review::list(&world.state)), world.repo_before);
 }
 
-// ---- F26: markdown preview ----
-
 fn preview_rows(world: &VardeWorld) -> Vec<varde::preview::Row> {
     varde::preview_rows(&world.state)
 }
@@ -9348,9 +8356,6 @@ fn nothing_is_open(world: &mut VardeWorld) {
     world.state.current_buffer = None;
 }
 
-/// The pane's width is the layout's answer rather than a field, so the screen
-/// it takes to make the pane that wide is solved for here — a magic terminal
-/// size in the feature file would say nothing about what the scenario is for.
 #[given(expr = "the editor pane is {int} columns wide")]
 fn editor_pane_is_columns_wide(world: &mut VardeWorld, columns: u16) {
     let height = 40;
@@ -9373,10 +8378,6 @@ fn editor_pane_is_columns_wide(world: &mut VardeWorld, columns: u16) {
     world.send(Event::Resized { width, height });
 }
 
-/// A `Given` as well, because a Preview is the state a scenario about what
-/// `:format` does to one has to start in, and a precondition nothing asserts
-/// is a scenario that stops covering anything the day markdown stops opening
-/// as one.
 #[given(expr = "the editor is showing preview")]
 #[then(expr = "the editor is showing preview")]
 fn showing_preview(world: &mut VardeWorld) {
@@ -9416,8 +8417,6 @@ fn editor_refuses_with(world: &mut VardeWorld, reason: String) {
     );
 }
 
-/// Review view substitutes the editor's whole rectangle, so a diff has to be on
-/// screen for the scenario to be about anything.
 #[when(expr = "I switch to review view")]
 fn switch_to_review_view(world: &mut VardeWorld) {
     let path = world
@@ -9456,8 +8455,6 @@ fn switch_to_review_view(world: &mut VardeWorld) {
     });
 }
 
-/// Walking is set directly for the reason "I am walking" sets it directly: this
-/// is scenario setup, not the thing under test.
 #[when(expr = "I walk a story step pointing at {string}")]
 fn walk_a_step_pointing_at(world: &mut VardeWorld, file: String) {
     let full = world.state.root.join(&file);
@@ -9658,9 +8655,6 @@ fn cursor_is_on_row(world: &mut VardeWorld, number: usize) {
     assert_eq!(current_buffer(world).row, number);
 }
 
-/// The Preview cursor's own pair, which is *not* the buffer's line and column:
-/// a rendered column indexes what is drawn, so a scenario that asserted the
-/// source pair here would pass on a cursor nobody can see.
 #[then(expr = "the cursor is on row {int} column {int}")]
 fn cursor_is_on_row_column(world: &mut VardeWorld, row: usize, column: usize) {
     let buffer = current_buffer(world);
@@ -9703,8 +8697,6 @@ fn a_line_number_gutter(world: &mut VardeWorld) {
     assert_ne!(varde::gutter(&world.state), 0);
 }
 
-/// The mode clause is the part of the title the core owns; the file name beside
-/// it is `ui`'s to compose, and a `ui` unit test holds the two together.
 #[then(expr = "the editor title says {string}")]
 fn editor_title_says(world: &mut VardeWorld, word: String) {
     assert_eq!(varde::mode_label(&world.state, current_buffer(world)), word);
@@ -9727,8 +8719,6 @@ fn type_as_only_line(world: &mut VardeWorld, text: String) {
     world.send(Event::EditorEscape);
 }
 
-// ---- F27: Risk ----
-
 fn scope(name: &str) -> Scope {
     match name {
         "workspace" => Scope::Workspace,
@@ -9737,10 +8727,6 @@ fn scope(name: &str) -> Scope {
     }
 }
 
-/// One `Effect::AnalyseRisk`, as the world saw it: what it covers, which
-/// request it is, the files it names and the revision it measures them from as
-/// well. Recorded whole, so a scenario can hold the delta's base against the
-/// diff's rather than against a copy of the same decision.
 #[derive(Debug)]
 struct Analysis {
     scope: Scope,
@@ -9749,16 +8735,10 @@ struct Analysis {
     base: Option<String>,
 }
 
-/// The table the analyser's answer is written as: one row per space it found,
-/// each under its own file, plus one unreadable file per Unparsed the scenario
-/// declared — exactly the shape the edge hands `risk::figures`, so the count of
-/// what could not be read is the library's answer rather than the glue's.
 fn figures(step: &Step, unparsed: usize) -> Figures {
     figures_from(step, unparsed, "")
 }
 
-/// The same table read for the other side of a delta: the `was …` columns, which
-/// say what each Function measured at the base revision.
 fn figures_from(step: &Step, unparsed: usize, prefix: &str) -> Figures {
     let table = step.table().expect("a table");
     let header = &table.rows[0];
@@ -9813,17 +8793,12 @@ fn risk_threshold(world: &mut VardeWorld, threshold: u32) {
     world.startup.project_config = Some(format!("[risk]\nthreshold = {threshold}\n"));
 }
 
-/// No coverage report is read anywhere yet, so this is the only situation
-/// there is — the step exists to make the scenario say which one it is.
 #[given(expr = "no test coverage was read")]
 fn no_test_coverage(_world: &mut VardeWorld) {}
 
 #[given(expr = "every file in the workspace is in a language the analyser does not handle")]
 fn nothing_analysable(_world: &mut VardeWorld) {}
 
-/// The edge's own sequence: an answer only exists because a request was made,
-/// so a scenario that says the figures arrived without having opened Varde gets
-/// the request too — the core takes an answer only while one is waiting.
 fn deliver(world: &mut VardeWorld, scope: Scope, figures: Figures, before: Option<Figures>) {
     if !world.state.risk.in_flight() {
         let asked = risk::analyse(&mut world.state, scope);
@@ -9841,10 +8816,6 @@ fn analysis_finishes(world: &mut VardeWorld) {
     deliver(world, Scope::Workspace, Figures::default(), None);
 }
 
-/// The figure, and the files it describes: a Function named at line 88 implies a
-/// file with 88 lines in it, so the files go on disk too. Without them a jump to
-/// a Function's line lands on line 1 — the buffer clamps to what it holds — and
-/// "the cursor is on line 17" would pass for a file that was never there.
 #[given(expr = "the figures were computed for the scope {string}:")]
 fn figures_were_computed(world: &mut VardeWorld, name: String, step: &Step) {
     let computed = figures(step, 0);
@@ -9880,8 +8851,6 @@ fn figure_has_gone_stale(world: &mut VardeWorld) {
     risk::went_stale(&mut world.state.risk);
 }
 
-/// The other half of the pair, so the explicit recompute is specified against
-/// both: a request that only worked on a stale figure would pass one of them.
 #[given(expr = "the figure has not gone stale")]
 fn figure_has_not_gone_stale(world: &mut VardeWorld) {
     assert_eq!(risk::view_state(&world.state), "computed");
@@ -9892,8 +8861,6 @@ fn ask_for_recompute(world: &mut VardeWorld) {
     world.send(Event::RecomputeRisk);
 }
 
-/// The cache as a previous run left it: one Function, so the figure it restores
-/// is a figure rather than a workspace with nothing analysed.
 #[given(expr = "the figures were recorded at the commit {string}")]
 fn figures_recorded_at_commit(world: &mut VardeWorld, commit: String) {
     let figures = Figures {
@@ -9939,9 +8906,6 @@ fn written_figures_record_metric(world: &mut VardeWorld, metric: String) {
     assert_eq!(written_figures(world).metric, metric);
 }
 
-/// Field for field against the table, so the file's shape is pinned rather than
-/// merely present — and the analyser's types cannot appear in it, because the
-/// step deserializes Varde's own.
 #[then(expr = "the written figures list:")]
 fn written_figures_list(world: &mut VardeWorld, step: &Step) {
     assert_eq!(written_figures(world).functions, figures(step, 0).functions);
@@ -9957,9 +8921,6 @@ fn figures_arrive_with_unparsed(
     deliver(world, scope(&name), figures(step, unparsed), None);
 }
 
-/// The request the world records but never answers, exactly as the edge's
-/// thread would leave it: `asked` is ahead of `answered`, so "computing" is a
-/// state a scenario can stand in.
 #[given(expr = "an analysis is in flight over the scope {string}")]
 fn analysis_in_flight(world: &mut VardeWorld, name: String) {
     let asked = risk::analyse(&mut world.state, scope(&name));
@@ -9990,17 +8951,11 @@ fn no_analysis_asked_for_scope(world: &mut VardeWorld, name: String) {
     );
 }
 
-/// At most one, by construction — the count is asserted anyway, because the
-/// promise is that a recompute supersedes rather than queues and a queue would
-/// be the plausible-looking implementation.
 #[then(expr = "{int} analysis is in flight")]
 fn analyses_in_flight(world: &mut VardeWorld, expected: usize) {
     assert_eq!(usize::from(world.state.risk.in_flight()), expected);
 }
 
-/// Falsifiable rather than incidental: the earlier job's answer is delivered,
-/// and the figure it carries must not appear. A core that took the last answer
-/// to arrive would show it.
 #[then(expr = "the earlier analysis was superseded")]
 fn earlier_analysis_superseded(world: &mut VardeWorld) {
     let generation = world
@@ -10016,8 +8971,6 @@ fn earlier_analysis_superseded(world: &mut VardeWorld) {
     world.send(Event::RiskFigures {
         generation,
         figures: Figures {
-            // A figure nothing else in the suite produces, so a count of one
-            // here could only have come from the superseded answer.
             functions: vec![Function {
                 file: "src/superseded.rs".to_string(),
                 name: "gone".to_string(),
@@ -10044,9 +8997,6 @@ fn no_analysis_asked_for(world: &mut VardeWorld) {
     assert!(world.analyses.is_empty(), "asked for {:?}", world.analyses);
 }
 
-/// The name and the caption together: a job with no caption is the hang the
-/// spinner exists to rule out, so a scenario that names the job also holds the
-/// border to saying what is being worked on.
 #[then(expr = "the job in flight is {string}")]
 fn the_job_in_flight(world: &mut VardeWorld, expected: String) {
     let (name, caption) = risk::job(&world.state).expect("no job in flight");
@@ -10083,8 +9033,6 @@ fn the_unparsed_count(world: &mut VardeWorld, expected: usize) {
     }
 }
 
-// ---- F28: the Risk list pane ----
-
 #[then(expr = "the view palette offers {string} in the group {string} under the key {string}")]
 fn palette_offers_entry(world: &mut VardeWorld, entry: String, group: String, key: String) {
     assert_eq!(world.state.modal, Modal::Palette);
@@ -10100,8 +9048,6 @@ fn palette_offers_entry(world: &mut VardeWorld, entry: String, group: String, ke
         offered.contains(&(group.clone(), parse_char(&key), entry.clone())),
         "{group}/{key}/{entry} is not offered: {offered:?}"
     );
-    // Un-indented, because this is a pane rather than another pane's shape —
-    // the indent is part of the label the palette draws.
     let drawn = PALETTE
         .iter()
         .flat_map(|(_, entries)| entries.iter())
@@ -10111,11 +9057,6 @@ fn palette_offers_entry(world: &mut VardeWorld, entry: String, group: String, ke
     assert_eq!(drawn, entry, "the entry is indented under another");
 }
 
-/// Through the toggle, not by poking the field: the only way the pane comes to
-/// be on screen is being asked for, and asking for it puts focus in it (R28.8).
-/// A Given that set the field alone would describe a state no gesture produces,
-/// and every scenario about the pane's own keys would be pressing them at
-/// whatever pane the default focus is on.
 #[given(expr = "the Risk list is shown")]
 fn risk_list_is_shown(world: &mut VardeWorld) {
     if world.state.corner != layout::Corner::Risk {
@@ -10171,8 +9112,6 @@ fn show_every_function(world: &mut VardeWorld) {
     world.send(Event::ToggleRiskAll);
 }
 
-/// The rows as the pane draws them: the Function, its figure, and — where the
-/// table asks for one — how far the change moved it.
 #[then("the Risk list shows:")]
 fn risk_list_shows(world: &mut VardeWorld, step: &Step) {
     let table = step.table().expect("a table");
@@ -10218,8 +9157,6 @@ fn risk_list_state(world: &mut VardeWorld, expected: String) {
     assert_eq!(risk::view_state(&world.state), expected);
 }
 
-/// On top of the figure the Background computed, the way the edge would have
-/// counted them alongside it.
 #[given(expr = "{int} files were Unparsed")]
 fn files_were_unparsed(world: &mut VardeWorld, count: usize) {
     match &mut world.state.risk.figure {
@@ -10238,10 +9175,6 @@ fn risk_list_unparsed(world: &mut VardeWorld, expected: usize) {
     assert_eq!(risk::unparsed(&world.state), expected);
 }
 
-// ---- F28: navigating the list and opening a Function ----
-
-/// The selection by the name of the Function it is on: an index is what the
-/// core holds, but a scenario about a worklist names the row.
 fn risk_row(world: &VardeWorld, function: &str) -> usize {
     risk::list(&world.state)
         .iter()
@@ -10276,10 +9209,6 @@ fn risk_selection_is_the_first_row(world: &mut VardeWorld) {
     assert_eq!(world.state.risk_selection, 0);
 }
 
-/// Focus in the pane, then the motion that walks off the end of the list —
-/// driven rather than assigned, because "one slot past the last row" is the
-/// behaviour under test and a Given that set the index would still hold if the
-/// motion stopped reaching it.
 #[given(expr = "the keyboard is on the Risk list pane actions")]
 fn keyboard_is_on_the_pane_actions(world: &mut VardeWorld) {
     world.state.focus = Pane::Risk;
@@ -10298,9 +9227,6 @@ fn keyboard_should_be_on_the_pane_actions(world: &mut VardeWorld) {
     );
 }
 
-/// By name out of the list the pane draws, never by index: the icon that is lit
-/// and the action Enter runs are read from one list, so the step cannot agree
-/// with a renderer that has drifted from it.
 #[then(expr = "the armed Risk list action is {string}")]
 fn armed_risk_action_is(world: &mut VardeWorld, expected: String) {
     let actions = match risk::on_actions(&world.state) {
@@ -10327,17 +9253,12 @@ fn risk_border_shows_file(world: &mut VardeWorld, file: String) {
     );
 }
 
-/// The click the mouse would report, by the row it lands on — `mouse` resolves a
-/// screen position into this index, and its own test pins that arithmetic.
 #[when(expr = "I click the Risk list row {string}")]
 fn click_risk_row(world: &mut VardeWorld, function: String) {
     let index = risk_row(world, &function);
     world.send(Event::ClickRiskRow(index));
 }
 
-/// More Functions than the pane has rows, so scrolling is a thing that can
-/// happen at all. Descending figures, all above the threshold, so the list holds
-/// every one of them in the order they are made.
 #[given(expr = "the Risk list holds {int} Functions")]
 fn risk_list_holds(world: &mut VardeWorld, count: u32) {
     let functions = (0..count)
@@ -10374,8 +9295,6 @@ fn risk_selection_in_view(world: &mut VardeWorld) {
     );
 }
 
-// ---- F29: a single Function's refactor ----
-
 #[then("the Risk list row actions offered are:")]
 fn risk_row_actions_offered(world: &mut VardeWorld, step: &Step) {
     let expected: Vec<String> = step
@@ -10392,8 +9311,6 @@ fn risk_row_actions_offered(world: &mut VardeWorld, step: &Step) {
     assert_eq!(actual, expected);
 }
 
-/// The keyboard path and the click path are the same gesture, so both steps
-/// raise the one event the row's icon and the armed Enter both raise.
 #[given(expr = "I ask for a refactor of the Function {string}")]
 #[when(expr = "I ask for a refactor of the Function {string}")]
 fn ask_for_a_refactor(world: &mut VardeWorld, function: String) {
@@ -10423,10 +9340,6 @@ fn exactly_this_many_prompts(world: &mut VardeWorld, expected: usize) {
     assert_eq!(ai_sends(world).len(), expected, "{:?}", world.keys_sent);
 }
 
-/// No branch anywhere may test which CLI is running, and neither may a prompt
-/// address one: the same prompt drives the providers nobody has tried. The
-/// names are the ones a plausible prompt would reach for, the configured
-/// command among them — a scenario sets `ai.command` to one of them.
 #[then(expr = "the prompt names no AI provider")]
 fn prompt_names_no_provider(world: &mut VardeWorld) {
     let sent = ai_sends(world).join("\n").to_lowercase();
@@ -10450,11 +9363,6 @@ fn prompt_names_no_provider(world: &mut VardeWorld) {
     }
 }
 
-// ---- F29: one gated Iteration ----
-
-/// Adds a key under `[risk]`, keeping what an earlier step put there: the
-/// Refactor loop's Background configures three of them, and a step that
-/// replaced the file would leave the last one standing alone.
 fn risk_config(world: &mut VardeWorld, line: &str) {
     let mut config = world
         .startup
@@ -10487,8 +9395,6 @@ fn iteration_cap(world: &mut VardeWorld, cap: u32) {
     risk_config(world, &format!("max_iterations = {cap}"));
 }
 
-/// A file in the project's root, which is what the shape is read off: the
-/// marker the project holds is what says which command its tests are behind.
 #[given(expr = "the project holds {string}")]
 fn project_holds_file(world: &mut VardeWorld, name: String) {
     let root = world.state.root.clone();
@@ -10523,10 +9429,6 @@ fn start_the_loop(world: &mut VardeWorld, name: String) {
     world.send(Event::StartRefactorLoop(scope(&name)));
 }
 
-/// A loop already on that Iteration is left where it is — restarting it would
-/// throw away the pass a scenario declared — and a loop behind it is driven
-/// forward through the Gate, because passing it is the only way an Iteration
-/// after the first exists.
 #[given(expr = "the Refactor loop is on Iteration {int} over the scope {string}")]
 fn loop_is_on_iteration(world: &mut VardeWorld, number: u32, name: String) {
     let on = |world: &VardeWorld| {
@@ -10538,12 +9440,6 @@ fn loop_is_on_iteration(world: &mut VardeWorld, number: u32, name: String) {
             .map(|iteration| iteration.number)
     };
     if on(world).is_none() {
-        // A Scope with nothing measured and nothing on the way refuses the
-        // loop, so a scenario declaring one already running gets the analysis
-        // behind it too: a workspace measured and found empty is the emptiest
-        // baseline the Gate can still judge. A review-scoped loop needs none
-        // here — the view asked for its analysis on the way in, and that answer
-        // is the baseline.
         if scope(&name) == Scope::Workspace
             && world.state.risk.figures().is_none()
             && !world.state.risk.in_flight()
@@ -10601,10 +9497,6 @@ fn loop_wait_state(world: &mut VardeWorld, expected: String) {
     );
 }
 
-/// The numbers, not the wording: `risk`'s own unit test pins the exact caption
-/// the border draws. What this holds is that the pane says both of them at all
-/// — an Iteration without its cap says nothing about how much of the run is
-/// left, and a pane that says neither is the hang a caption exists to rule out.
 #[then(expr = "the Refactor loop status shows Iteration {int} of {int}")]
 fn loop_status_shows(world: &mut VardeWorld, number: u32, cap: u32) {
     assert_eq!(
@@ -10624,10 +9516,6 @@ fn loop_status_shows(world: &mut VardeWorld, number: u32, cap: u32) {
     );
 }
 
-/// The figure the pane draws is the one this Iteration is judged against: the
-/// list reads `risk.figures()`, and the Iteration carries the same figures as
-/// its baseline. Drifting apart is a pane showing the previous pass's numbers
-/// while the Gate measures against these.
 #[then(expr = "the Risk list shows the figure for Iteration {int}")]
 fn risk_list_shows_iteration_figure(world: &mut VardeWorld, number: u32) {
     let iteration = world
@@ -10656,9 +9544,6 @@ fn risk_pane_actions_offered(world: &mut VardeWorld, step: &Step) {
     assert_eq!(actual, expected);
 }
 
-/// The click and the pane's own key are the one gesture, so this raises the
-/// event both reach — the action is looked up in the list the pane draws
-/// rather than spelled again here.
 #[when(expr = "I click the {string} action on the Risk list pane")]
 fn click_risk_pane_action(world: &mut VardeWorld, action: String) {
     let named = risk::pane_actions(&world.state)
@@ -10673,9 +9558,6 @@ fn stop_the_loop(world: &mut VardeWorld) {
     world.send(Event::StopRefactorLoop);
 }
 
-/// A Given as well as a Then: the recompute's scenario has to say that there was
-/// a verdict there to clear, and a precondition nothing checks is what makes the
-/// assertion after it pass vacuously.
 #[given(expr = "the Refactor loop stopped because {string}")]
 #[then(expr = "the Refactor loop stopped because {string}")]
 fn loop_stopped_because(world: &mut VardeWorld, expected: String) {
@@ -10692,8 +9574,6 @@ fn no_loop_last_test_result(world: &mut VardeWorld) {
     assert_eq!(world.state.refactor.last_test(), None);
 }
 
-/// What the border trails after the figure, which is what a finished run leaves
-/// behind: `None` is the border saying nothing rather than saying "idle".
 #[then(expr = "the Risk list border says nothing about the loop")]
 fn border_says_nothing_about_the_loop(world: &mut VardeWorld) {
     assert_eq!(risk::status(&world.state), None);
@@ -10727,8 +9607,6 @@ fn sentinel_already_exists(world: &mut VardeWorld, path: String) {
     world.files.insert(path, String::new());
 }
 
-/// The watcher that already exists is what sees it — the same event a file
-/// landing anywhere else in the workspace arrives as.
 #[when(expr = "the sentinel {string} appears")]
 fn sentinel_appears(world: &mut VardeWorld, path: String) {
     let path = abs(world, &path);
@@ -10736,9 +9614,6 @@ fn sentinel_appears(world: &mut VardeWorld, path: String) {
     world.send(Event::FilesAppeared(vec![(path, tree::Kind::File)]));
 }
 
-/// Time passing, and nothing else: the wait has no timeout, so a scenario about
-/// silence hands the core exactly what the edge hands it while a job runs — the
-/// ticks a spinner turns on and no event at all besides.
 #[when(expr = "the clock advances {int} minutes")]
 fn clock_advances(world: &mut VardeWorld, minutes: u64) {
     for _ in 0..minutes {
@@ -10765,8 +9640,6 @@ fn snapshot_was_taken(world: &mut VardeWorld, iteration: u32) {
     );
 }
 
-/// What the session did with the pass: the files it edited, which is what a
-/// revert is measured against. Their contents change; nothing else does.
 #[given("the Iteration touched:")]
 fn iteration_touched(world: &mut VardeWorld, step: &Step) {
     for row in &step.table().expect("table").rows {
@@ -10779,8 +9652,6 @@ fn iteration_touched(world: &mut VardeWorld, step: &Step) {
     }
 }
 
-/// A file the user had already edited when the loop started: what the last
-/// commit holds, and what their own uncommitted work left in it.
 #[given(expr = "{string} had uncommitted changes before the loop started")]
 fn had_uncommitted_changes(world: &mut VardeWorld, file: String) {
     let committed = world.tree().get(&file).cloned().unwrap_or_default();
@@ -10788,9 +9659,6 @@ fn had_uncommitted_changes(world: &mut VardeWorld, file: String) {
     world.committed.insert(file.clone(), committed);
     world.mine.insert(file.clone(), mine.clone());
     world.write_tree(&file, &mine);
-    // Declared as of *before* the loop, so any snapshot already taken holds it
-    // too — otherwise the world would show the loop having changed a file the
-    // user changed, and every revert would restore it.
     for snapshot in world.snapshots.values_mut() {
         if let Some(held) = snapshot.get_mut(&file) {
             *held = mine.clone();
@@ -10852,9 +9720,6 @@ fn was_not_restored(world: &mut VardeWorld, file: String) {
     assert!(!world.restored.contains(&file), "{:?}", world.restored);
 }
 
-/// What the loop's whole run changed, measured against the tree as it stood
-/// when the first Iteration was snapshotted — files the run created included, so
-/// a session that wrote outside its Scope is caught rather than missed.
 #[then("the files the loop changed are:")]
 fn files_the_loop_changed(world: &mut VardeWorld, step: &Step) {
     let expected: Vec<String> = step
@@ -10867,9 +9732,6 @@ fn files_the_loop_changed(world: &mut VardeWorld, step: &Step) {
     assert_eq!(loop_changed(world), expected);
 }
 
-/// The absence the review-scoped loop is worth having for: a file nobody is
-/// reviewing is a file the loop may not touch, and the user's own uncommitted
-/// work in it is still there afterwards.
 #[then(expr = "{string} is unchanged by the loop")]
 fn unchanged_by_the_loop(world: &mut VardeWorld, file: String) {
     assert!(
@@ -10900,9 +9762,6 @@ fn not_restored_from_the_commit(world: &mut VardeWorld, file: String) {
     assert_ne!(world.tree().get(&file), Some(committed));
 }
 
-/// The loop's whole output is a dirty working tree: nothing it does may reach
-/// history, per Iteration or at the end. Both channels a commit could come
-/// down, since neither is allowed to carry one.
 #[then(expr = "nothing was committed")]
 fn nothing_was_committed(world: &mut VardeWorld) {
     for command in world.executed.iter().chain(world.tests_run.iter()) {
@@ -10910,8 +9769,6 @@ fn nothing_was_committed(world: &mut VardeWorld) {
     }
 }
 
-/// Any of the prompts, not only the first: an Iteration's own prompt went
-/// before whatever the Gate has to explain afterwards.
 fn any_prompt_contains(world: &VardeWorld, needle: &str) {
     let sent = ai_sends(world);
     assert!(
@@ -10938,16 +9795,11 @@ fn prompt_names_convention_files(world: &mut VardeWorld) {
     any_prompt_contains(world, "convention files this repository holds");
 }
 
-/// The figure is the symptom, and a pass that only moved it is a pass R29.11's
-/// third condition reverts — but a revert costs an Iteration, and the row
-/// action has no Gate behind it at all, so the wording has to say it up front.
 #[then(expr = "the AI pane was sent a prompt asking for splits that stand on their own")]
 fn prompt_asks_for_meaningful_splits(world: &mut VardeWorld) {
     any_prompt_contains(world, "the symptom, not the goal");
 }
 
-/// The other direction: naming what a good split is only constrains a session
-/// if the prompt also names the shape that fails, so both halves are pinned.
 #[then(expr = "the AI pane was sent a prompt naming structural scattering as a failed pass")]
 fn prompt_names_scattering(world: &mut VardeWorld) {
     any_prompt_contains(world, "structural scattering");
@@ -10970,8 +9822,6 @@ fn prompt_contains_the_output(world: &mut VardeWorld) {
     any_prompt_contains(world, output.trim());
 }
 
-/// The most project-specific string in the system, kept out of a prompt that
-/// has to work on any workspace — because Varde runs the tests itself.
 #[then(expr = "no prompt sent to the AI contains {string}")]
 fn no_prompt_contains(world: &mut VardeWorld, needle: String) {
     for prompt in ai_sends(world) {
@@ -10982,11 +9832,6 @@ fn no_prompt_contains(world: &mut VardeWorld, needle: String) {
     }
 }
 
-// ---- F29: the Gate on the metrics ----
-
-/// Passing is not a flag the loop keeps: it is the Iteration standing — never
-/// restored — and the loop having moved on from it, either to the next
-/// Iteration or to a stop at the cap. Nothing else produces that pair.
 #[then(expr = "Iteration {int} passed the Gate")]
 fn iteration_passed_the_gate(world: &mut VardeWorld, iteration: u32) {
     iteration_was_not_restored(world, iteration);
@@ -11001,13 +9846,6 @@ fn iteration_passed_the_gate(world: &mut VardeWorld, iteration: u32) {
     );
 }
 
-/// One whole Iteration through the Gate — the sentinel, the tests, figures the
-/// Gate accepts — so a scenario standing on a passed Gate stands on the path
-/// the Gate itself takes rather than on a state nobody could reach.
-///
-/// The figure it delivers halves the worst Function, which is what a real pass
-/// looks like: the count falls by one and every other metric with it, so the
-/// Gate's three conditions are satisfied by the same answer.
 fn pass_the_gate(world: &mut VardeWorld, scope: Scope) {
     measured_baseline(world);
     session_edits(world);
@@ -11044,22 +9882,10 @@ fn pass_the_gate(world: &mut VardeWorld, scope: Scope) {
             functions,
             unparsed: 0,
         },
-        // The base revision the last answer measured, carried through: a
-        // review-scoped answer has both sides in it, and a workspace one has
-        // neither.
         world.state.risk.before.clone(),
     );
 }
 
-/// The figure the Gate will judge the pass against, where the loop began before
-/// one had been measured — which is every review-scoped loop, since the view
-/// asks for its analysis on the way in and the loop starts while it runs. This
-/// is that analysis answering: one Function per reviewed file, above the
-/// threshold, both sides alike because the change itself is not what the loop is
-/// being judged on.
-///
-/// Invented by the world and never asserted on: every figure a scenario reads is
-/// one a step named. What it stands in for is the answer the edge would deliver.
 fn measured_baseline(world: &mut VardeWorld) {
     let waiting = world
         .state
@@ -11078,10 +9904,6 @@ fn measured_baseline(world: &mut VardeWorld) {
                 name: "under_review".to_string(),
                 line: 1,
                 metrics: Metrics {
-                    // Above whatever threshold the scenario set, and low enough
-                    // that halving it lands under: a fixture pinned to a number
-                    // would stop being a Risk the moment a scenario moved the
-                    // threshold, and the Gate would read the pass as a plateau.
                     cyclomatic: world.state.risk_threshold + 10,
                     cognitive: world.state.risk_threshold + 4,
                     ..Metrics::default()
@@ -11093,12 +9915,6 @@ fn measured_baseline(world: &mut VardeWorld) {
     deliver(world, Scope::Review, figures.clone(), Some(figures));
 }
 
-/// The session's own pass, as a session obeying the prompt it was handed would
-/// make it: every file under review the prompt named is edited, and nothing
-/// else. Varde cannot stop a session touching a file it was not given, so the
-/// prompt is the whole of what keeps a review-scoped loop inside its Scope —
-/// which is what makes "the loop changed these files and no others" an
-/// assertion about the prompt rather than about this glue.
 fn session_edits(world: &mut VardeWorld) {
     let prompt = ai_sends(world).last().cloned().unwrap_or_default();
     let named: Vec<String> = review::list(&world.state)
@@ -11136,14 +9952,10 @@ fn loop_is_now_on_iteration(world: &mut VardeWorld, number: u32) {
     );
 }
 
-/// The figures arrived and nothing has been decided on them yet: no verdict, no
-/// revert, and no Iteration counted as passed.
 #[then("the Gate has not been evaluated")]
 fn the_gate_has_not_been_evaluated(world: &mut VardeWorld) {
     assert_eq!(world.state.refactor.stopped, None);
     assert!(world.restores.is_empty(), "restores: {:?}", world.restores);
-    // Still on the Iteration whose figures are being measured: an accepted one
-    // would have moved the loop on, and a reverted one would have ended it.
     assert_eq!(
         world
             .state
@@ -11155,9 +9967,6 @@ fn the_gate_has_not_been_evaluated(world: &mut VardeWorld) {
     );
 }
 
-/// Every file, not only the ones the snapshot holds: "leaves nothing behind"
-/// is a statement about the whole tree, so a file the Iteration created would
-/// fail this even though the restore walks the snapshot.
 #[then(expr = "the working tree holds no change from Iteration {int}")]
 fn tree_holds_no_change(world: &mut VardeWorld, iteration: u32) {
     let snapshot = world
@@ -11168,8 +9977,6 @@ fn tree_holds_no_change(world: &mut VardeWorld, iteration: u32) {
     assert_eq!(world.tree(), snapshot);
 }
 
-/// The row action is one prompt and no Iteration: nothing to snapshot, because
-/// there is no Gate behind it and so nothing that could revert.
 #[then(expr = "no snapshot was taken")]
 fn no_snapshot_was_taken(world: &mut VardeWorld) {
     assert!(
@@ -11179,12 +9986,6 @@ fn no_snapshot_was_taken(world: &mut VardeWorld) {
     );
 }
 
-// ---- F30: Risk in Review view ----
-
-/// The revision the diff on screen is measured from: `HEAD`, which the edge
-/// tells the core on the same poll as the git status. The step sets it the way
-/// the edge does, so nothing about the delta's base is arranged behind the
-/// diff's back.
 #[given(expr = "the review diff is measured from {string}")]
 fn review_diff_measured_from(world: &mut VardeWorld, revision: String) {
     world.head = Some(revision.clone());
@@ -11206,9 +10007,6 @@ fn last_analysis(world: &VardeWorld) -> &Analysis {
     world.analyses.last().expect("an analysis was asked for")
 }
 
-/// Exactly those files and no others: a figure over a mix of the reviewed files
-/// and the workspace's is a figure nobody can act on, so the request is held to
-/// naming the Scope and nothing beside it.
 #[then(expr = "the analysis covers exactly:")]
 fn analysis_covers_exactly(world: &mut VardeWorld, step: &Step) {
     let expected: Vec<String> = step
@@ -11233,10 +10031,6 @@ fn review_risk_base_is(world: &mut VardeWorld, expected: String) {
     );
 }
 
-/// The delta reuses the diff's base rather than choosing one of its own: a
-/// figure that disagrees with the diff beside it is worse than no figure. Held
-/// against `review::base` — what Review view measures its diff from — so the two
-/// cannot come to be measured from two different places.
 #[then(expr = "the review risk base revision is the revision the review diff is measured from")]
 fn review_risk_base_is_the_diffs(world: &mut VardeWorld) {
     assert_eq!(
@@ -11246,8 +10040,6 @@ fn review_risk_base_is_the_diffs(world: &mut VardeWorld) {
     );
 }
 
-/// The answer for a review-scoped analysis: both sides measured in one job, the
-/// `was …` columns being the same Functions at the base revision.
 #[when(expr = "the review figures arrive:")]
 fn review_figures_arrive(world: &mut VardeWorld, step: &Step) {
     let before = figures_from(step, 0, "was ");
@@ -11299,9 +10091,6 @@ fn review_risk_not_marked_worse(world: &mut VardeWorld) {
     );
 }
 
-/// A file in no language the analyser handles contributes nothing — and nothing
-/// is not an improvement: a fabricated zero for it would read as a clean bill of
-/// health nobody was given.
 #[then(expr = "{string} contributes no figure")]
 fn contributes_no_figure(world: &mut VardeWorld, path: String) {
     let named: Vec<&String> = world
@@ -11317,14 +10106,6 @@ fn contributes_no_figure(world: &mut VardeWorld, path: String) {
     assert!(named.is_empty(), "{path} is in the figure");
 }
 
-// ---- F31: the transport — a server starts, is initialized, and is told about
-// the buffer. No scenario runs one: the world plays the edge, and everything a
-// server says arrives as canned JSON.
-
-/// Varde started on the template alone, whose rows say which files each
-/// language claims: a server or formatter a scenario configures "for rust"
-/// serves what the shipped rust row serves, and a language nothing ships
-/// claims nothing.
 fn shipped() -> State {
     startup::start(&Startup::default())
         .expect("the defaults start")
@@ -11352,9 +10133,6 @@ fn server_configured(world: &mut VardeWorld, command: String, language: String) 
     );
 }
 
-/// A server that answers its handshake the moment it is asked. The command is
-/// arbitrary — what the Scenarios below turn on is that the conversation
-/// reaches ready, not what is on `PATH`.
 #[given(expr = "a language server for {string} is ready")]
 fn server_is_ready(world: &mut VardeWorld, language: String) {
     world.lsp_answers.insert(language.clone());
@@ -11378,12 +10156,6 @@ fn server_is_ready(world: &mut VardeWorld, language: String) {
         });
 }
 
-/// A server the edge was already holding when the Scenario began — started for
-/// some buffer in a session that is not what this Scenario is about. Distinct
-/// from "is ready" above, which arms a canned server and leaves the spawn to
-/// whatever opens a file: a Scenario that opens no file needs the process to
-/// exist without one, and needs "no language server was started" to stay a
-/// statement about the whole run.
 #[given(expr = "a language server for {string} is already running")]
 fn server_is_already_running(world: &mut VardeWorld, language: String) {
     let command = format!("{language}-language-server");
@@ -11409,10 +10181,6 @@ fn server_is_already_running(world: &mut VardeWorld, language: String) {
     world.lsp_is_running(&language, &command);
 }
 
-/// Which other servers also serve this language's files, as configuration says
-/// it. Data rather than a branch: what makes a `.vue` file two servers' business
-/// is a row in a table, which is what lets a Scenario name two of them at all
-/// (R31.1, ADR 0011).
 #[given(expr = "{string} files are also served by the language server for {string}")]
 fn files_also_served_by(world: &mut VardeWorld, language: String, also: String) {
     world
@@ -11424,10 +10192,6 @@ fn files_also_served_by(world: &mut VardeWorld, language: String, also: String) 
         .push(also);
 }
 
-/// A server whose configuration names a request it puts to its client and Varde
-/// will not answer — so it has, by construction, questions it cannot answer on
-/// its own. What the Scenario turns on is the *notice*: reporting that server as
-/// knowing nothing is Varde blaming somebody else for its own refusal.
 #[given(
     expr = "the language server for {string} relays {string} to a companion Varde does not run"
 )]
@@ -11439,17 +10203,10 @@ fn server_relays_to_a_companion(world: &mut VardeWorld, language: String, reques
         .unwrap_or_else(|| panic!("no server configured for {language}"))
         .unanswerable = Some(Unanswerable {
         request,
-        // A don't-care for every Scenario that names this step: what the notice
-        // turns on is that the question was put and refused, never the method
-        // the refusal went back on. The refusal's own shape is pinned by the
-        // Scenarios under the Rule that owns it.
         response: "tsserver/response".to_string(),
     });
 }
 
-/// Nothing holds a server for that language — true of every language until
-/// something starts one, and said out loud because it is the precondition the
-/// Scenario turns on rather than an accident of the Background.
 #[given(expr = "there is no language server running for {string}")]
 fn no_server_running_for(world: &mut VardeWorld, language: String) {
     world.lsp_running.remove(&language);
@@ -11514,9 +10271,6 @@ fn server_sent_count(world: &mut VardeWorld, language: String, count: usize, met
     );
 }
 
-/// A question the server puts to Varde on a method of its own — a notification,
-/// so the protocol has no reply for it and the server is left waiting unless
-/// Varde says something back on the method its configuration names.
 #[given(expr = "the language server for {string} asks {string} with:")]
 #[when(expr = "the language server for {string} asks {string} with:")]
 fn server_asks(world: &mut VardeWorld, language: String, method: String, step: &Step) {
@@ -11543,7 +10297,6 @@ fn server_was_sent_with(world: &mut VardeWorld, language: String, method: String
     assert_eq!(said["params"], expected);
 }
 
-/// Every message that language's server was sent, in order.
 fn sent(world: &VardeWorld, language: &str) -> Vec<Value> {
     world
         .lsp_sent
@@ -11553,10 +10306,6 @@ fn sent(world: &VardeWorld, language: &str) -> Vec<Value> {
         .collect()
 }
 
-/// The documents that language's server was told about: the method, which file,
-/// what version and what the file held. One shape for `didOpen` and `didChange`
-/// because every assertion below is about the pair, not about which notification
-/// carried it.
 fn documents(world: &VardeWorld, language: &str) -> Vec<(String, PathBuf, i64, String)> {
     sent(world, language)
         .iter()
@@ -11581,7 +10330,6 @@ fn documents(world: &VardeWorld, language: &str) -> Vec<(String, PathBuf, i64, S
         .collect()
 }
 
-/// The documents a server was told about for one file, in the order it was told.
 fn told_about(world: &VardeWorld, language: &str, path: &str) -> Vec<(String, i64, String)> {
     let absolute = abs(world, path);
     documents(world, language)
@@ -11631,9 +10379,6 @@ fn servers_started_for(world: &mut VardeWorld, count: usize, language: String) {
     assert_eq!(started.len(), count, "started: {started:?}");
 }
 
-/// Sent, and — for `initialized` — sent *before anything about a document*,
-/// which is what the Scenario's name promises. A membership check alone would
-/// pass with the handshake closed out after the first `didOpen`.
 #[then(expr = "the language server for {string} was sent a {string} request")]
 #[then(expr = "the language server for {string} was sent an {string} request")]
 #[then(expr = "the language server for {string} was sent an {string} notification")]
@@ -11662,8 +10407,6 @@ fn server_was_sent(world: &mut VardeWorld, language: String, method: String) {
     }
 }
 
-/// What the handshake carried in `initializationOptions`, which is the whole of
-/// what a Scenario can say about a key Varde never reads: it went out verbatim.
 fn initialization_options(world: &VardeWorld, language: &str) -> Value {
     let messages = sent(world, language);
     let handshake = messages
@@ -11685,9 +10428,6 @@ fn initialize_carried_options(world: &mut VardeWorld, language: String, step: &S
     assert_eq!(initialization_options(world, &language), expected);
 }
 
-/// The one capability Varde claims. A server may hold its diagnostics back
-/// from a client that never said it could receive them, which is silence a
-/// reader cannot tell from a clean file.
 #[then(expr = "the initialize request for {string} said Varde can be told diagnostics")]
 fn initialize_declared_diagnostics(world: &mut VardeWorld, language: String) {
     let messages = sent(world, &language);
@@ -11702,8 +10442,6 @@ fn initialize_declared_diagnostics(world: &mut VardeWorld, language: String) {
     );
 }
 
-/// The other capability, and the one that is a promise: a server may only send
-/// `${1:…}` to a client that said it could resolve it.
 #[then(expr = "the initialize request for {string} said Varde can receive snippets")]
 fn initialize_declared_snippets(world: &mut VardeWorld, language: String) {
     let messages = sent(world, &language);
@@ -11720,8 +10458,6 @@ fn initialize_declared_snippets(world: &mut VardeWorld, language: String) {
     );
 }
 
-/// The third, and the one this box could not honour until it rendered what it
-/// was sent: a server may answer in either format, and most pick markdown.
 #[then(expr = "the initialize request for {string} said Varde can read markdown")]
 fn initialize_declared_markdown(world: &mut VardeWorld, language: String) {
     let messages = sent(world, &language);
@@ -11739,9 +10475,6 @@ fn initialize_declared_markdown(world: &mut VardeWorld, language: String) {
     );
 }
 
-/// Null, which is what the protocol has for a client that says nothing — and
-/// what an absent field reads as here, since either spelling is the same
-/// absence to the server.
 #[then(expr = "the initialize request for {string} carried no initialization options")]
 fn initialize_carried_no_options(world: &mut VardeWorld, language: String) {
     assert_eq!(initialization_options(world, &language), Value::Null);
@@ -11782,8 +10515,6 @@ fn server_is_not_ready(world: &mut VardeWorld, language: String) {
     );
 }
 
-/// A reply to a request the Scenario names by id rather than by method — the
-/// one shape that can express a reply nobody asked for.
 #[when(expr = "the language server for {string} replies to request {int} with:")]
 fn server_replies_to_id(world: &mut VardeWorld, language: String, id: i64, step: &Step) {
     let result: Value = serde_json::from_str(step.docstring().expect("docstring")).expect("json");
@@ -11793,9 +10524,6 @@ fn server_replies_to_id(world: &mut VardeWorld, language: String, id: i64, step:
     );
 }
 
-/// The reply to the hover Varde last asked for, under that request's own id —
-/// which is what makes the correlation the thing under test rather than
-/// something the step arranges around.
 #[given(expr = "the language server for {string} answers the hover with:")]
 #[when(expr = "the language server for {string} answers the hover with:")]
 fn server_answers_the_hover(world: &mut VardeWorld, language: String, step: &Step) {
@@ -11806,10 +10534,6 @@ fn server_answers_the_hover(world: &mut VardeWorld, language: String, step: &Ste
     );
 }
 
-/// The reply to the definition Varde last asked for. The table is in the
-/// editor's own 1-based coordinates, so the step converts to the protocol's
-/// zero-based line and UTF-16 column rather than pinning the protocol's numbers
-/// in the Gherkin — the same direction the hover request assertion converts in.
 #[given(expr = "the language server for {string} answers the definition with:")]
 #[when(expr = "the language server for {string} answers the definition with:")]
 fn server_answers_the_definition(world: &mut VardeWorld, language: String, step: &Step) {
@@ -11836,8 +10560,6 @@ fn server_answers_the_definition(world: &mut VardeWorld, language: String, step:
     answer_definition(world, &language, Value::Array(locations));
 }
 
-/// The server saying it knows of nowhere: `null`, which is what the protocol
-/// has for a symbol with no definition.
 #[given(expr = "the language server for {string} answers the definition with nothing")]
 #[when(expr = "the language server for {string} answers the definition with nothing")]
 fn server_answers_the_definition_with_nothing(world: &mut VardeWorld, language: String) {
@@ -11851,7 +10573,6 @@ fn answer_definition(world: &mut VardeWorld, language: &str, result: Value) {
     );
 }
 
-/// The id of the last request of that method sent to that language's server.
 fn asked(world: &VardeWorld, language: &str, method: &str) -> Value {
     sent(world, language)
         .iter()
@@ -11861,9 +10582,7 @@ fn asked(world: &VardeWorld, language: &str, method: &str) -> Value {
         .clone()
 }
 
-/// Where a request asked about, in the editor's own 1-based coordinates. The
-/// protocol counts lines from zero and columns in UTF-16 units, so the step
-/// converts rather than pinning the protocol's numbers in the Gherkin.
+/// LSP counts lines from zero and columns in UTF-16 units
 #[then(
     expr = "the language server for {string} was sent a {string} request for {string} line {int} column {int}"
 )]
@@ -11891,7 +10610,6 @@ fn was_sent_request_for(
     );
 }
 
-/// The absence a plain click promises: the question was never put at all.
 #[then(expr = "the language server for {string} was never sent a {string} request")]
 fn was_never_sent(world: &mut VardeWorld, language: String, method: String) {
     let messages = sent(world, &language);
@@ -11907,8 +10625,6 @@ fn nothing_outstanding(world: &mut VardeWorld, language: String) {
     assert_eq!(lsp::outstanding(&world.state, &language), 0);
 }
 
-/// A hover already on screen, arranged the way one arrives: the binding asks,
-/// and the server answers the request it made.
 #[given(expr = "a hover is shown")]
 fn a_hover_is_shown(world: &mut VardeWorld) {
     press_in_editor(world, "K".to_string());
@@ -11924,9 +10640,6 @@ fn a_hover_is_shown(world: &mut VardeWorld) {
     assert!(world.state.hover.is_some(), "no hover was shown");
 }
 
-/// What the box says, whether or not a wrap fell inside the words asked
-/// about: the rows are wrapped before they are measured, so a signature can
-/// straddle two of them and still be what the reader sees.
 #[then(expr = "the hover shows {string}")]
 fn hover_shows(world: &mut VardeWorld, text: String) {
     assert!(
@@ -11936,9 +10649,6 @@ fn hover_shows(world: &mut VardeWorld, text: String) {
     );
 }
 
-/// What is drawn, row by row — never the markdown the server sent. A row is a
-/// rendered row, so a marker that survived into one is a marker the reader is
-/// looking at.
 fn hover_rows(world: &VardeWorld) -> Vec<String> {
     world
         .state
@@ -11995,9 +10705,6 @@ fn hover_code_token_is_a_keyword(world: &mut VardeWorld, text: String) {
     assert_eq!(piece.token, Some(varde::highlight::Kind::Keyword));
 }
 
-/// Its rows plus the two its border sits on — the number the core placed the
-/// box by, so a cap the renderer would have to clip is a cap that did not
-/// happen.
 #[then(expr = "the hover is no taller than {int} rows")]
 fn hover_is_no_taller_than(world: &mut VardeWorld, rows: usize) {
     world.state.hover.as_ref().expect("a hover");
@@ -12015,8 +10722,6 @@ fn last_hover_row_is_cut_short(world: &mut VardeWorld) {
     );
 }
 
-/// The words of a string, one space apart, so a line break inside them is not
-/// a difference.
 fn words(text: &str) -> String {
     text.split_whitespace().collect::<Vec<&str>>().join(" ")
 }
@@ -12066,9 +10771,6 @@ fn was_sent_how_many(world: &mut VardeWorld, language: String, count: usize, met
     );
 }
 
-/// The edge's one timer, fired. Only if the core actually armed it: a step that
-/// asked regardless would make "one request for a burst of typing" a statement
-/// about this step rather than about the debounce.
 #[when(expr = "the debounce window passes")]
 #[given(expr = "the debounce window passes")]
 fn debounce_passes(world: &mut VardeWorld) {
@@ -12092,10 +10794,6 @@ fn pointer_leaves_the_editor(world: &mut VardeWorld) {
     world.point(Pane::Editor, None, terminput::KeyModifiers::NONE);
 }
 
-/// The pointer put somewhere and left there: the move, and then the edge's
-/// timer fired. Only if the core armed it, for the reason the debounce step is
-/// guarded — a step that fired regardless would make the dwell a statement
-/// about this step.
 #[given(expr = "the pointer rests on line {int} column {int} in the editor")]
 #[when(expr = "the pointer rests on line {int} column {int} in the editor")]
 fn pointer_rests_on(world: &mut VardeWorld, line: usize, column: usize) {
@@ -12109,10 +10807,6 @@ fn pointer_rests_on(world: &mut VardeWorld, line: usize, column: usize) {
     }
 }
 
-/// Where the box is drawn, asked of the same rectangle the renderer and the
-/// mouse both read — a step that worked it out for itself would prove its own
-/// arithmetic rather than the hit-test's. Its first row of text, inside the
-/// border.
 fn on_the_hover(world: &VardeWorld) -> (u16, u16) {
     let panes = world.panes();
     let spot = varde::lsp::placement(&world.state)
@@ -12156,7 +10850,6 @@ fn server_answers_a_long_hover(world: &mut VardeWorld, language: String, lines: 
     );
 }
 
-/// Arrived at the way a reader arrives at it: `K`, the reply, and `K` again.
 #[given("the hover has focus")]
 fn hover_focused(world: &mut VardeWorld) {
     world.send(Event::EditorKey('K'));
@@ -12183,8 +10876,6 @@ fn dwell_window_is(world: &mut VardeWorld, window: u64) {
     assert_eq!(world.dwell_armed, Some(window));
 }
 
-/// The reply to the completion Varde last asked for, under that request's own
-/// id — the same correlation the hover and definition answers go through.
 #[given(expr = "the language server for {string} answers with candidates:")]
 #[when(expr = "the language server for {string} answers with candidates:")]
 fn answers_with_candidates(world: &mut VardeWorld, language: String, step: &Step) {
@@ -12196,10 +10887,6 @@ fn answers_with_candidates(world: &mut VardeWorld, language: String, step: &Step
         .map(|row| {
             let mut item = json!({});
             for (column, value) in header.iter().zip(row) {
-                // The one field the protocol counts rather than spells. The
-                // table names the two formats, because a Scenario saying `2`
-                // would be a Scenario about the wire rather than about a
-                // snippet.
                 if column == "format" {
                     item["insertTextFormat"] = json!(match value.as_str() {
                         "snippet" => 2,
@@ -12223,9 +10910,6 @@ fn answers_with_candidates(world: &mut VardeWorld, language: String, step: &Step
     answer_completion(world, &language, Value::Array(items));
 }
 
-/// A reply the size a real server's is. Named by its count rather than spelled
-/// out, because the Scenario is about the *number* — a box as tall as the reply
-/// is what covered the line being typed.
 #[when(expr = "the language server for {string} answers with {int} candidates")]
 fn answers_with_many_candidates(world: &mut VardeWorld, language: String, many: usize) {
     let items: Vec<Value> = (1..=many)
@@ -12237,8 +10921,6 @@ fn answers_with_many_candidates(world: &mut VardeWorld, language: String, many: 
     answer_completion(world, &language, Value::Array(items));
 }
 
-/// The server saying it knows of nothing that starts like this: an empty list,
-/// which is what a prefix nothing matches answers with.
 #[when(expr = "the language server for {string} answers with no candidates")]
 fn answers_with_no_candidates(world: &mut VardeWorld, language: String) {
     answer_completion(world, &language, json!([]));
@@ -12251,10 +10933,6 @@ fn answer_completion(world: &mut VardeWorld, language: &str, result: Value) {
     );
 }
 
-/// What the formatting request asked, in the editor's own coordinates: which
-/// character asked for it, and where the cursor was when it did. Converted
-/// here rather than pinned as the protocol's zero-based line in the Gherkin —
-/// the same direction the hover request assertion converts in.
 #[then(
     expr = "the language server for {string} was asked to format after {string} at line {int} column {int}"
 )]
@@ -12277,14 +10955,6 @@ fn was_asked_to_format(
     );
 }
 
-/// The reply to the formatting Varde last asked for, under that request's own
-/// id — the same correlation the hover, definition and completion answers go
-/// through.
-///
-/// The edits are in the editor's own 1-based columns, with `to` the last
-/// column the edit covers, so a Scenario says what a reader would say rather
-/// than what the wire holds. A protocol range ends at the first place it does
-/// not cover, which is that column's number exactly.
 #[given(expr = "the language server for {string} answers the formatting with:")]
 #[when(expr = "the language server for {string} answers the formatting with:")]
 fn answers_the_formatting(world: &mut VardeWorld, language: String, step: &Step) {
@@ -12313,11 +10983,6 @@ fn answers_the_formatting(world: &mut VardeWorld, language: String, step: &Step)
     );
 }
 
-/// A list already on screen. Written into the state rather than driven through
-/// a reply because the Scenarios that use it are about the keys, not about how
-/// the list got there — the Scenarios above cover that, through the reply.
-/// Placed the way a reply places it: below the line the cursor is on, which is
-/// the one being typed.
 #[given(expr = "a candidate list is open in the editor with:")]
 fn a_candidate_list_is_open(world: &mut VardeWorld, step: &Step) {
     let items = step
@@ -12333,10 +10998,6 @@ fn a_candidate_list_is_open(world: &mut VardeWorld, step: &Step) {
             snippet: false,
         })
         .collect();
-    // Placed the way a reply places one, from where the cursor is — and from
-    // line 1 column 1 when the Scenario opened no file at all: the Scenarios
-    // that arrange a list rather than earning one are about the keys, and a
-    // key does not care where the box is.
     let place = world
         .state
         .current_buffer
@@ -12349,10 +11010,6 @@ fn a_candidate_list_is_open(world: &mut VardeWorld, step: &Step) {
     arrange_candidates(world, items, place);
 }
 
-/// A list written into the state, placed the way a reply places one. One
-/// function for both arranging steps: the placement is the thing under test in
-/// the Scenarios above, and a second copy of it here would be a second author
-/// for it.
 fn arrange_candidates(world: &mut VardeWorld, items: Vec<Candidate>, place: Place) {
     let path = world
         .state
@@ -12369,10 +11026,6 @@ fn arrange_candidates(world: &mut VardeWorld, items: Vec<Candidate>, place: Plac
         place,
         about: About::Candidates,
     };
-    // The list belongs to the file on screen, so the arranged state says so
-    // even where the Scenario opened nothing: a list naming another document is
-    // taken down by the core before a key can reach it, and a fixture that
-    // arranged one would be arranging a state the core cannot be in.
     world.state.current_buffer = Some(asked.path.clone());
     world.state.modal = Modal::Candidates(Candidates::offering(&world.state, items, asked));
 }
@@ -12412,9 +11065,6 @@ fn candidate_list_is_not_open(world: &mut VardeWorld) {
     );
 }
 
-/// Nothing left to Tab to, which is the whole of what "the sequence is over"
-/// means: the stops are the ones that have not been visited, so none pending is
-/// none left.
 #[then(expr = "no tab stops are pending")]
 fn no_tab_stops(world: &mut VardeWorld) {
     assert!(
@@ -12441,16 +11091,11 @@ fn candidates_are(world: &mut VardeWorld, step: &Step) {
     assert_eq!(shown, expected);
 }
 
-/// The box's height, which is the whole of defect one: a box as tall as the
-/// reply is a box the renderer clamps to the pane and draws over the line
-/// being typed.
 #[then(expr = "the candidate list is {int} rows tall")]
 fn candidate_list_rows(world: &mut VardeWorld, rows: usize) {
     assert_eq!(candidate_list(world).rows(), rows);
 }
 
-/// Which candidate the window starts at — the selection scrolling inside the
-/// box rather than the box growing to hold it.
 #[then(expr = "the first candidate shown is {string}")]
 fn first_candidate_shown(world: &mut VardeWorld, label: String) {
     let list = candidate_list(world);
@@ -12572,10 +11217,6 @@ fn editor_says(world: &mut VardeWorld, notice: String) {
     );
 }
 
-/// What the editor did *not* say. Load-bearing: the notice the arbitration
-/// exists to withhold is the one a plausible implementation gives on the first
-/// empty reply, and a Scenario that only checks the right thing happened would
-/// pass with the wrong sentence on screen beside it.
 #[then(expr = "the editor never said {string}")]
 fn editor_never_said(world: &mut VardeWorld, notice: String) {
     assert!(
@@ -12585,8 +11226,6 @@ fn editor_never_said(world: &mut VardeWorld, notice: String) {
     );
 }
 
-/// The prefix `ConfigError`'s `Display` puts first, pinned beside it: the
-/// fault's own words are copy, and the file and line are what fix it.
 #[then(expr = "the message names the file {string} at line {int}")]
 fn message_names_file_and_line(world: &mut VardeWorld, file: String, line: usize) {
     let prefix = format!("{file}:{line}: ");
@@ -12616,10 +11255,6 @@ fn reported_times(world: &mut VardeWorld, notice: String, count: usize) {
     assert_eq!(reported, count, "reported: {:?}", world.reported);
 }
 
-/// A stand-in file with enough lines for a scenario to name one. The stand-in
-/// a file nobody described gets is one line long, so a cursor sent to line 12
-/// clamps to line 1 and the scenario passes without the jump ever having
-/// happened. Lines wide enough to hold a column, for the same reason.
 #[given(expr = "{string} on disk is {int} lines long")]
 fn is_lines_long(world: &mut VardeWorld, path: String, lines: usize) {
     let contents = (1..=lines)
@@ -12643,8 +11278,6 @@ fn on_disk_holds(world: &mut VardeWorld, path: String, step: &Step) {
     world.files.insert(full, contents);
 }
 
-/// The absence that says the server was told the Buffer rather than the file:
-/// nothing was written, so what a server heard about cannot have come from disk.
 #[then(expr = "{string} on disk still holds:")]
 fn on_disk_still_holds(world: &mut VardeWorld, path: String, step: &Step) {
     let expected = step.docstring().expect("docstring").trim_matches('\n');
@@ -12654,10 +11287,6 @@ fn on_disk_still_holds(world: &mut VardeWorld, path: String, step: &Step) {
     );
 }
 
-/// A Buffer whose Document version has moved: opened, then edited until its
-/// revision is the one the Scenario names. Driven through the editor rather
-/// than assigned, because `revision` is bumped by content changes and nothing
-/// else — which is the whole reason it can be a version at all.
 #[given(expr = "{string} is open in the editor at revision {int}")]
 fn open_at_revision(world: &mut VardeWorld, path: String, revision: u64) {
     open_clean(world, path.clone());
@@ -12678,13 +11307,6 @@ fn open_at_revision(world: &mut VardeWorld, path: String, revision: u64) {
     );
 }
 
-// ---- F31: diagnostics. A server push, so nothing correlates it to a request:
-// the world builds the notification and hands it to the core, and no scenario
-// runs a server.
-
-/// One `publishDiagnostics` notification, from a table of lines and severities.
-/// The version is the one the Scenario names, or absent — the protocol's own
-/// optional field, and the difference the stale-version drop turns on.
 fn publish(world: &mut VardeWorld, language: &str, path: &str, version: Option<i64>, step: &Step) {
     let diagnostics: Vec<Value> = step
         .table()
@@ -12716,8 +11338,6 @@ fn publish(world: &mut VardeWorld, language: &str, path: &str, version: Option<i
     );
 }
 
-/// The protocol's numbering, which the Scenarios never spell out — they name
-/// the severity, and this is the one place the wire's integer appears.
 fn severity_number(severity: &str) -> u8 {
     match severity {
         "error" => 1,
@@ -12760,9 +11380,6 @@ fn publishes_without_version(world: &mut VardeWorld, language: String, path: Str
     publish(world, &language, &path, None, step);
 }
 
-/// A push whose ranges name columns as well as lines — the table's `from` and
-/// `to` are 1-based and inclusive, as the Scenario reads them, and this is the
-/// one place they become the protocol's zero-based start and exclusive end.
 #[given(expr = "the language server for {string} publishes diagnostics for {string} with spans:")]
 #[when(expr = "the language server for {string} publishes diagnostics for {string} with spans:")]
 fn publishes_with_spans(world: &mut VardeWorld, language: String, path: String, step: &Step) {
@@ -12793,8 +11410,6 @@ fn publishes_with_spans(world: &mut VardeWorld, language: String, path: String, 
     );
 }
 
-/// What is underlined on a line, as the core answers it — the span already
-/// clamped to the characters the line holds.
 #[then(expr = "the underline on line {int} of {string} covers columns {int} through {int}")]
 fn underline_covers(world: &mut VardeWorld, line: usize, path: String, from: usize, to: usize) {
     let full = abs(world, &path);
@@ -12837,7 +11452,6 @@ fn pointer_rests_in_the_tree(world: &mut VardeWorld, row: usize, column: usize) 
     );
 }
 
-/// What the box beside the line says, wrapped as the reader sees it.
 #[then(expr = "the diagnostic box says {string}")]
 fn diagnostic_box_says(world: &mut VardeWorld, message: String) {
     let (lines, _) = lsp::pointed(&world.state).expect("no diagnostic box is shown");
@@ -12847,8 +11461,6 @@ fn diagnostic_box_says(world: &mut VardeWorld, message: String) {
     );
 }
 
-/// Beside the line and never on it: a box over the underline hides the
-/// characters it is about.
 #[then(expr = "the diagnostic box sits beside line {int}")]
 fn diagnostic_box_beside(world: &mut VardeWorld, line: usize) {
     let (_, placement) = lsp::pointed(&world.state).expect("no diagnostic box is shown");
@@ -12860,10 +11472,6 @@ fn no_diagnostic_box(world: &mut VardeWorld) {
     assert_eq!(lsp::pointed(&world.state).map(|(lines, _)| lines), None);
 }
 
-/// The other half of that distinction: the server has said nothing about the
-/// file at all. True until something is pushed, and stated rather than assumed
-/// because it is the precondition the Scenario turns on — a Background that
-/// came to seed diagnostics would make it pass for the wrong reason.
 #[given(expr = "the language server for {string} has published no diagnostics for {string}")]
 fn has_published_nothing(world: &mut VardeWorld, _language: String, path: String) {
     let full = abs(world, &path);
@@ -12874,17 +11482,12 @@ fn has_published_nothing(world: &mut VardeWorld, _language: String, path: String
     );
 }
 
-/// The empty push — the server saying a file is clean, which is not the same
-/// fact as its never having spoken about it.
 #[given(expr = "the language server for {string} publishes no diagnostics for {string}")]
 #[when(expr = "the language server for {string} publishes no diagnostics for {string}")]
 fn publishes_nothing(world: &mut VardeWorld, language: String, path: String, step: &Step) {
     publish(world, &language, &path, None, step);
 }
 
-/// Every publisher's, flattened. A Scenario that names a count names what the
-/// file carries, not what one of the servers serving it said — which is the
-/// whole of what two publishers on one path changed.
 fn diagnostics(world: &VardeWorld, path: &str) -> Vec<lsp::Diagnostic> {
     world
         .state
@@ -12908,11 +11511,6 @@ fn diagnostic_count(world: &mut VardeWorld, path: String, count: usize) {
     assert_eq!(held.len(), count, "{path} carries: {held:?}");
 }
 
-// ---- F31: what Review view says about the change under review. Every step
-// below reads `review::diagnostics`, which is the whole of what the view draws:
-// a row per file under review, and nothing at all where nobody has spoken.
-
-/// One row of the review's counts, by the file it names.
 fn review_row(world: &VardeWorld, path: &str) -> Option<review::Counts> {
     let rows = review::diagnostics(&world.state);
     let (_, counts) = rows
@@ -12939,9 +11537,6 @@ fn is_measured(world: &mut VardeWorld, path: String) {
     );
 }
 
-/// The distinction the whole Rule turns on, asserted from the other side: not
-/// measured is not zero, and a step that only checked the number would pass on
-/// a view that conflated them.
 #[then(expr = "the review diagnostic count for {string} is not {int}")]
 fn review_count_is_not(world: &mut VardeWorld, path: String, count: usize) {
     let row = review_row(world, &path);
@@ -12962,9 +11557,6 @@ fn review_count_is(world: &mut VardeWorld, path: String, count: usize) {
     );
 }
 
-/// The counts there are, file by file. Only the measured rows: a file nobody
-/// has spoken about has no count to put in a column, which is exactly what
-/// `is not measured` above says about it.
 #[then("the review diagnostic counts are:")]
 fn review_counts_are(world: &mut VardeWorld, step: &Step) {
     let expected: Vec<(String, usize, usize)> = step
@@ -12988,7 +11580,6 @@ fn review_counts_are(world: &mut VardeWorld, step: &Step) {
     assert_eq!(measured, expected);
 }
 
-/// Which files the review reports on at all, measured or not.
 #[then("the review diagnostic counts name exactly:")]
 fn review_counts_name(world: &mut VardeWorld, step: &Step) {
     let expected: Vec<String> = step
@@ -13005,9 +11596,6 @@ fn review_counts_name(world: &mut VardeWorld, step: &Step) {
     assert_eq!(named, expected);
 }
 
-/// The figures, whether or not every file under review is measured — that
-/// distinction is the border's to draw, and `Unmeasured` is the absence the
-/// steps above assert per file.
 fn review_total(world: &VardeWorld) -> review::Counts {
     match review::diagnostic_total(&world.state) {
         review::Total::Whole(total) | review::Total::Partial(total) => total,
@@ -13025,10 +11613,6 @@ fn review_warning_total(world: &mut VardeWorld, expected: usize) {
     assert_eq!(review_total(world).warnings, expected);
 }
 
-/// The reviewer put a file back, so git stops reporting it and the review stops
-/// listing it. Written the way the edge writes it — `state.repo` is git's own
-/// answer, polled — and followed by a pass, because a file leaving the review
-/// is a document its server must be told is closed.
 #[when(expr = "{string} is restored to what HEAD holds")]
 fn restored_to_head(world: &mut VardeWorld, path: String) {
     let kept: Vec<GitFile> = world
@@ -13078,9 +11662,6 @@ fn no_diagnostic_message(world: &mut VardeWorld) {
     assert_eq!(lsp::message_at_cursor(&world.state), None);
 }
 
-/// The one screen fact the diagnostics carry: the gutter is the layout's
-/// answer, so a mark takes the column the line number was already padded with
-/// rather than a column of its own.
 #[given(expr = "the editor gutter width is {int}")]
 #[then(expr = "the editor gutter width is {int}")]
 fn gutter_width_is(world: &mut VardeWorld, expected: u16) {
@@ -13097,13 +11678,6 @@ fn cursor_moved_to(world: &mut VardeWorld, line: usize, column: usize) {
     world.send(Event::JumpTo(Place { line, column }));
 }
 
-// ---- F31: the palette's second face — what could serve this workspace ----
-
-/// The list is `State::servers`, which starting fills from the merged
-/// configuration — so a scenario that only names configuration has to have
-/// started before it can open the list. Guarded on nothing having started yet,
-/// because starting replaces the whole `State`: a scenario that has already
-/// built one says "Varde started in the project" itself, first.
 fn started(world: &mut VardeWorld) {
     if world.config.is_none() {
         varde_starts(world);
@@ -13118,8 +11692,6 @@ fn command_is_on_path(world: &mut VardeWorld, command: String) {
     probe_lands(world);
 }
 
-/// A fact about this workspace as the edge found it — or did not. Stated the
-/// way `PATH` is, and for the same reason: the core is told and never looks.
 #[given(expr = "the edge resolved {string} to {string}")]
 fn edge_resolved(world: &mut VardeWorld, name: String, value: String) {
     world.workspace_facts.insert(name, value);
@@ -13127,10 +11699,6 @@ fn edge_resolved(world: &mut VardeWorld, name: String, value: String) {
     world.tell_core();
 }
 
-/// The same fact appearing while Varde runs — what an `npm install` finishing
-/// looks like from the core's side. The pass comes round the way the edge
-/// brings it round after a re-probe, which is what makes "and no restart" an
-/// assertion rather than a hope (R31.24).
 #[when(expr = "the edge resolves {string} to {string}")]
 fn edge_resolves(world: &mut VardeWorld, name: String, value: String) {
     world.workspace_facts.insert(name, value);
@@ -13152,13 +11720,6 @@ fn command_is_not_on_path(world: &mut VardeWorld, command: String) {
     probe_lands(world);
 }
 
-/// What `PATH` holds is a fact about the machine, so the step writes the field
-/// and then says a fresh probe has landed — which is exactly what the edge
-/// does, in that order. It is the *landing* that Varde acts on: a command that
-/// has appeared is a reason to forget it was missing, and a re-check that still
-/// finds nothing is what offers the restart. Before Varde has started there is
-/// nothing to tell — starting replaces the whole `State` — so the Scenarios
-/// that state `PATH` as a precondition set the field and stop there.
 fn probe_lands(world: &mut VardeWorld) {
     world.tell_core();
     if world.config.is_some() {
@@ -13173,8 +11734,6 @@ fn open_the_palette(world: &mut VardeWorld) {
     world.send(Event::FallbackBinding);
 }
 
-/// A key pressed at the open palette, routed the way the edge routes it: what a
-/// letter means with a modal up is the router's answer, not the step's.
 #[given(expr = "I press {string} in the palette")]
 #[when(expr = "I press {string} in the palette")]
 fn press_in_palette(world: &mut VardeWorld, key: String) {
@@ -13202,8 +11761,6 @@ fn palette_is_closed(world: &mut VardeWorld) {
     assert_eq!(world.state.modal, Modal::None);
 }
 
-/// A row by its group and name: `rust` is a language server and a formatter,
-/// so a name alone does not say which row is meant.
 fn tool_row(world: &VardeWorld, kind: tools::Kind, name: &str) -> tools::ToolRow {
     tools::rows(&world.state)
         .into_iter()
@@ -13220,7 +11777,6 @@ fn tool_row(world: &VardeWorld, kind: tools::Kind, name: &str) -> tools::ToolRow
         })
 }
 
-/// The group a step names, spelled the way a reader says it.
 fn kind(word: &str) -> tools::Kind {
     match word {
         "server" => tools::Kind::Server,
@@ -13231,8 +11787,6 @@ fn kind(word: &str) -> tools::Kind {
     }
 }
 
-/// The language server scenarios' own spelling: a row named by language alone is
-/// the language server's.
 fn server_row(world: &VardeWorld, language: &str) -> tools::ToolRow {
     tool_row(world, tools::Kind::Server, language)
 }
@@ -13245,8 +11799,6 @@ fn kind_row_reads(world: &mut VardeWorld, group: String, name: String, expected:
     );
 }
 
-/// The package manager the row's install needs and this machine lacks, named
-/// on the row because `needs-installer` alone does not say which to install.
 #[then(expr = "the {word} row for {string} needs the installer {string}")]
 fn row_needs_installer(world: &mut VardeWorld, group: String, name: String, expected: String) {
     match tool_row(world, kind(&group), &name).availability {
@@ -13255,8 +11807,6 @@ fn row_needs_installer(world: &mut VardeWorld, group: String, name: String, expe
     }
 }
 
-/// The `[facts.*]` row a server's command is here without, named on the row
-/// because `missing-requirement` alone does not say what to install.
 #[then(expr = "the {word} row for {string} needs the requirement {string}")]
 fn row_needs_requirement(world: &mut VardeWorld, group: String, name: String, expected: String) {
     match tool_row(world, kind(&group), &name).availability {
@@ -13281,8 +11831,6 @@ fn row_is_the_templates(world: &mut VardeWorld, group: String, name: String) {
     );
 }
 
-/// Each group once, in the order the list draws them — which is the order
-/// the rows come in, since the renderer heads a group where its kind changes.
 #[then("the tools list is grouped as:")]
 fn tools_grouped_as(world: &mut VardeWorld, step: &Step) {
     let expected: Vec<String> = step
@@ -13315,8 +11863,6 @@ fn row_reads(world: &mut VardeWorld, language: String, expected: String) {
     assert_eq!(server_row(world, &language).availability.as_str(), expected);
 }
 
-/// The row's own words for what it cannot do, which is the whole of why the
-/// state exists: `partly-working` on its own tells a reader to go looking.
 #[then(expr = "the row for {string} says it cannot do {string}")]
 fn row_says_it_cannot(world: &mut VardeWorld, language: String, expected: String) {
     match server_row(world, &language).availability {
@@ -13325,21 +11871,12 @@ fn row_says_it_cannot(world: &mut VardeWorld, language: String, expected: String
     }
 }
 
-/// Which OS the binary was built for, handed in as `main.rs` hands it in — the
-/// step that makes a Linux row specifiable on a Mac (R31.22).
 #[given(expr = "Varde was built for {string}")]
 fn built_for(world: &mut VardeWorld, os: String) {
-    // Both, because a Scenario that never starts still has to look up an
-    // install command under it: starting copies `Startup::os` into the state,
-    // and one that arranges its own world would otherwise be on no OS at all.
     world.state.os = os.clone();
     world.startup.os = os;
 }
 
-/// The install key, on the row the arrows were walked to. Both go through the
-/// router, so what the list answers to is the router's answer and not the
-/// step's — and walking rather than reaching into the modal is what holds the
-/// selection to being reachable with no modifier.
 #[when(expr = "I install the row for {string}")]
 #[given(expr = "I asked to install the row for {string}")]
 fn install_the_row(world: &mut VardeWorld, language: String) {
@@ -13358,8 +11895,6 @@ fn global_config_path(world: &VardeWorld) -> PathBuf {
     world.startup.varde_home.join(startup::CONFIG_FILE)
 }
 
-/// Edited in another editor after Varde started, so what Varde started on
-/// and what is on disk now are two different texts.
 #[given("the global config has since been edited to:")]
 fn global_config_edited(world: &mut VardeWorld, step: &Step) {
     started(world);
@@ -13417,10 +11952,6 @@ fn shell_pane_runs_install(world: &mut VardeWorld, install: String) {
     );
 }
 
-/// The shipped default, asserted on the server it names rather than on the
-/// package manager that installs it: which manager is right for a machine is
-/// data `PROGRAMS` carries and a config file may replace, so a scenario pinning
-/// the whole string would be a scenario about the data.
 #[then(expr = "the shell pane runs a command mentioning {string}")]
 fn shell_pane_runs_mentioning(world: &mut VardeWorld, fragment: String) {
     assert!(
@@ -13430,8 +11961,6 @@ fn shell_pane_runs_mentioning(world: &mut VardeWorld, fragment: String) {
     );
 }
 
-/// The sentinel written and seen by the watcher, as the shell's `echo $?`
-/// and the rename after it leave it.
 #[when(expr = "the install reports the exit status {string}")]
 fn install_reports(world: &mut VardeWorld, status: String) {
     let sentinel = install_sentinel(world);
@@ -13439,12 +11968,6 @@ fn install_reports(world: &mut VardeWorld, status: String) {
     world.send(Event::FilesAppeared(vec![(sentinel, tree::Kind::File)]));
 }
 
-/// The list open with the selection on that row, walked to with the
-/// arrows rather than reached into: what the list answers to is the router's
-/// answer, and walking is what holds the selection to being reachable with no
-/// modifier. Reopened when it is not up, because `i` closes it — the install
-/// runs in the shell pane and the focus follows it — so a re-check
-/// after an install has no list to walk. `r` leaves it standing.
 fn walk_to_row(world: &mut VardeWorld, group: tools::Kind, name: &str) {
     if !matches!(world.state.modal, Modal::Tools { .. }) {
         open_tools(world);
@@ -13463,33 +11986,17 @@ fn focus_is_the_terminal(world: &mut VardeWorld) {
     assert_eq!(world.state.focus, Pane::Terminal);
 }
 
-/// A language written off earlier in the session, exactly as the edge writes
-/// one off: the spawn produced no process, so nothing is held for it and the
-/// core is told. Past tense on purpose — this is the state the Scenario starts
-/// from, not the failure it is about. The command is the configured default's,
-/// which is what the Scenario then names on `PATH`.
 #[given(expr = "a language server for {string} failed to start")]
 fn server_failed_to_start(world: &mut VardeWorld, language: String) {
     started(world);
     world.lsp_is_gone(&language, Gone::FailedToStart);
 }
 
-/// Started, and started *once*: forgetting a write-off drops the conversation,
-/// so a pass that ran before the edge reported the new process would ask for a
-/// second one — and a respawn loop is the one failure R31.24 has to avoid. The
-/// counted step already spells that, so this is it with the count the Scenario
-/// leaves implicit.
 #[then(expr = "a language server is started for {string}")]
 fn server_is_started_for(world: &mut VardeWorld, language: String) {
     servers_started_for(world, 1, language);
 }
 
-/// The write-off still holding, said as an absence: nothing was spawned at any
-/// point in the run, so a probe that found nothing changed nothing. Narrower
-/// than `no language server was started`, which also holds the *startup*
-/// effects to an allowlist — this Scenario has started, opened a buffer and
-/// written a language off before it gets here, so the whole run's effects are
-/// not the promise being made.
 #[then(expr = "no language server is started")]
 fn no_language_server_is_started(world: &mut VardeWorld) {
     assert!(
@@ -13499,9 +12006,6 @@ fn no_language_server_is_started(world: &mut VardeWorld) {
     );
 }
 
-/// Installing closed the list, so re-checking reopens it and walks back to the
-/// row — the whole gesture, through the router, because a re-check nobody can
-/// reach is a re-check nobody makes.
 #[when(expr = "I re-check the row for {string}")]
 #[given(expr = "I re-check the row for {string}")]
 fn recheck_the_row(world: &mut VardeWorld, language: String) {
@@ -13519,13 +12023,6 @@ fn is_not_asking_whether_to_restart(world: &mut VardeWorld) {
     assert_ne!(world.state.modal, Modal::Restart);
 }
 
-/// The question, reached the only way it can be: a row installed and then
-/// re-checked with the command still nowhere. Driven rather than set, so the
-/// Scenario that asserts declining changes nothing is asserting it about the
-/// state the gesture really produces. `zig` is the vehicle because the shipped
-/// defaults give it both a command and a macOS install command and nothing puts
-/// `zls` on the world's `PATH`; the question itself carries no language, so
-/// which row asked it is not something a Scenario can observe.
 #[given(expr = "Varde is asking whether to restart")]
 fn is_asking_whether_to_restart(world: &mut VardeWorld) {
     recheck_the_row(world, "zig".to_string());
@@ -13538,15 +12035,6 @@ fn decline_the_restart(world: &mut VardeWorld) {
     route_key(world, "n", 0);
 }
 
-// ---- F32: formatting. The Language server half drives replies exactly as the
-// on-type half does; the command half records what the edge was asked to run
-// and answers it in a step, because what a child made of the text is the fact
-// only the edge can observe ----
-
-/// The reply to the document formatting Varde last asked for, under that
-/// request's own id. The edits are in the editor's own 1-based columns with
-/// `to` the last column covered, exactly as the on-type step spells them, so a
-/// Scenario says what a reader would say rather than what the wire holds.
 #[given(expr = "the language server for {string} answers the document formatting with:")]
 #[when(expr = "the language server for {string} answers the document formatting with:")]
 fn answers_the_document_formatting(world: &mut VardeWorld, language: String, step: &Step) {
@@ -13572,9 +12060,6 @@ fn answers_the_document_formatting(world: &mut VardeWorld, language: String, ste
     document_formatting_reply(world, &language, json!(edits));
 }
 
-/// The server saying there is nothing to change, which the protocol spells as a
-/// null result — the empty hand a key was pressed for, so it is the one that
-/// speaks.
 #[given(expr = "the language server for {string} answers the document formatting with nothing")]
 #[when(expr = "the language server for {string} answers the document formatting with nothing")]
 fn answers_the_document_formatting_with_nothing(world: &mut VardeWorld, language: String) {
@@ -13620,9 +12105,7 @@ fn formatter_takes_arguments(world: &mut VardeWorld, language: String, args: Str
         args.split_whitespace().map(str::to_string).collect();
 }
 
-/// The same arrangement as the step below, in a docstring, which is the only
-/// way a scenario can put a newline inside the install command — a `{string}`
-/// carries the two characters `\n`, not the one the shell reads as Enter.
+/// A Gherkin {string} carries `\n` as two characters, so a real newline needs a docstring
 #[given(expr = "the formatter for {string} is installed on {string} with:")]
 fn formatter_installed_with_docstring(
     world: &mut VardeWorld,
@@ -13673,9 +12156,6 @@ fn the_formatter_for_is(world: &mut VardeWorld, language: String, command: Strin
     assert_eq!(configured_formatter(world, &language).command, command);
 }
 
-/// What the edge was handed: the command, and the text that goes in on its
-/// stdin. Both in one step, because a command run over text nobody named is
-/// half an assertion.
 #[then(expr = "the formatter {string} was run with:")]
 fn formatter_was_run_with(world: &mut VardeWorld, command: String, step: &Step) {
     let expected = step.docstring().expect("docstring").trim_matches('\n');
@@ -13706,10 +12186,6 @@ fn no_formatter_was_run(world: &mut VardeWorld) {
     );
 }
 
-/// How many times, which is the only assertion that can tell a second `:format`
-/// that ran from a second `:format` that remembered the command was missing:
-/// the answer steps below reach for the *last* run, and a run that never
-/// happened leaves the first one there, still current, still applicable.
 #[then(expr = "the formatter was run {int} times")]
 fn the_formatter_was_run_times(world: &mut VardeWorld, expected: usize) {
     assert_eq!(
@@ -13728,11 +12204,6 @@ fn last_run(world: &VardeWorld) -> Effect {
         .expect("a formatter was run")
 }
 
-/// The edge answering, which is the only party that can: it held the child, or
-/// it did not. Written as three `When`s rather than as an arrangement, because
-/// whether the command is there is a fact about the machine at the moment it
-/// ran — nothing is remembered between two `:format`s, which is what the
-/// no-restart Scenario turns on.
 #[given(expr = "the formatter answers with:")]
 #[when(expr = "the formatter answers with:")]
 fn formatter_answers_with(world: &mut VardeWorld, step: &Step) {
@@ -13740,9 +12211,7 @@ fn formatter_answers_with(world: &mut VardeWorld, step: &Step) {
     formatter_answered(world, format::Answer::Done(text.to_string()));
 }
 
-/// Nothing on stdout, which no docstring can express: a Gherkin docstring
-/// always carries the newline the fences sit on, and an exit-0 command that
-/// wrote nothing is the whole of what this covers.
+/// A Gherkin docstring always ends in a newline, so it cannot express empty stdout
 #[given(expr = "the formatter answers with nothing at all")]
 #[when(expr = "the formatter answers with nothing at all")]
 fn formatter_answers_with_nothing(world: &mut VardeWorld) {
@@ -13780,11 +12249,6 @@ fn formatter_answered(world: &mut VardeWorld, answer: format::Answer) {
     });
 }
 
-// ---- F33: the Buffers pane ----
-
-/// Through the toggle, not by poking the field, for the reason the Risk list's
-/// own Given gives: the only way the pane comes to be on screen is being asked
-/// for, and asking for it puts focus in it.
 #[given(expr = "the Buffers pane is shown")]
 fn buffers_pane_is_shown(world: &mut VardeWorld) {
     if world.state.corner != layout::Corner::Buffers {
@@ -13808,18 +12272,11 @@ fn buffers_pane_should_be_hidden(world: &mut VardeWorld) {
     assert_ne!(world.state.corner, layout::Corner::Buffers);
 }
 
-/// The Corner holding nothing at all, which is not what a per-pane step says: a
-/// pane being hidden is "the Corner holds something else", and a restart that
-/// opened the wrong occupant satisfies every one of those. The slot names its
-/// occupant, so the scenarios about a Corner nobody opened ask about the slot.
 #[then(expr = "the corner is empty")]
 fn corner_should_be_empty(world: &mut VardeWorld) {
     assert_eq!(world.state.corner, layout::Corner::Hidden);
 }
 
-/// The rows as the pane draws them, by path relative to the root — read off the
-/// same list the renderer walks rather than off `buffers` directly, so a pane
-/// listing something else fails here.
 #[then("the Buffers pane lists:")]
 fn buffers_pane_lists(world: &mut VardeWorld, step: &Step) {
     let expected: Vec<PathBuf> = step
@@ -13836,9 +12293,6 @@ fn buffers_pane_lists(world: &mut VardeWorld, step: &Step) {
     assert_eq!(actual, expected);
 }
 
-/// The same `Mark` the editor's dot strip draws, asked of a path the pane is
-/// actually listing: a mark for a file with no row would be a claim about
-/// nothing.
 #[then(expr = "the Buffers pane marks {string} as {string}")]
 fn buffers_pane_marks(world: &mut VardeWorld, path: String, expected: String) {
     let path = abs(world, &path);
@@ -13884,14 +12338,6 @@ fn click_buffers_row(world: &mut VardeWorld, row: usize) {
     world.send(Event::ClickBufferRow(row - 1));
 }
 
-/// A real drag across the rows of whichever pane is in the corner — the press
-/// the gesture starts with and then the move — fulfilled the way `main` fulfils
-/// one: whatever span comes back is filled with characters off a grid and
-/// handed to `Event::SelectIn`. A pane holding rows must hand back no span at
-/// all, so this drives the press itself rather than `VardeWorld::drag`'s two
-/// moves. Which pane it is is the layout's to answer, not the step's: asserting
-/// only that Ctrl+C copies nothing would pass against a pane nobody ever
-/// dragged in.
 #[when("I drag from the corner pane's first row to its second")]
 fn drag_across_corner_rows(world: &mut VardeWorld) {
     let panes = world.panes();
@@ -13926,8 +12372,6 @@ fn drag_across_corner_rows(world: &mut VardeWorld) {
     }
 }
 
-/// Enough rows to overflow the pane, opened the way any file is opened, so the
-/// scrolling Scenarios are driving the list the pane actually draws.
 #[given(expr = "{int} files are open in the editor")]
 fn many_files_open(world: &mut VardeWorld, count: usize) {
     for index in 1..=count {
@@ -13941,14 +12385,6 @@ fn state_records_corner(world: &mut VardeWorld, path: String, occupant: String) 
     world.startup.state_json = Some(format!("{{\"corner\": \"{occupant}\"}}"));
 }
 
-// ---- F34: the Cursor history ----
-
-/// A jump the way every long-distance jump reaches the edge: `Effect::OpenAt`,
-/// fulfilled the way `main` fulfils one. Driven as the effect rather than as
-/// the landing event it comes back as, because an `OpenAt` for the file already
-/// on screen is exactly what the recording rule has to survive — a step that
-/// moved the cursor itself would pass against an implementation that records
-/// the place it arrived at rather than the place it left.
 #[given(expr = "I jump to {string} line {int}")]
 #[when(expr = "I jump to {string} line {int}")]
 fn jump_to_place(world: &mut VardeWorld, path: String, line: usize) {
@@ -13967,9 +12403,6 @@ fn history_is_empty(world: &mut VardeWorld) {
     );
 }
 
-/// The rows by the file and line each names, read off the same list the pane
-/// draws. The whole list, in order, so a place recorded that should not have
-/// been fails here rather than passing as a superset.
 #[then("the cursor history holds:")]
 fn history_holds(world: &mut VardeWorld, step: &Step) {
     let expected: Vec<(String, usize)> = step
@@ -13987,7 +12420,6 @@ fn history_holds(world: &mut VardeWorld, step: &Step) {
     assert_eq!(actual, expected);
 }
 
-/// A filler Visit, named so the Scenarios can tell one from another.
 fn filler_visit(which: usize) -> varde::history::Visit {
     varde::history::Visit {
         file: match which {
@@ -14000,19 +12432,12 @@ fn filler_visit(which: usize) -> varde::history::Visit {
     }
 }
 
-/// The list, and the history's cursor left past the newest place — where
-/// recording that many would have left it, and where somebody who has not
-/// travelled anywhere stands. A fixture that left the cursor on the oldest row
-/// instead would answer the first Ctrl+p from the middle of the list, which is
-/// not the press this pane's boundary is about.
 #[given(expr = "the cursor history holds {int} places")]
 fn history_holds_places(world: &mut VardeWorld, count: usize) {
     world.state.visits = (0..count).map(filler_visit).collect();
     world.state.history_selection = count;
 }
 
-/// The cap itself, so the Scenario about dropping the oldest drives the
-/// boundary rather than a number that happens to be near it.
 #[given(expr = "the cursor history is full")]
 fn history_fill_to_the_cap(world: &mut VardeWorld) {
     history_holds_places(world, varde::history::CAP);
@@ -14036,9 +12461,6 @@ fn history_holds_no_place_in(world: &mut VardeWorld, file: String) {
     );
 }
 
-/// Through the toggle, not by poking the field, for the reason the Risk list's
-/// and the Buffers pane's own Givens say so: the only way the pane comes to be
-/// on screen is being asked for, and asking for it puts focus in it.
 #[given(expr = "the Cursor history pane is shown")]
 fn history_pane_is_shown(world: &mut VardeWorld) {
     if world.state.corner != layout::Corner::History {
@@ -14083,8 +12505,6 @@ fn history_row(world: &VardeWorld, row: usize) -> varde::history::Visit {
         .clone()
 }
 
-/// The name, not the path: the pane is the tree's width, and the selected row's
-/// whole path is on the border instead.
 #[then(expr = "Cursor history row {int} names the file {string} on line {int}")]
 fn history_row_names(world: &mut VardeWorld, row: usize, name: String, line: usize) {
     let visit = history_row(world, row);
@@ -14097,8 +12517,6 @@ fn history_row_names(world: &mut VardeWorld, row: usize, name: String, line: usi
     assert_eq!(visit.line, line);
 }
 
-/// Through `history::excerpt`, which is where the rule lives — the renderer
-/// only draws it, so a step reading the renderer would be asserting a colour.
 #[then(expr = "Cursor history row {int} shows the excerpt {string}")]
 fn history_row_excerpt(world: &mut VardeWorld, row: usize, expected: String) {
     let visit = history_row(world, row);
@@ -14108,9 +12526,6 @@ fn history_row_excerpt(world: &mut VardeWorld, row: usize, expected: String) {
     );
 }
 
-/// The file the row recorded, edited on the line the row recorded — through the
-/// buffer's own keys, so the Scenario changes the text the way anything else
-/// does rather than rewriting state behind the pane's back.
 #[when(expr = "the line Cursor history row {int} recorded is edited")]
 fn edit_the_recorded_line(world: &mut VardeWorld, row: usize) {
     let visit = history_row(world, row);
@@ -14151,9 +12566,6 @@ fn history_selection_should_be(world: &mut VardeWorld, row: usize) {
     );
 }
 
-/// The position past the newest Visit: where the history's cursor sits before
-/// anything has been travelled to, which is a place newer than everything
-/// recorded and therefore no row.
 #[then(expr = "the Cursor history selection is nothing")]
 fn history_selection_should_be_nothing(world: &mut VardeWorld) {
     assert_eq!(varde::history::selected(&world.state), None);
@@ -14179,16 +12591,11 @@ fn history_row_actions_offered(world: &mut VardeWorld, step: &Step) {
     assert_eq!(actual, expected);
 }
 
-/// A real click, through the hit-test: the row's own columns, so the step
-/// exercises the arithmetic that decides whether a click lands on the row or on
-/// its icon rather than sending the event it hopes for.
 #[when(expr = "I click Cursor history row {int}")]
 fn click_history_row(world: &mut VardeWorld, row: usize) {
     world.click(Pane::History, (row, 1), terminput::KeyModifiers::NONE);
 }
 
-/// The icon's own columns — the last two the row draws, hard against the
-/// right-hand border, which is where `ui` puts it and where `mouse` looks.
 #[when(expr = "I click the {string} action on Cursor history row {int}")]
 fn click_history_row_action(world: &mut VardeWorld, action: String, row: usize) {
     assert_eq!(action, varde::history::GO_TO, "unknown action {action:?}");
@@ -14212,12 +12619,6 @@ fn history_selection_in_view(world: &mut VardeWorld) {
     );
 }
 
-// ---- F35: reading aloud ----
-
-/// Everything a Reading needs, in place. The rows are `[speech]`'s own shape
-/// with the per-OS tables already resolved, which is what `startup` hands the
-/// core — no scenario names a synthesizer, so these are stand-ins with the
-/// right *shape* rather than the commands `PROGRAMS` ships (ADR 0013).
 #[given("a voice is configured")]
 fn voice_configured(world: &mut VardeWorld) {
     world.state.speech = reading::Speech {
@@ -14234,9 +12635,6 @@ fn voice_configured(world: &mut VardeWorld) {
     world.tell_core();
 }
 
-/// The three ways a Reading has nothing to speak with. Each undoes one of the
-/// three the Background put in place, so what is asserted is which piece is
-/// named and not merely that something refused.
 #[given("no synthesizer is on the PATH")]
 fn no_synthesizer(world: &mut VardeWorld) {
     world.voice_child = false;
@@ -14249,7 +12647,6 @@ fn no_voice(world: &mut VardeWorld) {
     world.tell_core();
 }
 
-/// Named, and deleted since — or never fetched to where the row says.
 #[given("the voice file is not on disk")]
 fn voice_not_on_disk(world: &mut VardeWorld) {
     world.voice_on_disk = false;
@@ -14267,9 +12664,6 @@ fn open_holding_inline(world: &mut VardeWorld, path: String, contents: String) {
     open_buffer(world, &path, &contents);
 }
 
-/// A charwise span over the first line that holds the text. Set as a value
-/// rather than driven through a drag: the Selection is pre-existing context
-/// here, and which gesture produced it is `selection.feature`'s question.
 #[given(expr = "the selection covers {string}")]
 fn selection_covers(world: &mut VardeWorld, text: String) {
     let lines: Vec<String> = current_buffer(world)
@@ -14277,11 +12671,6 @@ fn selection_covers(world: &mut VardeWorld, text: String) {
         .lines()
         .map(str::to_string)
         .collect();
-    // A passage none of the open text holds is a passage in another document,
-    // which is what a reader who has finished one and moved on to the next
-    // has: "the selection covers X" while a Reading of something else plays
-    // needs an X to cover, and it is opened rather than typed into the buffer
-    // already on screen.
     let lines = if lines.iter().any(|line| line.contains(&text)) {
         lines
     } else {
@@ -14337,9 +12726,6 @@ fn reading_started(world: &mut VardeWorld) {
     world.send(Event::StartReading);
 }
 
-/// A Reading already going, stated rather than performed: the passage is put
-/// in a markdown buffer, selected whole and started, because that is the only
-/// way there is one — R35.1 leaves no cursor or whole-file route to it.
 #[given(expr = "a reading of {string} is in flight")]
 #[when(expr = "a reading of {string} is started")]
 fn a_reading_is_in_flight(world: &mut VardeWorld, text: String) {
@@ -14353,9 +12739,6 @@ fn a_reading_is_in_flight(world: &mut VardeWorld, text: String) {
     );
 }
 
-/// The passage already on screen, read whole — the two-step Given above is
-/// what a scenario about a Reading's *text* needs, and this is what one about
-/// where the mark sits needs: a buffer with lines of its own to mark.
 #[given("a reading of the whole buffer is in flight")]
 fn a_reading_of_the_buffer_is_in_flight(world: &mut VardeWorld) {
     selection_covers_all(world);
@@ -14386,8 +12769,6 @@ fn reading_not_in_flight(world: &mut VardeWorld) {
     assert!(world.state.reading.is_none());
 }
 
-/// `reading.feature`'s Outline wording for the two above, which is one step
-/// with the outcome substituted into it.
 #[then(expr = "the reading is refused as {string}")]
 fn reading_refused_as(world: &mut VardeWorld, slug: String) {
     reading_not_in_flight(world);
@@ -14403,9 +12784,6 @@ fn reading_refuses(world: &mut VardeWorld, slug: String) {
     );
 }
 
-/// R35.4. The count and two of the three, which is what the scenario asks: the
-/// combinatorial boundary cases are unit tests beside `reading::utterances`,
-/// because `AGENTS.md` forbids chasing them through behaviour tests.
 #[then(expr = "the reading holds {int} utterances")]
 fn reading_holds_utterances(world: &mut VardeWorld, count: usize) {
     let reading = world.state.reading.as_ref().expect("a reading in flight");
@@ -14448,7 +12826,6 @@ fn reading_was_refused(world: &mut VardeWorld) {
     reading_not_in_flight(world);
 }
 
-/// Offered as Tools offers it: the list up, with the install key's row on it.
 #[then(expr = "the {word} row for {string} is offered")]
 fn row_is_offered(world: &mut VardeWorld, group: String, name: String) {
     let Modal::Tools { row } = world.state.modal else {
@@ -14464,8 +12841,6 @@ fn row_is_offered(world: &mut VardeWorld, group: String, name: String) {
     );
 }
 
-/// R35.10. The stream is Varde's own scratch and lives outside every
-/// workspace, so nothing a Reading does may name a path under the root.
 #[then("no file was written inside the workspace root")]
 fn nothing_written_in_workspace(world: &mut VardeWorld) {
     let root = world.state.root.clone();
@@ -14490,15 +12865,8 @@ fn tree_is_unchanged(world: &mut VardeWorld) {
     assert_eq!(now, world.tree_before);
 }
 
-/// How long the stand-in edge's voice takes over an Utterance, plus the
-/// silence the Reading itself asked for. A scenario cannot derive this — a
-/// voice's pace is in the audio it produced — so the World stands in for the
-/// synthesizer with a round second each, exactly as it stands in for the pty
-/// and the disk elsewhere.
 const SAID_MS: u32 = 1_000;
 
-/// Where each Utterance starts in the stream, which is what the edge tells the
-/// core once the stream exists.
 fn built(utterances: &[reading::Utterance]) -> Vec<u32> {
     let mut at_ms = 0;
     utterances
@@ -14511,32 +12879,23 @@ fn built(utterances: &[reading::Utterance]) -> Vec<u32> {
         .collect()
 }
 
-/// The edge reporting where the sound has got to, which is the only way the
-/// core learns it.
 fn sound_reached(world: &mut VardeWorld, at_ms: u32) {
     let offsets = world.stream.clone();
     world.send(Event::Speaking { at_ms, offsets });
 }
 
-/// Far enough in that a resume from the start would be a different answer, and
-/// still inside the first Utterance.
 const PART_WAY: u32 = 300;
 
 fn reading_now(world: &VardeWorld) -> &reading::Reading {
     world.state.reading.as_ref().expect("a reading in flight")
 }
 
-/// The sound sitting at that Utterance's first millisecond, told the way the
-/// edge tells it.
 #[given(expr = "the current utterance is {int}")]
 fn current_utterance_starts(world: &mut VardeWorld, at: usize) {
     let at_ms = world.stream[at - 1];
     sound_reached(world, at_ms);
 }
 
-/// R35.12. Which lines the mark covers, asked of the core rather than the
-/// renderer: `ui` only draws it, so a step reading the screen would be
-/// asserting a colour the ticket says no scenario asserts.
 #[then(expr = "the marked lines are {int} to {int}")]
 fn marked_lines(world: &mut VardeWorld, from: usize, to: usize) {
     assert_eq!(
@@ -14564,9 +12923,6 @@ fn current_utterance_is(world: &mut VardeWorld, at: usize) {
     );
 }
 
-/// Two Utterances' worth of sound has come out, so the third is the one being
-/// spoken. Driven from the offsets the edge built rather than from a duration
-/// a scenario invented: the boundary is where the stream says it is.
 #[when(expr = "the reading has been speaking for the length of {int} utterances")]
 fn speaking_for(world: &mut VardeWorld, count: usize) {
     let at_ms = *world.stream.get(count).expect("that many utterances");
@@ -14583,11 +12939,6 @@ fn previous_utterance(world: &mut VardeWorld) {
     world.send(Event::PreviousUtterance);
 }
 
-/// A Reading in flight has had sound out of it for a moment, and the edge says
-/// where the sound got to as it stops it — `main`'s `pause` reports the offset
-/// unthrottled for exactly this reason, since the core's own position is a
-/// report up to 80ms old. A pause taken at offset zero would let "resumes
-/// where it stopped" pass for a restart.
 #[when("the reading is paused")]
 fn reading_paused(world: &mut VardeWorld) {
     sound_reached(world, PART_WAY);
@@ -14605,18 +12956,11 @@ fn reading_resumed(world: &mut VardeWorld) {
     world.send(Event::PlayPause);
 }
 
-/// Through the Transport's own action, not `Event::PlayPause`: what the
-/// scenario is about is the control on the border, and the routing from the
-/// glyph to the event is part of what it promises.
 #[when("the play control is pressed")]
 fn play_control_pressed(world: &mut VardeWorld) {
     world.send(Event::PaneAction(reading::PLAY_PAUSE));
 }
 
-/// R35.6. The offset the edge was asked to play from is the one the pause
-/// recorded, and the Reading is still where it stopped rather than back at the
-/// start — and nothing was synthesized again, which is what the stream being
-/// untouched says.
 #[then("the reading resumes from where it was paused")]
 fn resumes_where_paused(world: &mut VardeWorld) {
     let paused_at = world.paused_at.expect("a pause to resume from");
@@ -14630,9 +12974,6 @@ fn resumes_where_paused(world: &mut VardeWorld) {
     );
 }
 
-/// R35.5. One player, because the one that was playing was stopped before the
-/// next was started: a Reading supersedes rather than queueing, and two
-/// streams over one another is what a queue would sound like.
 #[then("exactly one reading is in flight")]
 fn exactly_one_reading(world: &mut VardeWorld) {
     assert!(world.state.reading.is_some());
@@ -14644,8 +12985,6 @@ fn nothing_is_playing(world: &mut VardeWorld) {
     assert_eq!(world.speaking, None);
 }
 
-/// The stream exists to be played and is deleted with the player, so what a
-/// scenario can see of it is the edge holding neither (ADR 0014).
 #[then("no stream file remains")]
 fn no_stream_remains(world: &mut VardeWorld) {
     nothing_is_playing(world);
@@ -14662,13 +13001,7 @@ fn a_reading_in_flight_at_speed(world: &mut VardeWorld, text: String, speed: f32
     a_reading_is_in_flight(world, text);
 }
 
-/// What the voice was actually asked for, which is the reciprocal and never
-/// the multiplier. Inverted here rather than through `reading::duration_scale`
-/// on purpose: a scenario that called the function under test would stay green
-/// if the core ever handed the effect a scale instead of a multiplier, which is
-/// the one thing this step exists to catch. To two decimals because the table
-/// is written the way a person reads it — `0.90` inverts to 1.111…, and pinning
-/// every digit of a float would be pinning the format rather than the number.
+/// Inverted by hand: calling reading::duration_scale would hide a core sending the multiplier
 #[then(expr = "the voice is asked for a duration scale of {float}")]
 fn voice_asked_for_scale(world: &mut VardeWorld, scale: f32) {
     let asked = 1.0 / world.spoken_at.expect("the voice to have been asked");
@@ -14683,17 +13016,12 @@ fn reading_speed_changed(world: &mut VardeWorld, speed: f32) {
     world.send(Event::SetSpeed(speed));
 }
 
-/// The pace of the stream that is playing, which is the speed it was *built*
-/// at — so a speed change that re-synthesized would show up here as the new
-/// one rather than the old.
 #[then(expr = "the reading in flight is still at speed {float}")]
 #[then(expr = "the reading is at speed {float}")]
 fn reading_is_at_speed(world: &mut VardeWorld, speed: f32) {
     assert_eq!(world.spoken_at, Some(speed));
 }
 
-/// R35.8. Drawn or absent, never greyed — and `ui` draws the same list
-/// `mouse` hit-tests, so what the bar offers is one value to assert.
 #[then("the transport is on screen")]
 fn transport_on_screen(world: &mut VardeWorld) {
     assert!(
@@ -14713,8 +13041,6 @@ fn transport_not_on_screen(world: &mut VardeWorld) {
     );
 }
 
-/// R44.7. The names say what pressing each does, so the first reads `play`
-/// here and `pause` while a Reading plays.
 #[then("the editor's Transport's Chips are:")]
 fn editor_transport_chips_are(world: &mut VardeWorld, step: &Step) {
     let expected: Vec<String> = step
@@ -14732,14 +13058,6 @@ fn editor_transport_chips_are(world: &mut VardeWorld, step: &Step) {
     assert_eq!(drawn, expected);
 }
 
-/// R35.8. The bar is an affordance and a reminder, never the only way in: a
-/// control reachable only by mouse is one the cheatsheet cannot promise.
-///
-/// Driven rather than listed: each control is pressed, its command is typed,
-/// and the two are held to leaving the same state and asking for the same
-/// effects — a command that merely exists could still do something else. The
-/// table is checked against what the bar actually offers, so a sixth control
-/// fails here rather than shipping without a key.
 #[then("every transport action is reachable from the keyboard")]
 fn every_transport_action_has_a_key(world: &mut VardeWorld) {
     open_buffer_plain(world, "guide.md".to_string());
@@ -14748,12 +13066,8 @@ fn every_transport_action_has_a_key(world: &mut VardeWorld) {
         (reading::PREVIOUS, ":prev"),
         (reading::NEXT, ":next"),
         (reading::STOP, ":stop"),
-        // The ladder's next rung, said out loud: a glyph on a border cannot be
-        // typed a number into, so the click steps and the key names.
         (reading::SPEED, ":speed 1.25"),
     ];
-    // Each Chip's keys are the command it is held to below, so a Chip cannot
-    // teach a key that does something else.
     let offered: Vec<(&str, &str)> = reading::transport(&world.state)
         .iter()
         .map(|chip| (chip.action, chip.keys))
@@ -14792,8 +13106,6 @@ fn every_transport_action_has_a_key(world: &mut VardeWorld) {
         "the transport's keys are not on the cheatsheet"
     );
 }
-
-// ---- Indent guides ----
 
 fn guides_on(world: &VardeWorld, line: usize) -> Vec<varde::editor::Guide> {
     current_buffer(world)
@@ -14865,13 +13177,6 @@ fn no_marked_brackets(world: &mut VardeWorld) {
     assert_eq!(current_buffer(world).bracket_pair(), None);
 }
 
-// ---- F45: the Debug session. No scenario runs an adapter: `FakeAdapter`
-// answers what a real one would, and the events a scenario names are driven in
-// as the edge would drive them.
-
-/// What a scenario's config files name, loaded into the running workspace
-/// rather than by restarting it, which would take the Breakpoints and Buffers
-/// the scenario set up with it. An adapter a step already configured is kept.
 fn load_debug_config(world: &mut VardeWorld) {
     let (loaded, _, _) = startup::start(&world.startup).expect("the scenario's config starts");
     world.state.launches = loaded.launches;
@@ -14881,9 +13186,6 @@ fn load_debug_config(world: &mut VardeWorld) {
     }
 }
 
-/// A session over whichever adapter the Background configured, for the
-/// features that are about being Paused rather than about how a session is
-/// started: they name no Launch configuration, so one is made here.
 fn session_running(world: &mut VardeWorld) {
     let adapter = world
         .state
@@ -14911,7 +13213,6 @@ fn adapter_event(world: &mut VardeWorld, message: Value) {
     world.tell_core();
 }
 
-/// The stack a thread answers with, unless a scenario gave it one.
 fn stopped_at(world: &mut VardeWorld, thread: i64, file: &str, line: usize, reason: &str) {
     plant_the_programs_locals(world);
     let path = abs(world, file);
@@ -14920,9 +13221,6 @@ fn stopped_at(world: &mut VardeWorld, thread: i64, file: &str, line: usize, reas
         .stacks
         .entry(thread)
         .or_insert_with(|| vec![("main".to_string(), path.clone(), line, String::new())]);
-    // Where the program stopped is the top of its stack, whatever the pause
-    // before it left there: a second `stopped` event naming another line with
-    // the stack still pointing at the first is a program that never moved.
     if let Some(top) = stack.first_mut() {
         top.1 = path;
         top.2 = line;
@@ -14934,12 +13232,9 @@ fn stopped_at(world: &mut VardeWorld, thread: i64, file: &str, line: usize, reas
     let stopped = json!({ "type": "event", "event": "stopped", "body": body });
     world.dap.stopped = Some(stopped.clone());
     adapter_event(world, stopped);
-    // What the pause itself asked for is the pause, so "since the pause"
-    // counts from after it has brought the Variables up.
     world.dap.since_pause = world.dap.sent.len();
 }
 
-/// The requests the adapter was sent, by command, in order.
 fn dap_requests<'a>(world: &'a VardeWorld, command: &str) -> Vec<&'a Value> {
     world
         .dap
@@ -14967,8 +13262,6 @@ fn open_launch_palette(world: &mut VardeWorld) {
     route_key(world, &palette_key("Launch").to_string(), 0);
 }
 
-/// The palette over whatever the running Varde holds, not a fresh read of the
-/// scenario's config: what is offered has to have arrived without a restart.
 #[then(expr = "the launch palette, opened without restarting, offers {string}")]
 fn launch_palette_without_restarting_offers(world: &mut VardeWorld, name: String) {
     world.send(Event::FallbackBinding);
@@ -14976,8 +13269,6 @@ fn launch_palette_without_restarting_offers(world: &mut VardeWorld, name: String
     launch_palette_offers(world, name);
 }
 
-/// Through the palette the way a person goes: its Launch face, the arrows down
-/// to the row, and Enter.
 #[given(expr = "I start the Launch configuration {string} from the palette")]
 #[when(expr = "I start the Launch configuration {string} from the palette")]
 fn start_launch_from_palette(world: &mut VardeWorld, name: String) {
@@ -15100,8 +13391,6 @@ fn edge_reports_adapter_gone(world: &mut VardeWorld) {
     });
 }
 
-/// Only for the port the session is watching: an edge told to try another
-/// would be trying the wrong one.
 #[given(expr = "the edge reports the port {int} answers")]
 #[when(expr = "the edge reports the port {int} answers")]
 fn edge_reports_port_answers(world: &mut VardeWorld, port: u16) {
@@ -15198,8 +13487,6 @@ fn adapter_sent_for_thread_alone(world: &mut VardeWorld, command: String, thread
     assert_eq!(arguments["singleThread"], true);
 }
 
-/// The lines of the last request naming `file`: a file's list is replaced
-/// whole by each one, so the last is what the adapter holds.
 fn lines_sent(world: &VardeWorld, command: &str, file: &str) -> Vec<Value> {
     let path = abs(world, file);
     let request = dap_requests(world, command)
@@ -15233,9 +13520,6 @@ fn adapter_sent_with(world: &mut VardeWorld, command: String, key: String, value
     );
 }
 
-/// The hint is a menu as well as a reminder: the mouse hit-tests the rows
-/// `chord_rows` names, which the unit test beside it holds, so what this
-/// drives is the key the row offers.
 #[when(expr = "I click the Chord hint entry for {string}")]
 fn click_chord_entry(world: &mut VardeWorld, key: String) {
     let key = key.chars().next().expect("a key");
@@ -15247,9 +13531,6 @@ fn click_chord_entry(world: &mut VardeWorld, key: String) {
     world.send(Event::ClickPaletteEntry(key));
 }
 
-/// The cheatsheet as `ui` draws it for the view on screen: the rows
-/// `keys::cheatsheet` yields, which is the one list the box and the sweep both
-/// read.
 fn cheatsheet_lists(world: &VardeWorld, key: &str) -> bool {
     keys::cheatsheet(&world.state)
         .filter(|(_, _, views)| keys::applies_to(views, world.state.view))
@@ -15267,9 +13548,6 @@ fn cheatsheet_should_not_list(world: &mut VardeWorld, key: String) {
     assert!(!cheatsheet_lists(world, &key), "{key:?} is listed");
 }
 
-/// The hint and the cheatsheet are drawn from one list, and this is what holds
-/// them to it: a key offered in the hint that the box never names is a key
-/// nobody can find once the hint is down.
 #[then(expr = "every key the Chord hint lists is in the cheatsheet")]
 fn every_chord_hint_key_is_in_the_cheatsheet(world: &mut VardeWorld) {
     for (key, _) in keys::chord_rows(&world.state) {
@@ -15348,8 +13626,6 @@ fn paused_line_is(world: &mut VardeWorld, file: String, line: usize) {
     );
 }
 
-/// The gutter and the full-width wash are drawn from the same answer, and it is
-/// only drawn over the Buffer on screen — which is what these two ask.
 #[then(expr = "the gutter marks line {int} as the Paused line")]
 #[then(expr = "line {int} is highlighted across the editor's full width")]
 fn paused_line_on_screen(world: &mut VardeWorld, line: usize) {
@@ -15389,7 +13665,6 @@ fn corner_holds_frames(world: &mut VardeWorld) {
     assert_eq!(world.state.corner, layout::Corner::Frames);
 }
 
-/// Through the hit-test, on the Frame's row in the Corner.
 #[when(expr = "I choose the Frame {string}")]
 #[given(expr = "I choose the Frame {string}")]
 fn choose_frame(world: &mut VardeWorld, name: String) {
@@ -15414,7 +13689,6 @@ fn the_buffer_has_unsaved_edits(world: &mut VardeWorld) {
 
 #[when(expr = "the tools list is shown")]
 fn tools_list_is_shown(world: &mut VardeWorld) {
-    // The OS a row's install is looked up under, as `Varde starts` fixes it.
     if world.state.os.is_empty() {
         world.state.os = "macos".to_string();
     }
@@ -15422,10 +13696,6 @@ fn tools_list_is_shown(world: &mut VardeWorld) {
     route_key(world, &palette_key("Tools").to_string(), 0);
 }
 
-// ---- F45: the Strip's Debug group, and the Variables in it ----
-
-/// The reference the world's one scope answers its members by. A number of its
-/// own, so a scenario's own references cannot collide with it.
 const LOCALS: i64 = 1000;
 
 #[given(expr = "the Strip shows the {word} group")]
@@ -15446,7 +13716,6 @@ fn parse_group(name: &str) -> layout::Group {
     }
 }
 
-/// Whether a tab is drawn as the one showing — the same pairs `ui` draws from.
 fn tab(world: &VardeWorld, label: &str) -> varde::Tab {
     varde::group_tabs(&world.state)
         .into_iter()
@@ -15464,8 +13733,6 @@ fn group_tab_is_not_lit(world: &mut VardeWorld, label: String) {
     assert!(!tab(world, &label).lit);
 }
 
-/// Through the hit-test, on the tab's own columns of the Strip's top border —
-/// the columns `layout::strip_at` names and `ui` draws into.
 #[when(expr = "I click the Group tab {string}")]
 fn click_group_tab(world: &mut VardeWorld, label: String) {
     let strip = world.panes().strip();
@@ -15490,18 +13757,12 @@ fn variables_have_focus(world: &mut VardeWorld) {
     assert_eq!(world.state.focus, Pane::Variables);
 }
 
-/// The title is what the Transport's border says beside its Chips.
 #[then(expr = "the Variables title says {string}")]
 #[then(expr = "the Transport says {string}")]
 fn variables_title_says(world: &mut VardeWorld, said: String) {
     assert_eq!(varde::debug::title(&world.state), said);
 }
 
-/// What the last pause left on screen is drawn dimmed — one answer for both
-/// panes, because it is one fact about the session rather than two.
-/// A header row names the file, line and, where the scenario gives one, the
-/// adapter's presentation hint. The thread's name is what the canned
-/// `threads` answer calls it.
 #[given(expr = "the Debug adapter's stack for thread {int} {string} is:")]
 fn adapter_stack_is(world: &mut VardeWorld, thread: i64, _name: String, step: &Step) {
     let table = step.table().expect("table");
@@ -15521,8 +13782,6 @@ fn adapter_stack_is(world: &mut VardeWorld, thread: i64, _name: String, step: &S
     world.dap.stacks.insert(thread, stack);
 }
 
-/// Library frames outside the workspace, named as the scenario that unfolds
-/// them expects the run to read.
 #[given(
     expr = "a Debug session is Paused with {int} Library frames folded between {string} and {string}"
 )]
@@ -15557,7 +13816,6 @@ fn frames_selection_is_folded(world: &mut VardeWorld) {
         .expect("a folded row");
 }
 
-/// Each Frame under the thread whose header it follows.
 #[then(expr = "the Frames are:")]
 fn frames_are(world: &mut VardeWorld, step: &Step) {
     let mut thread = String::new();
@@ -15576,8 +13834,6 @@ fn frames_are(world: &mut VardeWorld, step: &Step) {
     assert_eq!(shown, expected);
 }
 
-/// The inspected thread's rows under its header: a Frame by its name, a
-/// folded run by how many it holds.
 #[then(expr = "the Frames rows are:")]
 fn frames_rows_are(world: &mut VardeWorld, step: &Step) {
     let frames = varde::debug::frames(&world.state);
@@ -15597,7 +13853,6 @@ fn frames_rows_are(world: &mut VardeWorld, step: &Step) {
     assert_eq!(shown, expected);
 }
 
-/// `ui` draws every folded run dimmed, so the row being one is the fact.
 #[then(expr = "the folded row is drawn dimmed")]
 fn folded_row_is_dimmed(world: &mut VardeWorld) {
     assert!(varde::debug::frame_rows(&world.state)
@@ -15652,37 +13907,22 @@ fn variable_row(world: &VardeWorld, name: &str) -> varde::debug::Row {
         })
 }
 
-/// The pause driven again, so the Variables hold what a scenario has just
-/// planted in the adapter: what they show is what the adapter answered at the
-/// pause, and a member planted after it was answered would be a member nobody
-/// asked for. What "since the pause" counts from is reset here for the same
-/// reason — the requests the pause itself makes are the pause, not something
-/// done in it.
 fn repause(world: &mut VardeWorld) {
     let stop = world.dap.stopped.clone().expect("a pause");
     adapter_event(world, stop);
     world.dap.since_pause = world.dap.sent.len();
 }
 
-/// A member the adapter answers with, in the one scope the world gives a
-/// Frame that has none of its own.
 fn plant_member(world: &mut VardeWorld, member: Value) {
     if world.dap.scopes.is_empty() {
         world.dap.scopes.push(("Locals".to_string(), LOCALS));
     }
     let held = world.dap.members.entry(LOCALS).or_default();
-    // Planted over whatever the pause already had by that name, never beside
-    // it: two rows with one name is a scenario acting on whichever the walk
-    // reached first.
     held.retain(|already| already["name"] != member["name"]);
     held.push(member);
     repause(world);
 }
 
-/// The locals of the program every debug Scenario's Background opens on. A
-/// pause has to show something, and a scenario that says "the row `count`"
-/// without planting one means the program's own — the same two names its code
-/// declares.
 fn plant_the_programs_locals(world: &mut VardeWorld) {
     if !world.dap.scopes.is_empty() {
         return;
@@ -15761,8 +14001,6 @@ fn variables_show_reference_hint(
     plant_member(world, hinted(&name, reference, &hint));
 }
 
-/// One member carrying the adapter's hint in the field the protocol puts it
-/// in: visibility for who may see it, attributes for what may be done to it.
 fn hinted(name: &str, reference: i64, hint: &str) -> Value {
     let presentation = match hint {
         "private" => json!({ "visibility": "private" }),
@@ -15812,8 +14050,6 @@ fn variables_row_drawn_as(world: &mut VardeWorld, name: String, drawn: String) {
     assert_eq!(variable_row(world, &name).hint.as_str(), drawn);
 }
 
-/// Through the hit-test, on the row's own line of the Strip — the gesture
-/// Enter is, which is why opening by mouse and by key are one arm.
 fn open_variables_row(world: &mut VardeWorld, index: usize) {
     let strip = world.panes().terminal;
     let row = strip.y + 1 + (index - world.state.variables_scroll) as u16;
@@ -15832,8 +14068,6 @@ fn open_row_named(world: &mut VardeWorld, name: String) {
     open_variables_row(world, index);
 }
 
-/// The row that stands for the rest of `name`'s children: the one whose next
-/// page is that member's reference.
 fn next_page_row(world: &VardeWorld, name: &str) -> Option<usize> {
     let reference = match variable_row(world, name).opens {
         varde::debug::Opens::Children { reference, .. } => reference,
@@ -15852,11 +14086,6 @@ fn variables_show_next_page(world: &mut VardeWorld, name: String) {
     );
 }
 
-/// By keyboard rather than by pointer: the row that stands for the rest of a
-/// ten thousand element collection is a hundred rows past the Strip's last
-/// line, and a row nothing has scrolled to is a row no pointer can reach. The
-/// arrows are what scroll it into view, and Enter is what every list in Varde
-/// opens a row with.
 #[when(expr = "I open the next page of {string}")]
 fn open_next_page(world: &mut VardeWorld, name: String) {
     let index = next_page_row(world, &name).unwrap_or_else(|| panic!("no next page of {name:?}"));
@@ -15867,7 +14096,6 @@ fn open_next_page(world: &mut VardeWorld, name: String) {
     world.send(Event::Activate);
 }
 
-/// The `variables` requests that named a reference, in order.
 fn for_reference<'a>(world: &'a VardeWorld, command: &str, reference: i64) -> Vec<&'a Value> {
     dap_requests(world, command)
         .into_iter()
@@ -15972,10 +14200,6 @@ fn debug_adapter_row_is(world: &mut VardeWorld, language: String, expected: Stri
     );
 }
 
-// ---- R41.7: child sessions are more threads ----
-
-/// `startDebugging`, as js-debug sends it for a worker: a configuration of
-/// its own, which the child session is started with.
 #[given(expr = "the Debug adapter asks to start a child session whose thread is {string}")]
 #[when(expr = "the Debug adapter asks to start a child session whose thread is {string}")]
 fn adapter_asks_for_a_child(world: &mut VardeWorld, thread: String) {
@@ -16003,8 +14227,6 @@ fn frames_list_the_thread(world: &mut VardeWorld, thread: String) {
     assert!(listed, "{:?}", varde::debug::frame_rows(&world.state));
 }
 
-/// One session, which is the one started: a child opened as a session of its
-/// own would have its adapter started again, or the session replaced by it.
 #[then(expr = "exactly one Debug session is shown")]
 fn exactly_one_session(world: &mut VardeWorld) {
     assert!(world.state.debug.is_some());
@@ -16023,8 +14245,6 @@ fn transport_has_one_chip(world: &mut VardeWorld, name: String) {
     assert_eq!(chips.iter().filter(|chip| chip.name == name).count(), 1);
 }
 
-/// In the id the child knows its thread by, which is the session's own
-/// thread's too: only the connection tells them apart.
 #[then(expr = "the child session was sent a {string} request for its thread")]
 fn child_was_sent_for_its_thread(world: &mut VardeWorld, command: String) {
     let (child, sent) = world.dap.children.iter().next().expect("a child session");
@@ -16050,14 +14270,9 @@ fn every_child_was_sent(world: &mut VardeWorld, command: String) {
     }
 }
 
-// ---- F45: the Program output in the Debug group ----
-
-/// The adapter's reverse request, driven in exactly as the edge frames it.
 #[given(expr = "the Debug adapter asks to run {string} in a terminal")]
 #[when(expr = "the Debug adapter asks to run {string} in a terminal")]
 fn adapter_asks_for_a_terminal(world: &mut VardeWorld, program: String) {
-    // A `seq` of the adapter's own, past anything Varde has sent: a reverse
-    // request is numbered in the adapter's sequence, not in Varde's.
     let seq = 1000 + world.dap.sent.len() as i64;
     adapter_event(
         world,
@@ -16070,8 +14285,6 @@ fn adapter_asks_for_a_terminal(world: &mut VardeWorld, program: String) {
     );
 }
 
-/// A session with the debugged program already running in the Debug group,
-/// which is what every step about the Program output needs behind it.
 fn program_running(world: &mut VardeWorld) {
     if world.output_pty.is_none() {
         adapter_asks_for_a_terminal(world, "target/debug/server".to_string());
@@ -16093,8 +14306,6 @@ fn no_shell_asked_for(world: &mut VardeWorld) {
     assert_eq!(world.state.terminals.len(), 1);
 }
 
-/// What is in the Debug group, whether or not it is the group on screen — so
-/// the group is brought forward, which is where a reader looking would be.
 #[then(expr = "the Debug group holds the Variables and the Program output")]
 fn debug_group_holds_both(world: &mut VardeWorld) {
     program_running(world);
@@ -16111,9 +14322,6 @@ fn debug_group_holds_both(world: &mut VardeWorld) {
     );
 }
 
-/// The border's column, as a width off the Strip's right-hand end — which is
-/// what the layout is told, since the Strip's own left edge moves with the
-/// Corner beside it.
 #[given(expr = "the border between the Variables and the Program output is at column {int}")]
 fn border_at_column(world: &mut VardeWorld, column: u16) {
     program_running(world);
@@ -16122,16 +14330,11 @@ fn border_at_column(world: &mut VardeWorld, column: u16) {
     world.tell_core();
 }
 
-/// The Debug group's right-hand edge, which the border is a width back from.
-/// Off the Strip when the Program output is away and off the output when it is
-/// not: the group is the two rectangles together.
 fn debug_group_right(world: &VardeWorld) -> u16 {
     let panes = world.panes();
     panes.terminal.right().max(panes.output.right())
 }
 
-/// Through the hit-test, from the border column itself: the handle has to be
-/// one a pointer can reach.
 #[when(expr = "I drag that border to column {int}")]
 #[when(expr = "I drag the border between the Variables and the Program output to column {int}")]
 fn drag_output_border(world: &mut VardeWorld, column: u16) {
@@ -16199,14 +14402,10 @@ fn variables_take_focus(world: &mut VardeWorld) {
     world.state.focus = Pane::Variables;
 }
 
-/// Everything the program prints reaches the core the same way: the edge says
-/// it spoke, and the core decides whether the reader could see it.
 #[when(expr = "the program prints {string}")]
 fn program_prints(world: &mut VardeWorld, text: String) {
     program_running(world);
     world.send(Event::OutputSpoke);
-    // The adapter's own copy of the same output, which is what a run in the
-    // Evaluator collects: the pty prints it and the adapter repeats it.
     if world.state.debug.is_some() {
         adapter_event(
             world,
@@ -16284,11 +14483,6 @@ fn nothing_reached_the_output(world: &mut VardeWorld) {
     );
 }
 
-// ---- #56: the debug Transport ----
-
-/// The spawn `debug::start` asked the edge for, named by the command the
-/// adapter row gives — which is what a scenario means by "asked for": whether
-/// a process exists is the edge's to say.
 #[then(expr = "the Debug adapter for {string} is asked for")]
 #[then(expr = "a Debug adapter for {string} is asked for")]
 fn adapter_is_asked_for(world: &mut VardeWorld, language: String) {
@@ -16311,7 +14505,6 @@ fn no_adapter_is_asked_for(world: &mut VardeWorld) {
     assert_eq!(world.dap.spawned, Vec::<String>::new());
 }
 
-/// The program ended, which is the state restart is reached for from.
 #[given("the Debug session has ended")]
 #[when("the Debug session has ended")]
 fn session_has_ended(world: &mut VardeWorld) {
@@ -16320,9 +14513,6 @@ fn session_has_ended(world: &mut VardeWorld) {
     world.dap.spawned.clear();
 }
 
-/// What the named Launch configuration carries, as configuration gave it —
-/// so a restart that reran a different one, or reached the adapter with
-/// arguments of its own, fails here.
 #[then(expr = "the Debug adapter's launch arguments are those of {string}")]
 fn launch_arguments_are_those_of(world: &mut VardeWorld, name: String) {
     let expected = world
@@ -16338,8 +14528,6 @@ fn launch_arguments_are_those_of(world: &mut VardeWorld, name: String) {
     );
 }
 
-/// The Variables' Transport, by the names that say what pressing each Chip
-/// does — never the glyphs or the colours, which are `ui`'s.
 #[then("the Transport's Chips are:")]
 fn transport_chips_are(world: &mut VardeWorld, step: &Step) {
     let expected: Vec<String> = step
@@ -16362,8 +14550,6 @@ fn transport_first_chip_is(world: &mut VardeWorld, name: String) {
     assert_eq!(chips.first().expect("a Chip").name, name);
 }
 
-/// Every key the Chip teaches, in the spelling the cheatsheet uses: a Chip
-/// that named one of its two routes would say the other is not there.
 #[then(expr = "the {string} Chip names the keys:")]
 fn chip_names_the_keys(world: &mut VardeWorld, name: String, step: &Step) {
     let expected: Vec<String> = step
@@ -16381,9 +14567,6 @@ fn chip_names_the_keys(world: &mut VardeWorld, name: String, step: &Step) {
     assert_eq!(named, expected);
 }
 
-/// The Chip that says what pressing it does, found by that name — on the
-/// Variables' Transport, the Breakpoint list's, or on the row the keyboard is
-/// on, since all are Chips and a scenario names one by what pressing it does.
 fn chip(world: &VardeWorld, name: &str) -> varde::Chip {
     varde::debug::strip_transport(&world.state)
         .into_iter()
@@ -16393,7 +14576,6 @@ fn chip(world: &VardeWorld, name: &str) -> varde::Chip {
         .unwrap_or_else(|| panic!("no {name:?} Chip"))
 }
 
-/// The named Chip on the Variables row the keyboard is on, if it carries one.
 fn row_chip(world: &VardeWorld, name: &str) -> Option<varde::Chip> {
     varde::debug::row_chips(&world.state, world.state.variables_selection)
         .into_iter()
@@ -16405,9 +14587,6 @@ fn click_the_rows_chip(world: &mut VardeWorld, name: String) {
     click_variables_row_chip(world, &name);
 }
 
-/// Through the hit-test, on the row's own line and at the columns `ui` draws
-/// the Chips into — never driven as an event, so a Chip no pointer could
-/// reach fails here.
 fn click_variables_row_chip(world: &mut VardeWorld, name: &str) {
     let index = world.state.variables_selection;
     let chips = varde::debug::row_chips(&world.state, index);
@@ -16443,10 +14622,6 @@ fn chip_is_not_lit(world: &mut VardeWorld, name: String) {
     assert_ne!(chip(world, &name).tone, varde::Tone::Lit);
 }
 
-/// Time passing is the ticks that would have arrived — the one event nobody
-/// pressed, on `main`'s own 80ms cadence. Nothing else can pass here, which
-/// is the assertion: a lit Chip that faded would need a timer, and ADR 0009
-/// allows a Tick only while work is in flight.
 #[when(expr = "{int} seconds pass")]
 fn seconds_pass(world: &mut VardeWorld, seconds: u64) {
     for _ in 0..(seconds * 1_000 / 80) {
@@ -16454,10 +14629,6 @@ fn seconds_pass(world: &mut VardeWorld, seconds: u64) {
     }
 }
 
-/// The Transport is drawn across the Strip's top border, so the Variables'
-/// width is the room its Chips have. Driven by the screen rather than set: the
-/// panes are the layout's to decide, and a width written into `State` would be
-/// a width nothing draws.
 #[when(expr = "the Variables are {int} columns wide")]
 fn variables_are_wide(world: &mut VardeWorld, columns: u16) {
     let (width, height) = world.screen();
@@ -16469,17 +14640,12 @@ fn variables_are_wide(world: &mut VardeWorld, columns: u16) {
     assert_eq!(world.panes().terminal.width, columns);
 }
 
-/// The labels `ui` draws and `mouse` hit-tests, at the width the Transport
-/// really has.
 fn transport_labels(world: &VardeWorld) -> Vec<String> {
     let chips = varde::debug::strip_transport(&world.state);
     let area = varde::transport_area(&world.state, world.panes().strip());
     layout::chip_labels(&chips, area.width, layout::CORNER_TITLE)
 }
 
-/// Each label pinned exactly, never "contains its keys": a Chip that names no
-/// key yet would pass a containment test whichever shape it was drawn in, and
-/// a `Then` that cannot fail is worse than no `Then`.
 #[then("every Chip shows its keys")]
 fn every_chip_shows_its_keys(world: &mut VardeWorld) {
     let chips = varde::debug::strip_transport(&world.state);
@@ -16501,8 +14667,6 @@ fn no_chip_shows_its_keys(world: &mut VardeWorld) {
     }
 }
 
-/// None dropped, none cut and none wrapped: every Chip still has a label, and
-/// each one holds that Chip's whole glyph and nothing of another's.
 #[then("every Chip is drawn whole")]
 fn every_chip_is_drawn_whole(world: &mut VardeWorld) {
     let chips = varde::debug::strip_transport(&world.state);
@@ -16517,11 +14681,6 @@ fn every_chip_is_drawn_whole(world: &mut VardeWorld) {
     }
 }
 
-// ---- #57: the Variables' row Chips, and the Watches ----
-
-/// The row a scenario names, by the expression that reaches it — `orders[0].id`
-/// rather than the `id` the row is labelled with — falling back to the label,
-/// which is how a scope and the exception row are named.
 fn variables_index(world: &VardeWorld, named: &str) -> usize {
     let rows = varde::debug::variables(&world.state);
     rows.iter()
@@ -16537,9 +14696,6 @@ fn variables_index(world: &VardeWorld, named: &str) -> usize {
         })
 }
 
-/// By the arrows, from wherever the selection is — the gesture a reader makes,
-/// so a row the motion cannot reach fails here rather than being set into
-/// place behind the keyboard's back.
 #[given(expr = "the Variables selection is the row {string}")]
 #[given(expr = "the Variables selection is the Watch {string}")]
 #[when(expr = "I move the Variables selection to the row {string}")]
@@ -16555,8 +14711,6 @@ fn variables_selection_is(world: &mut VardeWorld, named: String) {
     assert_eq!(world.state.variables_selection, index);
 }
 
-/// The row's Chips by the names that say what pressing each does, never the
-/// glyphs or the colours, exactly as the Transport's are read.
 #[then(expr = "the row {string} carries the Chips:")]
 fn row_carries_chips(world: &mut VardeWorld, named: String, step: &Step) {
     let expected: Vec<String> = step
@@ -16580,8 +14734,6 @@ fn row_carries_no_chips(world: &mut VardeWorld, named: String) {
     assert_eq!(varde::debug::row_chips(&world.state, index), Vec::new());
 }
 
-/// The adapter's own word about itself, as the `capabilities` event carries
-/// it — never assumed, and never found out by trying the request.
 #[given(expr = "the Debug adapter reported it can set variables")]
 #[given(expr = "the Debug adapter reported it cannot set variables")]
 fn adapter_reported_set_variables(world: &mut VardeWorld, step: &Step) {
@@ -16596,8 +14748,6 @@ fn adapter_reported_set_variables(world: &mut VardeWorld, step: &Step) {
     );
 }
 
-/// Through the box the set-value Chip opens: the key, the characters, Enter —
-/// the gesture a reader makes, so a box that never opened fails here.
 #[given(expr = "I set the value of the row to {string}")]
 #[when(expr = "I set the value of the row to {string}")]
 fn set_the_value_of_the_row(world: &mut VardeWorld, value: String) {
@@ -16647,8 +14797,6 @@ fn variables_row_should_show_value(world: &mut VardeWorld, named: String, value:
     assert_eq!(varde::debug::variables(&world.state)[index].value, value);
 }
 
-/// A nested row planted and walked open, a level at a time — the members
-/// above it have to exist and be open for the row to be drawn at all.
 #[given(expr = "the Variables row {string} is open")]
 fn variables_row_is_open(world: &mut VardeWorld, path: String) {
     let names = expression_parts(&path);
@@ -16682,8 +14830,6 @@ fn variables_row_is_open(world: &mut VardeWorld, path: String) {
     }
 }
 
-/// An expression split into the members it walks through: `orders[0].id` is
-/// three of them, and an index is a member of its own.
 fn expression_parts(path: &str) -> Vec<String> {
     let mut parts = Vec::new();
     let mut held = String::new();
@@ -16715,9 +14861,6 @@ fn copy_the_row_as_an_expression(world: &mut VardeWorld) {
     route_key(world, "Y", 0);
 }
 
-/// Through the box `a` opens on the Variables, typed and entered — the other
-/// half of "added from a row or typed", and the gesture a reader makes, so a
-/// box that never opened fails here.
 #[given(expr = "the Watches are {string}")]
 #[given(expr = "the Watches are {string} and {string}")]
 fn the_watches_are(world: &mut VardeWorld, step: &Step) {
@@ -16802,7 +14945,6 @@ fn adapter_sent_evaluate(
     assert!(!asked.is_empty(), "sent: {:?}", world.dap.sent);
 }
 
-/// The Watch row, by the expression it holds.
 fn watch_row(world: &VardeWorld, expression: &str) -> varde::debug::Row {
     varde::debug::variables(&world.state)
         .into_iter()
@@ -16861,10 +15003,6 @@ fn watch_shows_an_error(world: &mut VardeWorld, expression: String) {
     ));
 }
 
-// ---- #58: Inline values ----
-
-/// The Inline values the editor draws, off the same tokens the edge caches for
-/// it and hands `ui`.
 fn inline_values(world: &VardeWorld) -> BTreeMap<usize, Vec<varde::debug::Inline>> {
     let (name, source) = match world.state.current_buffer.as_ref() {
         Some(path) => (
@@ -16873,9 +15011,6 @@ fn inline_values(world: &VardeWorld) -> BTreeMap<usize, Vec<varde::debug::Inline
         ),
         None => return BTreeMap::new(),
     };
-    // The columns the renderer drew, off the same rectangles the mouse is
-    // hit-tested against — a scenario that never said how big the screen is
-    // gets the plain window `screen` falls back to.
     let columns = varde::fits_in(&world.state, &world.panes()).2;
     varde::debug::inline(
         &world.state,
@@ -16884,7 +15019,6 @@ fn inline_values(world: &VardeWorld) -> BTreeMap<usize, Vec<varde::debug::Inline
     )
 }
 
-/// One Inline value wherever it is drawn, by the name it stands for.
 fn inline_value(world: &VardeWorld, name: &str) -> varde::debug::Inline {
     inline_values(world)
         .into_values()
@@ -16893,10 +15027,6 @@ fn inline_value(world: &VardeWorld, name: &str) -> varde::debug::Inline {
         .unwrap_or_else(|| panic!("no Inline value for {name:?}"))
 }
 
-/// The Locals the scripted adapter answers with, replacing whatever a pause
-/// would otherwise plant. One set for every Frame: the fake answers `scopes`
-/// the same whichever Frame asked, so a scenario naming one is saying which
-/// call's values it is describing, not scripting a second set.
 fn plant_locals(world: &mut VardeWorld, values: &[(String, String)]) {
     world.dap.scopes = vec![("Locals".to_string(), LOCALS)];
     world.dap.members.insert(
@@ -16956,8 +15086,6 @@ fn paused_with_local(
 #[when(
     expr = "the Debug adapter sends the {string} event for thread {int} at {string} line {int} with reason {string} and {string} = {string} and {string} = {string}"
 )]
-// One parameter per value the step names, which is what the step text has:
-// a struct to carry them would be a struct nothing else reads.
 #[allow(clippy::too_many_arguments)]
 fn adapter_sends_stopped_with_locals(
     world: &mut VardeWorld,
@@ -16976,12 +15104,6 @@ fn adapter_sends_stopped_with_locals(
     stopped_at(world, thread, &file, line, &reason);
 }
 
-/// The editor's **text** width rather than its rectangle: what a line has to
-/// fit in is what is left once the borders, the gutter and the mirror have
-/// taken theirs, and that is the width an Inline value is trimmed to. Not the
-/// same question as "the editor **pane** is N columns wide", which sets the
-/// rectangle — the two differ by the chrome. Solved for by screen size, for
-/// the reason that step solves for one.
 #[given(expr = "the editor is {int} columns wide")]
 fn editor_is_columns_wide(world: &mut VardeWorld, columns: usize) {
     let (_, height) = world.screen();
@@ -17024,9 +15146,6 @@ fn no_line_carries_an_inline_value(world: &mut VardeWorld) {
     assert!(inline_values(world).is_empty(), "values are still drawn");
 }
 
-/// A file other than the one the pause is in, looked at the only way there is
-/// to look at one: brought on screen, since Inline values are derived for the
-/// Buffer the editor is drawing.
 #[then(expr = "{string} carries no Inline values")]
 fn file_carries_no_inline_values(world: &mut VardeWorld, path: String) {
     let path = abs(world, &path);
@@ -17037,11 +15156,6 @@ fn file_carries_no_inline_values(world: &mut VardeWorld, path: String) {
     assert!(inline_values(world).is_empty(), "values are still drawn");
 }
 
-/// The last pause's values, still drawn and nothing among them highlighted:
-/// a highlight says *this pause* moved a value, and while the program runs
-/// there is no such pause, so the whole run is the faint layer. Dimmed by the
-/// same fact the Frames and the Variables are dimmed by, so there is one
-/// author for it.
 #[then(expr = "the Inline values are drawn dimmed")]
 fn inline_values_are_dimmed(world: &mut VardeWorld) {
     let drawn = inline_values(world);
@@ -17073,8 +15187,6 @@ fn inline_values_end_within_the_width(world: &mut VardeWorld, line: usize) {
     let values = drawn
         .get(&line)
         .unwrap_or_else(|| panic!("line {line} carries no Inline value"));
-    // Display columns, which is what the pane has: the editor is measured in
-    // screen cells and a wide glyph takes two of them.
     let text = unicode_width::UnicodeWidthStr::width(
         current_buffer(world)
             .shown()
@@ -17092,8 +15204,6 @@ fn inline_values_end_within_the_width(world: &mut VardeWorld, line: usize) {
     );
 }
 
-// ---- #59: a Hover while Paused ----
-
 #[then("the hover's first section is the value")]
 fn hover_first_section_is_the_value(world: &mut VardeWorld) {
     assert!(
@@ -17106,8 +15216,6 @@ fn hover_first_section_is_the_value(world: &mut VardeWorld) {
     );
 }
 
-/// Under the value and never interleaved with it: the two sections are one
-/// box, so "second" is a claim about every row above the first doc row.
 #[then("the hover's second section is the type and docs")]
 fn hover_second_section_is_the_type_and_docs(world: &mut VardeWorld) {
     let said = varde::lsp::sections(&world.state);
@@ -17148,9 +15256,6 @@ fn hover_carries_the_chip(world: &mut VardeWorld, name: String) {
     );
 }
 
-/// Through the hit-test, on the box's own top border and at the columns `ui`
-/// draws the Chips into — never driven as an event, so a Chip no pointer
-/// could reach fails here.
 #[when(expr = "I click the hover's {string} Chip")]
 fn click_the_hovers_chip(world: &mut VardeWorld, name: String) {
     let panes = world.panes();
@@ -17171,7 +15276,6 @@ fn click_the_hovers_chip(world: &mut VardeWorld, name: String) {
     world.report(mouse::Kind::LeftUp, column, spot.y);
 }
 
-/// The box's first row of value, clicked where it is drawn.
 #[when("I open the hover's value")]
 fn open_the_hovers_value(world: &mut VardeWorld) {
     let panes = world.panes();
@@ -17183,8 +15287,6 @@ fn open_the_hovers_value(world: &mut VardeWorld) {
     world.report(mouse::Kind::LeftUp, spot.x + 1, spot.y + 1);
 }
 
-/// The span the editor washes, read back out of the buffer it names: a step
-/// that trusted the columns would pass on a span naming the wrong characters.
 #[then(expr = "the editor highlights {string} on line {int}")]
 fn editor_highlights_on_line(world: &mut VardeWorld, text: String, line: usize) {
     let (at, width) = varde::debug::hover_span(&world.state).expect("nothing is highlighted");
@@ -17228,8 +15330,6 @@ fn adapter_answers_evaluate_with_reference(
     );
 }
 
-/// The reply to the last request for that expression, which is the one the
-/// box is still waiting on.
 fn answer_evaluate(world: &mut VardeWorld, command: &str, expression: &str, body: Value) {
     let seq = dap_requests(world, command)
         .into_iter()
@@ -17258,10 +15358,6 @@ fn adapter_sent_no_request_for(world: &mut VardeWorld, command: String, expressi
     assert!(asked.is_empty(), "sent: {asked:?}");
 }
 
-// The Evaluator: the floating window that runs a Snippet inside the Paused
-// program. Its Snippet is a Buffer, so the editing steps above reach it once
-// it has focus; these are the steps about the window, the run and its output.
-
 fn evaluator(world: &VardeWorld) -> &varde::debug::Evaluator {
     world
         .state
@@ -17289,10 +15385,6 @@ fn evaluator_is_open_holding_block(world: &mut VardeWorld, step: &Step) {
     varde::debug::open_evaluator(&mut world.state, text);
 }
 
-/// Where the window is. A scenario that starts from a place sets it straight
-/// on the state, the way a rectangle recorded by the project arrives: the
-/// dragging is what the scenarios below are *about*, so using a drag to set
-/// one up would be a step that fails for the thing it is not testing.
 fn window(world: &VardeWorld) -> layout::Area {
     world
         .state
@@ -17300,15 +15392,10 @@ fn window(world: &VardeWorld) -> layout::Area {
         .expect("the Evaluator has a place on the screen")
 }
 
-/// The screen row an editor line is drawn on, which is what a window covering
-/// a line has to be placed over.
 fn editor_row(world: &VardeWorld, line: u16) -> u16 {
     world.panes().editor.y + line
 }
 
-/// A drag of the window's chrome, as the edge reports one: press, one report
-/// where the pointer has got to, release. The pointer is made fresh, because
-/// a drag belongs to the pane its button went down in.
 fn drag_window(world: &mut VardeWorld, from: (u16, u16), to: (u16, u16)) {
     world.pointer = mouse::Pointer::default();
     world.report(mouse::Kind::LeftDown, from.0, from.1);
@@ -17316,8 +15403,6 @@ fn drag_window(world: &mut VardeWorld, from: (u16, u16), to: (u16, u16)) {
     world.report(mouse::Kind::LeftUp, to.0, to.1);
 }
 
-/// The title bar, two columns in: the Chips are flush right, and a press on
-/// one of those is a Chip rather than a grab.
 fn title_bar(world: &VardeWorld) -> (u16, u16) {
     let at = window(world);
     (at.x + 2, at.y)
@@ -17359,8 +15444,6 @@ fn evaluator_open_with_snippet_rows(world: &mut VardeWorld, rows: u16) {
         .snippet_rows = Some(rows);
 }
 
-/// Over the row that line is drawn on, so the stopped event that follows has
-/// something to shift the window off.
 #[given(expr = "the Evaluator is open over editor line {int}")]
 fn evaluator_open_over_line(world: &mut VardeWorld, line: u16) {
     open_an_empty_evaluator(world);
@@ -17375,9 +15458,6 @@ fn evaluator_open_over_line(world: &mut VardeWorld, line: u16) {
     );
 }
 
-/// Recorded by the project and read back through starting, so what is asserted
-/// is the restore and not a field the step wrote. The session the Background
-/// set up stays: only what a start recovers is taken from it.
 fn restored(world: &mut VardeWorld, saved: serde_json::Value) -> State {
     world.startup.state_json = Some(saved.to_string());
     world.startup.repo = world.state.repo.clone();
@@ -17433,8 +15513,6 @@ fn drag_title_bar_right(world: &mut VardeWorld, columns: u16) {
     drag_window(world, (column, row), (column + columns, row));
 }
 
-/// Onto the very row the Paused line is drawn on, which is the one place the
-/// window may not come to rest.
 #[when("I drag the Evaluator's title bar onto the Paused line")]
 fn drag_title_bar_onto_paused_line(world: &mut VardeWorld) {
     let (column, row) = title_bar(world);
@@ -17476,8 +15554,6 @@ fn snippet_rows(world: &VardeWorld) -> Option<u16> {
 fn evaluator_is_centred(world: &mut VardeWorld) {
     let (width, height) = (world.state.screen_width, world.state.screen_height);
     let at = window(world);
-    // The same room either side and above and below, rather than the number
-    // the layout produced: what centred *means* is what the reader sees.
     assert_eq!(at.x, width - at.right(), "{at:?}");
     assert_eq!(at.y, height - at.bottom(), "{at:?}");
 }
@@ -17546,7 +15622,6 @@ fn the_snippet_is(world: &mut VardeWorld, expected: String) {
     assert_eq!(snippet(world), expected);
 }
 
-/// The Snippet's own cursor, never the one in the file behind the window.
 #[then(expr = "the cursor in the Snippet is at line {int} column {int}")]
 fn cursor_in_the_snippet(world: &mut VardeWorld, line: usize, column: usize) {
     let snippet = &evaluator(world).snippet;
@@ -17559,9 +15634,6 @@ fn the_snippet_is_block(world: &mut VardeWorld, step: &Step) {
     assert_eq!(snippet(world), expected);
 }
 
-/// The Selection inside the Snippet, which is what a run sends instead of the
-/// whole block. Against the Snippet's own text, never the buffer behind the
-/// window.
 #[given(expr = "the selection in the Snippet covers {string}")]
 fn selection_in_the_snippet(world: &mut VardeWorld, text: String) {
     let held = snippet(world);
@@ -17584,8 +15656,6 @@ fn selection_in_the_snippet(world: &mut VardeWorld, text: String) {
     });
 }
 
-/// The same, against a named line of the buffer on screen: what `␣e` reads
-/// when there is a Selection rather than a cursor.
 #[given(expr = "the selection covers {string} on line {int}")]
 fn selection_covers_on_line(world: &mut VardeWorld, text: String, line: usize) {
     let held = current_buffer(world).shown().to_string();
@@ -17612,8 +15682,6 @@ fn click_line_column_in_editor(world: &mut VardeWorld, line: usize, column: usiz
     world.click(Pane::Editor, (line, column), terminput::KeyModifiers::NONE);
 }
 
-/// Through the columns the Chip is drawn at, so a Chip the renderer would not
-/// show fails here — the Hover's Chip click, one window over.
 #[when(expr = "I click the Evaluator's {string} Chip")]
 fn click_evaluator_chip(world: &mut VardeWorld, name: String) {
     let window = world.panes().evaluator;
@@ -17640,8 +15708,6 @@ fn evaluator_chip_is_dimmed(world: &mut VardeWorld, name: String) {
     assert_eq!(chip.tone, varde::Tone::Dimmed);
 }
 
-/// The requests a Snippet's run goes out as, told from a Watch's and a
-/// Hover's by the context they carry.
 fn repl_requests<'a>(world: &'a VardeWorld, context: &str) -> Vec<&'a Value> {
     dap_requests(world, "evaluate")
         .into_iter()
@@ -17691,8 +15757,6 @@ fn that_request_names_the_frame(world: &mut VardeWorld, name: String) {
     assert_eq!(frame.name, name);
 }
 
-/// The reply to the run still in flight, which is the last `evaluate` sent in
-/// the `repl` context.
 fn answer_the_run(world: &mut VardeWorld, success: bool, body: Value, message: &str) {
     let seq = repl_requests(world, "repl")
         .last()
@@ -17762,8 +15826,6 @@ fn adapter_sent_cancel_for_that_evaluate(world: &mut VardeWorld, command: String
     assert!(!cancelled.is_empty(), "sent: {:?}", world.dap.sent);
 }
 
-/// The Evaluator output as it is drawn, one row a kind and its text: what the
-/// program printed, then the value or the adapter's reason.
 fn evaluator_output(world: &VardeWorld) -> Vec<(String, String)> {
     varde::debug::evaluator_output(&world.state)
         .into_iter()
@@ -17803,8 +15865,6 @@ fn the_evaluator_output_is_running(world: &mut VardeWorld) {
     assert!(held.iter().any(|(kind, _)| kind == "running"), "{held:?}");
 }
 
-/// Through the row the value is drawn on, which is the row the mouse would
-/// click: the prints come first, so the value is not row zero.
 #[when("I open the Evaluator output's value")]
 fn open_the_evaluator_value(world: &mut VardeWorld) {
     let at = evaluator_output(world)
@@ -17828,9 +15888,6 @@ fn state_json_records_the_snippet(world: &mut VardeWorld, _file: String, expecte
     assert!(held.contains(&expected), "{held:?}");
 }
 
-/// The run gesture without naming which of the three makes it: normal-mode
-/// Enter, the Run Chip and Ctrl+Enter are one event, so a scenario about what
-/// a run carries says only that one was made.
 #[when("I run the Snippet")]
 fn run_the_snippet(world: &mut VardeWorld) {
     world.send(Event::RunSnippet);
@@ -17843,9 +15900,6 @@ fn adapter_sent_evaluate_in_frame(world: &mut VardeWorld, command: String, name:
     that_request_names_the_frame(world, name);
 }
 
-/// In the `initialize` answer for a session still to come, and in a
-/// `capabilities` event for one already running — the two places an adapter
-/// says what it can pause on.
 #[given("the Debug adapter reported the Exception filters:")]
 fn adapter_reported_exception_filters(world: &mut VardeWorld, step: &Step) {
     let table = step.table().expect("a table of filters");
@@ -17882,7 +15936,6 @@ fn breakpoint_list_switches_are(world: &mut VardeWorld, step: &Step) {
     assert_eq!(shown, expected);
 }
 
-/// The keyboard's route: along the Breakpoint list to the switch, and Enter.
 #[when(expr = "I switch the Exception filter {string} on")]
 fn switch_exception_filter_on(world: &mut VardeWorld, id: String) {
     let at = varde::debug::switches(&world.state)
@@ -17959,8 +16012,6 @@ fn adapter_reported_exception_options(world: &mut VardeWorld, step: &Step) {
     );
 }
 
-/// Through the box the exception-class Chip's key opens: the key, the name,
-/// Enter — so a box that never opened fails here.
 #[when(expr = "I pause on the exception class {string}")]
 fn pause_on_exception_class(world: &mut VardeWorld, class: String) {
     corner_shows_breakpoint_list(world);
@@ -17985,10 +16036,6 @@ fn adapter_sent_naming(world: &mut VardeWorld, command: String, class: String) {
     );
 }
 
-// ---- The Diagnostic list ----
-
-/// A Severity as the Scenarios name it: the protocol's own word, which is
-/// `lsp::Severity::as_str`, never a label's copy.
 fn severity_named(name: &str) -> lsp::Severity {
     lsp::Severity::ALL
         .into_iter()
@@ -17996,8 +16043,6 @@ fn severity_named(name: &str) -> lsp::Severity {
         .unwrap_or_else(|| panic!("no such severity: {name}"))
 }
 
-/// Through the palette's event, as every other Corner occupant's is: the only
-/// way the list comes to be on screen is being asked for.
 #[given("the Diagnostic list is shown")]
 fn diagnostic_list_is_shown(world: &mut VardeWorld) {
     if lsp::showing(&world.state).is_none() {
@@ -18031,7 +16076,6 @@ fn diagnostic_list_is_empty(world: &mut VardeWorld) {
     assert!(lsp::listed(&world.state).is_empty());
 }
 
-/// With a header row: a file heading has neither line nor column.
 #[then("the Diagnostic list rows are:")]
 fn diagnostic_list_rows(world: &mut VardeWorld, step: &Step) {
     let expected: Vec<(String, Option<(usize, usize)>)> = step
@@ -18063,7 +16107,6 @@ fn diagnostic_list_rows(world: &mut VardeWorld, step: &Step) {
     assert_eq!(listed, expected);
 }
 
-/// The index of the row naming a file's Diagnostic on a line, or its heading.
 fn diagnostic_row(world: &VardeWorld, file: &str, line: Option<usize>) -> usize {
     let path = abs(world, file);
     lsp::listed(&world.state)
@@ -18074,7 +16117,6 @@ fn diagnostic_row(world: &VardeWorld, file: &str, line: Option<usize>) -> usize 
         .unwrap_or_else(|| panic!("no row for {file} {line:?}"))
 }
 
-/// Moved to with the keyboard, the way a reader gets there.
 fn select_diagnostic_row(world: &mut VardeWorld, index: usize) {
     world.state.focus = Pane::Diagnostics;
     while world.state.diagnostics_selection > index {
@@ -18105,7 +16147,6 @@ fn diagnostic_selection_should_be_on(world: &mut VardeWorld, file: String, line:
     );
 }
 
-/// Through the hit-test, a press and a release on the row's text.
 #[when(expr = "I click the Diagnostic list row for {string} line {int}")]
 fn click_diagnostic_row(world: &mut VardeWorld, file: String, line: usize) {
     let index = diagnostic_row(world, &file, Some(line));
@@ -18115,7 +16156,6 @@ fn click_diagnostic_row(world: &mut VardeWorld, file: String, line: usize) {
     world.report(mouse::Kind::LeftUp, corner.x + 2, row);
 }
 
-/// On the label's first column, found the way `ui` right-aligns them.
 #[when(expr = "I click the Severity label for {string}")]
 fn click_severity_label(world: &mut VardeWorld, severity: String) {
     let corner = world.panes().corner;
@@ -18130,7 +16170,6 @@ fn click_severity_label(world: &mut VardeWorld, severity: String) {
     world.report(mouse::Kind::LeftUp, column, corner.y);
 }
 
-/// Headerless: a Severity and its count, every one of the four.
 #[then("the Severity labels count:")]
 fn severity_labels_count(world: &mut VardeWorld, step: &Step) {
     for row in &step.table().expect("table").rows {
@@ -18143,7 +16182,6 @@ fn severity_labels_count(world: &mut VardeWorld, step: &Step) {
     }
 }
 
-/// Headerless: the Severities the tree's border counts, in the order drawn.
 #[then("the tree's border counts:")]
 fn tree_border_counts(world: &mut VardeWorld, step: &Step) {
     let expected: Vec<(lsp::Severity, usize)> = step
@@ -18170,8 +16208,6 @@ fn tree_border_counts_nothing(world: &mut VardeWorld) {
     assert_eq!(lsp::nudge(&world.state), vec![]);
 }
 
-/// On the count's first column: the title and every string before it, then
-/// the gap its own string opens with.
 #[when(expr = "I click the tree's {word} count")]
 fn click_tree_count(world: &mut VardeWorld, severity: String) {
     let tree = world.panes().tree;
@@ -18187,10 +16223,6 @@ fn click_tree_count(world: &mut VardeWorld, severity: String) {
     world.report(mouse::Kind::LeftUp, column, tree.y);
 }
 
-// ---- Conflicts ----
-
-/// What the edge's git poll tells the core: the files as unmerged, and the
-/// Conflicts in each as it read them off the disk — the project's contents.
 #[given("git reports as unmerged:")]
 #[when("git reports as unmerged:")]
 fn git_reports_unmerged(world: &mut VardeWorld, step: &Step) {
@@ -18224,7 +16256,6 @@ fn git_reports_unmerged(world: &mut VardeWorld, step: &Step) {
         .collect();
 }
 
-/// A drawing as the Scenarios name it: the kind of thing drawn, never its copy.
 fn drawn_as(world: &VardeWorld, line: usize) -> &'static str {
     use varde::conflict::Drawn;
     match varde::conflict::drawn(&world.state, line) {
@@ -18267,8 +16298,6 @@ fn buffer_holds_inline(world: &mut VardeWorld, text: String) {
     assert_eq!(current_buffer(world).shown(), text.replace("\\n", "\n"));
 }
 
-/// On the button's first column, through the hit-test: the pieces are laid
-/// from where the text starts, and the bar is the first Conflict's.
 #[when(expr = "I click the {string} button on the Conflict's bar")]
 fn click_conflict_button(world: &mut VardeWorld, side: String) {
     let side = match side.as_str() {
@@ -18306,7 +16335,6 @@ fn corner_holds_conflict_list(world: &mut VardeWorld) {
     assert_eq!(world.state.corner, layout::Corner::Conflicts);
 }
 
-/// With a header row: a file row has no line.
 #[then("the Conflict list rows are:")]
 fn conflict_list_rows(world: &mut VardeWorld, step: &Step) {
     let expected: Vec<(String, Option<usize>)> = step
@@ -18335,7 +16363,6 @@ fn conflict_list_rows(world: &mut VardeWorld, step: &Step) {
     assert_eq!(listed, expected);
 }
 
-/// The index of the row naming a file's Conflict at a line, or the file's own.
 fn conflict_row(world: &VardeWorld, file: &str, line: Option<usize>) -> usize {
     let path = abs(world, file);
     varde::conflict::listed(&world.state)
@@ -18344,7 +16371,6 @@ fn conflict_row(world: &VardeWorld, file: &str, line: Option<usize>) -> usize {
         .unwrap_or_else(|| panic!("no row for {file} {line:?}"))
 }
 
-/// Moved to with the keyboard, the way a reader gets there.
 fn select_conflict_row(world: &mut VardeWorld, index: usize) {
     world.state.focus = Pane::Conflicts;
     while world.state.conflicts_selection > index {
@@ -18375,7 +16401,6 @@ fn conflict_selection_should_be_on(world: &mut VardeWorld, file: String, line: u
     );
 }
 
-/// Through the hit-test, a press and a release on the row's text.
 #[when(expr = "I click the Conflict list row for {string} line {int}")]
 fn click_conflict_row(world: &mut VardeWorld, file: String, line: usize) {
     let index = conflict_row(world, &file, Some(line));

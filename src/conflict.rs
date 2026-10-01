@@ -1,22 +1,11 @@
-//! The Conflicts git's merge left in a file's text, found on the text alone,
-//! and the Conflict list that walks every unmerged file's. New file: a
-//! Conflict is its own workspace concept — the editor draws and accepts one,
-//! the Corner lists them — and none of the existing modules owns it.
-
 use crate::{Place, State};
 use std::path::{Path, PathBuf};
 
-/// One Conflict, by the 1-based lines its markers are on, and the labels those
-/// markers carry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Conflict {
-    /// The `<<<<<<<` line.
     pub start: usize,
-    /// The diff3 `|||||||` line, when git wrote the common ancestor too.
     pub base: Option<usize>,
-    /// The `=======` line.
     pub middle: usize,
-    /// The `>>>>>>>` line.
     pub end: usize,
     pub current: String,
     pub ancestor: String,
@@ -27,13 +16,10 @@ pub struct Conflict {
 pub enum Side {
     Current,
     Incoming,
-    /// Current first, then incoming.
     Both,
 }
 
-/// The label after a marker, or `None` for a line that is not that marker.
-/// Exactly seven characters and then a space or nothing, as git writes them: a
-/// line of eight `=` is somebody's text.
+/// git writes markers as exactly seven characters then a space or nothing; eight `=` is text
 fn marker<'a>(line: &'a str, prefix: &str) -> Option<&'a str> {
     let rest = line.trim_end_matches('\r').strip_prefix(prefix)?;
     match rest.strip_prefix(' ') {
@@ -42,11 +28,8 @@ fn marker<'a>(line: &'a str, prefix: &str) -> Option<&'a str> {
     }
 }
 
-/// Every Conflict in the text, in order. A region whose markers are not all
-/// there, or not in order, is not one — it is text somebody is editing.
 pub fn find<'a>(lines: impl IntoIterator<Item = &'a str>) -> Vec<Conflict> {
     let mut found = Vec::new();
-    // The one being read, and whether its `=======` has been reached.
     let mut open: Option<(Conflict, bool)> = None;
     for (index, line) in lines.into_iter().enumerate() {
         let number = index + 1;
@@ -87,8 +70,6 @@ pub fn find<'a>(lines: impl IntoIterator<Item = &'a str>) -> Vec<Conflict> {
     found
 }
 
-/// What accepting `side` leaves in place of the whole region, marker lines and
-/// ancestor included. `lines` is the whole text, one entry per line.
 pub fn kept(lines: &[String], conflict: &Conflict, side: Side) -> Vec<String> {
     let current = &lines[conflict.start..conflict.base.unwrap_or(conflict.middle) - 1];
     let incoming = &lines[conflict.middle..conflict.end - 1];
@@ -99,22 +80,14 @@ pub fn kept(lines: &[String], conflict: &Conflict, side: Side) -> Vec<String> {
     }
 }
 
-/// How the editor draws one of a Conflict's lines in place of its text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Drawn {
-    /// A marker line, as a bar: its pieces left to right, the buttons naming
-    /// the side they accept. The renderer runs the bar on to the pane's edge.
     Bar(Vec<(String, Option<Side>)>),
     Current,
     Ancestor,
     Incoming,
 }
 
-/// How line `number` of the Buffer on screen is drawn, or `None` for a line
-/// drawn as its text. Only over the file's own lines — a diff, a Preview and a
-/// walked Site draw rows that are not them — and a marker the cursor is on is
-/// its text, so it can be read and edited. The one answer `ui` draws and
-/// `mouse` hit-tests the buttons with.
 pub fn drawn(state: &State, number: usize) -> Option<Drawn> {
     if state.diff.is_some() || state.walking.is_some() || crate::previewing(state) {
         return None;
@@ -144,9 +117,6 @@ pub fn drawn(state: &State, number: usize) -> Option<Drawn> {
                 ("[accept both]".into(), Some(Side::Both)),
                 (" ".into(), None),
             ];
-            // The buttons are what a narrow editor keeps: the title says what
-            // the bar below it says too, and a button cut off is one nobody
-            // can press.
             let width: usize = pieces.iter().map(|(piece, _)| piece.chars().count()).sum();
             if width > crate::fits(state).2 {
                 pieces.drain(..2);
@@ -166,7 +136,6 @@ pub fn drawn(state: &State, number: usize) -> Option<Drawn> {
     }
 }
 
-/// The files git reports as unmerged, as absolute paths sorted by path.
 fn unmerged(state: &State) -> Vec<PathBuf> {
     let mut paths: Vec<PathBuf> = state
         .repo
@@ -179,9 +148,6 @@ fn unmerged(state: &State) -> Vec<PathBuf> {
     paths
 }
 
-/// A file's Conflicts: its Buffer's when it is open, since that is the text
-/// being resolved, and what the edge last read off the disk otherwise.
-/// Nothing for a file it could not read, which is not one with none left.
 fn conflicts_in<'a>(state: &'a State, path: &Path) -> Option<&'a [Conflict]> {
     match state.buffers.get(path) {
         Some(buffer) => Some(buffer.conflicts()),
@@ -189,9 +155,6 @@ fn conflicts_in<'a>(state: &'a State, path: &Path) -> Option<&'a [Conflict]> {
     }
 }
 
-/// The Conflict list's rows: each unmerged file — `None` — with a row under it
-/// for every Conflict still in its text. Read by `ui` to draw, by `mouse` to
-/// hit-test and by `update` to act on.
 pub fn listed(state: &State) -> Vec<(PathBuf, Option<&Conflict>)> {
     if state.corner != crate::layout::Corner::Conflicts {
         return Vec::new();
@@ -209,8 +172,6 @@ pub fn listed(state: &State) -> Vec<(PathBuf, Option<&Conflict>)> {
     rows
 }
 
-/// Where the row at `index` lands: its Conflict's first marker line, or — for
-/// a file row — its first Conflict's, and the file's top once none are left.
 pub fn landing(state: &State, index: usize) -> Option<(PathBuf, Place)> {
     let (path, conflict) = listed(state).into_iter().nth(index)?;
     let line = conflict
@@ -219,8 +180,6 @@ pub fn landing(state: &State, index: usize) -> Option<(PathBuf, Place)> {
     Some((path, Place { line, column: 1 }))
 }
 
-/// What a row says: a file's path, ticked once nothing is left in it, or where
-/// a Conflict starts and the two sides it is between.
 pub fn row_text(state: &State, path: &std::path::Path, conflict: Option<&Conflict>) -> String {
     match conflict {
         Some(conflict) => format!(
@@ -237,7 +196,6 @@ pub fn row_text(state: &State, path: &std::path::Path, conflict: Option<&Conflic
     }
 }
 
-/// The list's border: how many files, and how many Conflicts are left in them.
 pub fn title(state: &State) -> String {
     let files = unmerged(state);
     let left: usize = files
@@ -296,7 +254,6 @@ mod tests {
             vec![]
         );
         assert_eq!(find("=======\ntheirs\n>>>>>>> x".split('\n')), vec![]);
-        // Eight is somebody's text, not a marker.
         assert_eq!(
             find("<<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> x".split('\n')),
             vec![]
@@ -343,7 +300,6 @@ mod tests {
             .iter()
             .map(|(path, conflict)| row_text(&state, path, *conflict))
             .collect();
-        // `c.rs` was never read, so nothing says it is resolved.
         assert_eq!(rows, ["a.rs", "  2  HEAD ↔ feature", "b.rs ✓", "c.rs"]);
     }
 

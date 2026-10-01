@@ -76,8 +76,10 @@ and comments restating the code. These rules are deliberately falsifiable so the
 - **No struct that exists to carry one field.** Pass the field. No builder under four fields.
 - **One module per feature area, maximum** — `tree_actions`, `view_mode`, `review`, `config`. A new
   file needs a stated reason in the commit message. Nine features do not need thirty files.
-- **Comments only in the four sanctioned cases** (see Conventions below). Never restate the code,
-  never narrate the obvious, no doc comment on a private function whose name already says it.
+- **No comments.** The one exception is a single line naming a genuinely edge-case quirk the code
+  cannot show — usually a terminal's, a library's or a protocol's. No doc comments, no rationale
+  paragraphs, no history. A comment is a second copy of the code that nothing keeps in step with
+  it; the why belongs in the commit message, an ADR or this file.
 - **Delete on sight:** unused `impl Default`, `From` conversions nobody calls, re-export layers,
   `mod.rs` files that only `pub use`.
 
@@ -276,9 +278,13 @@ its modes — comes back in as an `Event` or is answered as data the library dec
   identity a hosted pane hands its child, and `Pane::spawn` walks it: `TERM` alone was not enough,
   because a CLI that sniffs `TERM_PROGRAM`, `KITTY_*`, `TMUX` or any other marker got an answer about
   the user's machine. It lives beside the escape-sequence replies, so a change to one identity is
-  read next to the other. Read the constant before adding to it — why it may name emulators when
-  nothing in Varde may name a CLI provider is argued there, and it is not licence for the branching
-  this file forbids.
+  read next to the other. It may name terminal emulators where nothing may name a CLI provider
+  because emulators are a small, slow-moving set, a missed marker costs one CLI a cosmetic
+  difference rather than a broken feature, and nothing branches on the list — it is data, not a code
+  path, and not licence for the branching this file forbids. It removes rather than invents: an
+  unset `TERM_PROGRAM` is what xterm gives a child too, and a made-up name is one someone will
+  branch on. `COLORTERM` stays, because Varde passes 24-bit colour through; `TERMINFO_DIRS` stays,
+  because a capability database is not an identity and ncurses needs it to find an entry at all.
 
 ## Working philosophy: simplicity first
 
@@ -385,7 +391,7 @@ traces or internal details in user-facing output.
 
 - Build: `cargo build` · Test: `cargo test` (BDD only: `cargo test --test cucumber`) · Run: `cargo run -- <folder>` (not yet implemented)
 - Lint: `cargo clippy -- -D warnings` · Format: `cargo fmt`
-- Comments: default to none — only edge cases, workarounds, cross-cutting contracts, surprising invariants
+- Comments: none, apart from a one-line note on a genuinely edge-case quirk (see Code budget)
 - Git: agents may commit — push or branch only when explicitly asked
 - **A program Varde shells out to is installable, or the feature is not done.** A configured one
   is a template row in `startup::PROGRAMS` with an `install.<os>` key, taken from Tools inside

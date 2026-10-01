@@ -1,8 +1,3 @@
-//! F3 — turning a tree action into a shell command.
-//!
-//! String building only. The decision to inject or run lives in [`crate::update`],
-//! and quoting belongs to `shlex` — see docs/stack.md.
-
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -17,15 +12,12 @@ pub enum Action {
     CopyPath,
 }
 
-/// A tree row, as a path relative to the workspace root.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Target {
     File(PathBuf),
     Folder(PathBuf),
 }
 
-/// `mkdir -p` the parent first when the name reached into a folder that may not
-/// exist yet. Directories always use `-p`, so one form covers both cases.
 pub(crate) fn create(action: Action, base: &Path, path: &Path) -> String {
     match action {
         Action::NewDirectory => command("mkdir -p", path),

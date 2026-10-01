@@ -1,8 +1,3 @@
-//! F1 and F9 — starting on a folder, and the configuration behind it.
-//!
-//! Reads nothing. The edge loads the files and passes their contents in; this
-//! module decides what they mean and what should exist.
-
 use crate::risk::{self, Scope};
 use crate::{Effect, ReplaceFailed, State, View};
 use sha2::Digest;
@@ -10,13 +5,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use toml::Table;
 
-/// The Settings: numbers Varde cannot work without, built in and beaten key by
-/// key by `~/.varde/config.toml` and that by the project's own
-/// (`docs/adr/0018-the-global-config-is-the-list-of-programs.md`).
-/// `risk.threshold` is `risk::DEFAULT_THRESHOLD` and `editor.tab_width` is
-/// `editor::DEFAULT_TAB_WIDTH`, spelled as TOML — a test below holds each pair
-/// level, since a default that disagrees with itself is a figure nobody can
-/// predict.
 pub const DEFAULTS: &str = r#"[view]
 double_tap_ms = 300
 
@@ -101,24 +89,6 @@ run = "npx vitest run ${file} -t ${name}"
 debug = { adapter = "typescript", request = "launch", args = { type = "pwa-node", runtimeExecutable = "npx", runtimeArgs = ["vitest", "run", "${file}", "-t", "${name}"] } }
 "#;
 
-/// The Program rows the binary carries: the rows [`template`] seeds
-/// `~/.varde/config.toml` with, live. They are not a layer of the merge: a row
-/// no config file names does not run (ADR 0018).
-///
-/// The `[lsp.*]` tables are the only place in the library a language server is
-/// named, and they are data rather than a branch on purpose: once in the file
-/// they are the reader's to edit, and the project's own config beats them key
-/// by key. A match arm spelling the same strings could only be beaten by a fork —
-/// `docs/adr/0011-a-language-server-is-a-second-hosted-child.md` argues why
-/// where the name lives is the whole of the distinction.
-///
-/// The `install` keys are the same kind of data for the same reasons, one per
-/// operating system, and this is the only place in the library a package
-/// manager is named at all
-/// (`docs/adr/0012-an-install-command-is-configuration.md`). A language nobody has packaged
-/// for an OS gets **no key** — `zls` on Linux is a build from source and `jdtls`
-/// is in no distribution — because an invented command that fails looks
-/// configured, while a blank one is fixable in one line of TOML.
 pub const PROGRAMS: &str = r#"# The compiler a project pins, which is a per-package dependency in every
 # JavaScript workspace and the file `@vue/language-server` resolves out of the
 # directory `--tsdk=` names. `value = "directory"` because the server wants the
@@ -741,32 +711,6 @@ install.linux = "uv tool install piper-tts && mkdir -p ~/.varde/voices && curl -
 configures.voice = "~/.varde/voices/en_US-bryce-medium.onnx"
 "#;
 
-/// What starting lays down at `<project>/.varde/config.toml` the first time,
-/// and only when nothing is there (Q38) — and what `install.sh` lays down at
-/// `~/.varde/config.toml` the same way, asked of `varde --default-config`, so
-/// both files hold one text and the test below holds both. A key nobody can find is a key nobody
-/// sets: `editor.tab_width` was layered, merged and read on every start for its
-/// whole life while no `.varde/config.toml` existed anywhere to name it.
-///
-/// **Every key is commented out**, and that is the whole design. A seeded file
-/// holding live values would make "the project sets nothing" false — the merge
-/// would see a project layer on its first run — and it would freeze *this*
-/// binary's numbers into a file that outlives it, so a later correction to
-/// [`DEFAULTS`] would arrive and change nothing, which is the same trap
-/// [`DEFAULTS`]'s own doc argues the install commands out of. The trap is only
-/// half sprung by the comment: a reader who uncomments a line that has since
-/// gone stale pins the old number by hand, so a test below uncomments every key
-/// here and holds each one against the [`DEFAULTS`] layer.
-///
-/// That test is also why this quotes only keys [`DEFAULTS`] spells. A setting
-/// whose default lives in Rust alone — `editor.theme`, `ai.command` — has no
-/// text to be held level with, and a number written here with nothing holding
-/// it is exactly the frozen answer the comments exist to prevent.
-///
-/// The table headers are live where the keys under them are not, because a
-/// reader who uncomments `tab_width` alone under a commented `[editor]` sets a
-/// top-level key that nothing reads. An empty table merges nothing, so they
-/// cost the effective config exactly what the comments do.
 pub const SEEDED_CONFIG: &str = r#"# Varde reads this file on every start. A project's .varde/config.toml beats
 # ~/.varde/config.toml key by key, and both beat the defaults built into Varde.
 # It arrives commented out on purpose: it is here so the keys can be found,
@@ -820,9 +764,6 @@ pub const SEEDED_CONFIG: &str = r#"# Varde reads this file on every start. A pro
 # speed = 1.0
 "#;
 
-/// The Settings half of [`template`], commented out for the reason
-/// [`SEEDED_CONFIG`]'s are. `speech.speed` is not here but commented out inside
-/// [`PROGRAMS`]'s `[speech]` row, since TOML allows that table only once.
 const TEMPLATE_SETTINGS: &str = r#"# Varde reads this file on every start. A project's .varde/config.toml beats
 # it key by key, and both beat the defaults built into Varde.
 #
@@ -906,9 +847,6 @@ const TEMPLATE_SETTINGS: &str = r#"# Varde reads this file on every start. A pro
 
 "#;
 
-/// What `~/.varde/config.toml` starts as, when Varde starts and the edge read
-/// none, and what `varde --default-config` prints for `install.sh` to lay down
-/// the same way: every Setting commented out, every Program row live (ADR 0018).
 pub fn template() -> String {
     [TEMPLATE_SETTINGS, PROGRAMS].concat()
 }
@@ -916,12 +854,8 @@ pub fn template() -> String {
 pub const GLOBAL_LABEL: &str = "~/.varde/config.toml";
 pub const PROJECT_LABEL: &str = ".varde/config.toml";
 
-/// The file both layers are read from: the global one under `~/.varde`, and
-/// the project's own under [`crate::varde_dir`].
 pub const CONFIG_FILE: &str = "config.toml";
 
-/// Why Varde refused to start. Precise enough to fix the file in another
-/// editor, which matters because a broken global config locks the user out.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConfigError {
     pub file: String,
@@ -929,39 +863,22 @@ pub struct ConfigError {
     pub fault: ConfigFault,
 }
 
-/// What is wrong with a layer, because the three faults send the reader to
-/// three different places. The edge printed one sentence for all of them, so a
-/// deserialize fault about a missing key wore the parse fault's words and sent
-/// whoever read it hunting a syntax error that was not there — the same failure
-/// as a notice blaming a server for Varde's own refusal, one layer down.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConfigFault {
-    /// The text is not TOML at all.
     NotToml,
-    /// TOML, but a value is not the shape its key must be (R9.5) — including
-    /// half of a pair that is one fact, such as an `unanswerable` naming a
-    /// request and no response. The `toml` crate's own words, which name the
-    /// type found and the type wanted; the line points at the key.
     WrongType(String),
-    /// An entry that parsed, typed, and is still unusable: no layer ever gave
-    /// it the one key it cannot be used without. Found after the merge,
-    /// because a layer is a patch and completeness is not a patch's to satisfy.
-    Incomplete { entry: String, key: String },
-    /// Two `[lsp.*]` rows claiming one extension, named in the order the
-    /// merged table holds them. Found after the merge for the same reason.
+    Incomplete {
+        entry: String,
+        key: String,
+    },
     ClaimedTwice {
         extension: String,
         rows: [String; 2],
     },
-    /// The file is there and the edge could not read it. Never written over:
-    /// what cannot be read cannot be kept.
     Unreadable,
 }
 
 impl std::fmt::Display for ConfigError {
-    /// The words, here rather than at the edge: a reason the edge has to
-    /// supply is a reason no test can read, which is how one sentence came to
-    /// stand for three faults.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}:{}: ", self.file, self.line)?;
         match &self.fault {
@@ -977,7 +894,6 @@ impl std::fmt::Display for ConfigError {
     }
 }
 
-/// What the edge found at the path it was asked to open.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum PathStatus {
     #[default]
@@ -987,63 +903,28 @@ pub enum PathStatus {
     Unreadable,
 }
 
-/// Everything the edge read before starting.
 #[derive(Debug, Default)]
 pub struct Startup {
     pub root: PathBuf,
-    /// The Sidecar, if the edge was given no folder to open: `varde` with no
-    /// argument is a Bare workspace, `varde <folder>` is a project. The edge
-    /// reports which it was by handing one or none — it never interprets argv,
-    /// and `varde` and `varde .` name the same folder
-    /// (`docs/adr/0016-a-bare-workspace-leaves-nothing-behind.md`).
     pub sidecar: Option<PathBuf>,
-    /// `~/.varde`, the user's own directory — where a submitted review goes
-    /// when the workspace has nowhere durable to keep it (ADR 0016). Read at
-    /// the edge like the Sidecar is, for the same reason: a home directory is
-    /// not the library's to observe.
     pub varde_home: PathBuf,
-    /// The reviews already kept, by number, as the edge found them in
-    /// [`crate::reviews_dir`]. Read from the directory rather than remembered
-    /// in `state.json`: a Bare workspace has no state to remember it in, and
-    /// the one directory is shared by every one of them.
     pub reviews: BTreeSet<u32>,
     pub path_status: PathStatus,
     pub global_config: Option<String>,
     pub project_config: Option<String>,
     pub state_json: Option<String>,
-    /// `.varde/risk.json` as the edge found it, and what `HEAD` resolves to.
-    /// Whether the cached figure still describes the workspace is decided here,
-    /// not there.
     pub risk_json: Option<String>,
     pub head: Option<String>,
-    /// git's answer, as `State::repo` holds it. Handed in rather than told
-    /// after starting, because a session restored into Review view lands on
-    /// the first changed file, and without it there is none to land on.
     pub repo: Option<Vec<crate::review::GitFile>>,
-    /// The directory above the running binary, if the edge found one. Whether it
-    /// is Varde's own checkout is decided here, not there.
     pub checkout: Option<PathBuf>,
     pub checkout_manifest: Option<String>,
-    /// What this binary was compiled from — the one version a running Varde
-    /// knows for certain.
     pub running_version: String,
-    /// Which operating system this binary was built for, as
-    /// `std::env::consts::OS` spells it. Handed in rather than read here for
-    /// the reason `running_version` is: a value handed in is a value a scenario
-    /// can set, and "the Linux row offers the Linux command" is otherwise
-    /// unspecifiable on a Mac (R31.22).
     pub os: String,
-    /// And the CPU, as `std::env::consts::ARCH` spells it, for the same reason.
     pub arch: String,
 }
 
-/// This repository's latest Release — the one place the release host is named
-/// (ADR 0017). Unauthenticated: one request per launch is far inside the
-/// anonymous limit.
 pub const RELEASE_URL: &str = "https://api.github.com/repos/oyvij/varde-editor/releases/latest";
 
-/// A published Version newer than the Running version, and the two URLs
-/// `:update` fetches: this platform's Asset and the checksum list.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Release {
     pub version: String,
@@ -1063,16 +944,10 @@ struct Attached {
     browser_download_url: String,
 }
 
-/// The file in a Release built for this platform. The release workflow's matrix
-/// spells the same names (`.github/workflows/release.yml`).
 fn asset_name(os: &str, arch: &str) -> String {
     format!("varde-{os}-{arch}")
 }
 
-/// The Release a latest-release body describes, if it is an Update this
-/// platform can install. Anything short of that — a body that is not the JSON,
-/// a tag that is not a newer Version, no Asset or no checksum list to verify it
-/// against — is no Release, and silently so.
 pub fn release(body: &str, os: &str, arch: &str, running: &str) -> Option<Release> {
     let published: Published = serde_json::from_str(body).ok()?;
     let version = published.tag_name.strip_prefix('v')?;
@@ -1093,9 +968,6 @@ pub fn release(body: &str, os: &str, arch: &str, running: &str) -> Option<Releas
     })
 }
 
-/// Whether a downloaded Asset is the file the checksum list names. The Asset's
-/// name is the last segment of its download URL, and its line is the one
-/// `sha256sum` wrote for exactly that name.
 pub fn verify(list: &str, asset_url: &str, downloaded: &[u8]) -> Result<(), ReplaceFailed> {
     let name = asset_url.rsplit('/').next().unwrap_or(asset_url);
     let expected = list
@@ -1114,183 +986,67 @@ pub fn verify(list: &str, asset_url: &str, downloaded: &[u8]) -> Result<(), Repl
     }
 }
 
-/// What runs a language's server, as configuration named it. Nothing here is a
-/// claim that a process exists: that is the edge's to observe, never the core's
-/// to remember.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 pub struct Server {
-    /// Defaulted, because a layer is a patch: naming one key of a language
-    /// `DEFAULTS` ships must not mean repeating a command the reader would have
-    /// to copy out of a binary's built-in defaults and which then silently
-    /// stops tracking them. Empty means no layer named one, which
-    /// `refuse_incomplete` refuses before any `Server` reaches `State`.
     #[serde(default)]
     pub command: String,
     #[serde(default)]
     pub args: Vec<String>,
-    /// Which *other* languages' servers also serve this language's files. A
-    /// `.vue` file is served by the Vue server and by a TypeScript server, a
-    /// linter server sits beside a type server, and every arrangement other
-    /// editors reach by attaching several clients to one buffer is this key —
-    /// so which servers serve a path is data, and no arm anywhere names a
-    /// language (R31.1, ADR 0011).
-    ///
-    /// Named from the file's own side rather than the serving server's: a
-    /// `.vue` file is what needs two answers, and resolving them is then one
-    /// lookup in the table the path already found rather than a scan over
-    /// every configured server asking whether it fancies this extension.
     #[serde(default)]
     pub also_served_by: Vec<String>,
-    /// The file extensions this row owns, and the only way a file finds its
-    /// server: the table name is then the language id the protocol is sent, so
-    /// a language Varde has never heard of is a row and no release (ADR 0018).
-    /// Two rows claiming one extension is refused at start rather than settled
-    /// by the order the merge happened to leave them in.
     #[serde(default)]
     pub extensions: Vec<String>,
-    /// What installs this server, keyed by the OS the binary was built for.
-    /// Typed like the rest, so `install.macos = 12` faults with a file and a
-    /// line rather than being dropped (R9.5), and a map rather than three
-    /// fields because which key applies is a lookup by the string `Startup`
-    /// carried in — never a branch on the OS.
     #[serde(default)]
     pub install: BTreeMap<String, String>,
-    /// What the server is told about its own world in the `initializationOptions`
-    /// of `initialize` — where its toolchain lives, most often, which several
-    /// servers will not run without. An arbitrary table, and that is the point:
-    /// Varde inspects none of it, so a requirement nobody here anticipated is a
-    /// row in a file rather than a release
-    /// (`docs/adr/0012-an-install-command-is-configuration.md`, R31.26).
-    ///
-    /// Deserialized straight into the shape the message wants rather than into
-    /// a `toml::Table` converted later: serde does not care which format a
-    /// value came from, so there is nothing to convert and nothing that can
-    /// fail on the way out — a re-serialise into JSON has one failure mode
-    /// (TOML has `nan`, JSON has no number for it) and it would surface as a
-    /// panic in a running TUI. A map rather than a bare value so that
-    /// `initialization_options = 12` faults with a file and a line (R9.5)
-    /// instead of being sent as a number no server can read.
+    /// JSON map, not toml::Table: TOML allows nan, which a later TOML-to-JSON conversion cannot express
     #[serde(default)]
     pub initialization_options: Option<serde_json::Map<String, serde_json::Value>>,
-    /// What this server, installed and running, still cannot do — the reader's
-    /// words, shown on its row. R31.25 forbids a language that reads as
-    /// configured and answers nothing, and a language that answers *some* of it
-    /// is the same silence in a smaller shape: nothing Varde can observe tells
-    /// a server with less to say from a file with less wrong in it. Named here
-    /// for the reason a command is named here, and read nowhere except onto the
-    /// row.
     #[serde(default)]
     pub partial: Option<String>,
-    /// A question this server asks the *client* that Varde will not answer, and
-    /// the method to say so on. Data for the reason a command is data: which
-    /// servers ask one, and what they ask it on, is a fact about a server, and
-    /// an arm naming either is the one R31.1 forbids.
-    ///
-    /// It exists because a question asked and never answered is a server that
-    /// waits forever — alive, configured, and silent, which is what R31.25
-    /// refuses. The question arrives as a notification, so the protocol has no
-    /// reply of its own for it; only the sender knows the method its answer
-    /// comes back on, so only configuration can say.
     #[serde(default)]
     pub unanswerable: Option<Unanswerable>,
 }
 
-/// The two method names one such question needs: what the server asks on, and
-/// what Varde answers on. Both, because they are one fact — a request method
-/// with no response method is a refusal that cannot be spoken, and neither is
-/// any use alone. Named for what the key holds rather than for what Varde does
-/// about it: `preview::Refusal` is already a different thing, and two of that
-/// word would send a reader to the wrong one.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 pub struct Unanswerable {
     pub request: String,
     pub response: String,
 }
 
-/// What lays a language's files out, as configuration named it. The `[lsp.*]`
-/// table's shape a second time, and deliberately so: a formatter is a command
-/// on this machine that a project chooses, an OS packages differently, and
-/// nobody at Varde can enumerate — the three properties
-/// `docs/adr/0012-an-install-command-is-configuration.md` argues a name into
-/// the bottom layer of the merge for.
-///
-/// Not merged into [`Server`]. They share four field *names* and no field
-/// meaning: a server is spoken to over stdio for the life of the session and a
-/// formatter is one process per keystroke, so `also_served_by`,
-/// `initialization_options` and `unanswerable` are nonsense here and
-/// `extensions` is nonsense there. Two similar things are a coincidence.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 pub struct Formatter {
-    /// Defaulted, and held to being named by the merged table, for the reason
-    /// [`Server::command`] is: a layer is a patch, and a project naming only
-    /// this language's `args` must not have to repeat a command out of a
-    /// binary's built-in defaults.
     #[serde(default)]
     pub command: String,
-    /// What it is run with. `${file}` is the Buffer's own path and every
-    /// `[facts.*]` name resolves here too, which is what lets a command that
-    /// reads stdin still be told which language it is reading.
     #[serde(default)]
     pub args: Vec<String>,
-    /// What installs it, keyed by the OS the binary was built for — a lookup
-    /// under the string `Startup` carried in, never a branch on it (R31.22).
     #[serde(default)]
     pub install: BTreeMap<String, String>,
-    /// The file extensions this row claims. Asked on its own, never after the
-    /// `[lsp.*]` rows: a file's server and its formatter are separate choices,
-    /// so `rs` named in both tables is two facts rather than one with two
-    /// authors (ADR 0018).
     #[serde(default)]
     pub extensions: Vec<String>,
 }
 
-/// What runs a language's Debug adapter, as configuration named it — the
-/// `[dap.*]` row ADR 0021 puts every adapter in, so no arm names one. Spoken
-/// to over its standard streams, over TCP where `args` name `${port}`, or —
-/// where it names a `server` — over TCP on the port that language server
-/// answers `command` with.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 pub struct Adapter {
-    /// Defaulted and held to being named by the merged table, for the reason
-    /// [`Server::command`] is. For a hosted adapter it is not a program but
-    /// the command sent to its `server`.
     #[serde(default)]
     pub command: String,
     #[serde(default)]
     pub args: Vec<String>,
     #[serde(default)]
     pub install: BTreeMap<String, String>,
-    /// The `[lsp.*]` row whose server hosts this adapter as a plugin.
     #[serde(default)]
     pub server: Option<String>,
-    /// Merged into that server's `initializationOptions` when it starts,
-    /// which is how a server is told what to load: what the keys mean is the
-    /// server's business, for the reason its own options are.
     #[serde(default)]
     pub plugin: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
-/// A named way to start a Debug session: which adapter, whether it launches
-/// or attaches, and the arguments that request carries. Allowed in either
-/// layer, and the project's beats the global one of the same name because the
-/// merge is key by key.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 pub struct Launch {
     #[serde(default)]
     pub adapter: String,
-    /// `launch` or `attach`, sent as the request's own name: the protocol has
-    /// the two, and a Scenario naming a third reaches an adapter that says no.
     #[serde(default)]
     pub request: String,
-    /// Handed to the adapter untouched, for the reason a server's
-    /// `initialization_options` are: what an adapter needs to be told is its
-    /// own business. Varde reads one thing in it and writes nothing: the
-    /// `hostName` and `port` an attach session watches to attach again.
     #[serde(default)]
     pub args: serde_json::Map<String, serde_json::Value>,
-    /// Whether an attach session whose program went away waits for it to
-    /// answer again. On unless said otherwise: a remote machine that is not
-    /// coming back is the case for saying so.
     #[serde(default = "attaches_again")]
     pub reattach: bool,
 }
@@ -1299,12 +1055,6 @@ fn attaches_again() -> bool {
     true
 }
 
-/// What a Run mark stands beside and what it starts: the files it looks in, a
-/// syntax-tree query whose `@run` capture is the line it marks, and the two
-/// commands it fills from the query's other captures — `${name}` from `@name`
-/// — and from `${file}`. Named freely rather than by language, since a
-/// language has more than one kind of thing to start and each runs its own
-/// way; `debug` names its adapter the way a Launch configuration does.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 pub struct Run {
     #[serde(default)]
@@ -1317,66 +1067,22 @@ pub struct Run {
     pub debug: Option<Launch>,
 }
 
-/// A path on this machine a server's configuration may name, and how to find
-/// it. Data for the reason a command is data: which marker file means "this
-/// directory configures the language" is the whole of what differs between
-/// `node_modules/typescript/lib/typescript.js`, `.venv/bin/python` and
-/// `compile_commands.json`, and an arm per ecosystem is a server's name in an
-/// arm with more in it (R31.1, ADR 0011). The edge runs one search for every
-/// fact and knows nothing about any of them.
-///
-/// Deliberately not a template language and not an expression: a marker path,
-/// and which of the two things found the answer is. Anything a marker cannot
-/// say is a fact Varde does not ship, which is the same bargain
-/// `docs/adr/0012-an-install-command-is-configuration.md` strikes for installs.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 pub struct Fact {
-    /// Looked for under each directory from the file being served up to the
-    /// workspace root, nearest first. A monorepo installs its dependencies per
-    /// package, so the toolchain that must serve a package's files is the one
-    /// that package installed.
-    ///
-    /// Defaulted for the reason `Server::command` is, and held to the same
-    /// check on the merged table.
     #[serde(default)]
     pub marker: String,
     #[serde(default)]
     pub value: FactValue,
-    /// A machine-wide install to fall back to: a command on `PATH`, and where
-    /// the marker sits relative to the directory holding it once symlinks are
-    /// resolved. Both keys or neither — a command with nowhere to look from is
-    /// no answer, and a marker with no command has nothing to look from.
     #[serde(default)]
     pub command: Option<String>,
     #[serde(default)]
     pub command_marker: Option<String>,
-    /// Whether the server starts without it. A fact a server cannot run at all
-    /// without and a fact it is merely better with are two different facts, and
-    /// nothing Varde can observe tells them apart — so configuration says,
-    /// which is the reason a command is configuration.
-    ///
-    /// Required is the default and the interesting case is why the other exists:
-    /// the plugin that gives a TypeScript server its `.vue` intelligence is
-    /// named on the `[lsp.typescript]` row *every* TypeScript project shares.
-    /// Required, a machine that never installed a Vue server would have no
-    /// TypeScript server in any project — a requirement nobody declared, and
-    /// machine-dependent, so it would work for whoever tested it. Optional
-    /// changes only the spawn: a value that was found is filled in like any
-    /// other, and the key naming one that was not is dropped exactly as it
-    /// already would be.
     #[serde(default)]
     pub optional: bool,
-    /// What puts the fallback `command` on this machine, per OS, as a program
-    /// row's `install` does. A search still: nothing it finds is written back.
     #[serde(default)]
     pub install: BTreeMap<String, String>,
 }
 
-/// What is handed over once the marker is found: the marker itself, or the
-/// directory holding it. Both are real — clangd wants the directory holding
-/// `compile_commands.json` and pyright wants the interpreter itself — and
-/// guessing from the marker's shape would make `.venv/bin/python` and
-/// `compile_commands.json` indistinguishable.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum FactValue {
@@ -1385,10 +1091,6 @@ pub enum FactValue {
     Directory,
 }
 
-/// The `[lsp.*]` and `[facts.*]` tables of one layer, typed, so that reading
-/// them is a deserialize the `toml` crate can fault with a span rather than a
-/// walk over `Value`s that has to decide what to do about each wrong shape
-/// itself.
 #[derive(Default, serde::Deserialize)]
 struct Layer {
     #[serde(default)]
@@ -1405,11 +1107,7 @@ struct Layer {
     run: BTreeMap<String, Run>,
 }
 
-/// The same two tables read off a layer's source text, keeping where each entry
-/// was named. A second type rather than a parameter on the first because
-/// `Spanned` cannot be deserialized from a `toml::Value` at all — only the text
-/// deserializer carries spans — and `Config` reads the merged table, which is
-/// values by then.
+/// toml::Spanned only deserializes from source text, never from a toml::Value
 #[derive(serde::Deserialize)]
 struct SourceLayer {
     #[serde(default)]
@@ -1426,70 +1124,42 @@ struct SourceLayer {
     run: BTreeMap<String, toml::Spanned<Run>>,
 }
 
-/// Where each layer named an `[lsp.*]` or `[facts.*]` entry: the dotted name
-/// the fault message prints, against the file and the line it was named on. A
-/// later layer overwrites an earlier one, so the file named is the nearest one
-/// — whose values won, and the one the reader is editing.
 type Origins = BTreeMap<String, (String, usize)>;
 
 #[derive(Debug, Clone, Default)]
 pub struct Config(pub(crate) Table);
 
 impl Config {
-    /// Which languages have a server, and what runs each one. `get` below
-    /// cannot answer this: a dotted scalar lookup reaches a value it is told the
-    /// name of, and the languages are the names. A language in no layer is
-    /// absent from the map, which is what makes "no server for this language" a
-    /// value the core can hold rather than a silence it infers.
-    ///
-    /// Every layer was held to these same types as it was parsed and the merged
-    /// table was held to being complete, so nothing here can fail for a config
-    /// Varde started on — which is why this is a deserialize and not a walk
-    /// deciding what to do about each wrong shape it meets, and why every
-    /// `command` it returns is non-empty.
     pub fn servers(&self) -> BTreeMap<String, Server> {
         self.layer().lsp
     }
 
-    /// And which command lays each language out, read the same way and for the
-    /// same reasons: a project that formats its own files with its own tool is
-    /// a row in a file rather than a release.
     pub fn formatters(&self) -> BTreeMap<String, Formatter> {
         self.layer().formatter
     }
 
-    /// Which paths on this machine configuration lets a server name, and how
-    /// the edge is to find each one. Read the same way and for the same
-    /// reasons: a project declaring a fact its own toolchain needs is a row in
-    /// a file rather than a release.
     pub fn facts(&self) -> BTreeMap<String, Fact> {
         self.layer().facts
     }
 
-    /// Which languages have a Debug adapter, and what runs each one.
     pub fn adapters(&self) -> BTreeMap<String, Adapter> {
         self.layer().dap
     }
 
-    /// The Launch configurations both layers name, by name.
     pub fn launches(&self) -> BTreeMap<String, Launch> {
         self.layer().launch
     }
 
-    /// What Run marks stand beside, by row.
     pub fn runs(&self) -> BTreeMap<String, Run> {
         self.layer().run
     }
 
-    /// The typed tables of the merged config. Nothing here can fail for a
-    /// config Varde started on, for the reason `servers` gives.
     fn layer(&self) -> Layer {
         toml::Value::Table(self.0.clone())
             .try_into::<Layer>()
             .unwrap_or_default()
     }
 
-    /// Looks up a dotted key such as `editor.tab_width`.
     pub fn get(&self, dotted: &str) -> Option<String> {
         let mut parts = dotted.split('.');
         let mut value = self.0.get(parts.next()?)?;
@@ -1503,9 +1173,6 @@ impl Config {
     }
 }
 
-/// Why Varde would not open. Each way a path can be unusable gets its own
-/// reason, because a typo, a file and a permissions problem are three
-/// different things for the user to fix.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StartupError {
     Path(&'static str),
@@ -1516,10 +1183,6 @@ pub fn start(input: &Startup) -> Result<(State, Config, Vec<Effect>), StartupErr
     if let Some(reason) = path_refusal(input.path_status) {
         return Err(StartupError::Path(reason));
     }
-    // A Bare workspace has no project configuration layer at all, so a
-    // `.varde/config.toml` that happens to sit in the folder — most likely
-    // somebody else's — is not read. Skipped rather than refused: an
-    // unparseable file Varde never looks at must not stop it starting either.
     let project = match &input.sidecar {
         Some(_) => None,
         None => input.project_config.as_deref(),
@@ -1533,10 +1196,6 @@ pub fn start(input: &Startup) -> Result<(State, Config, Vec<Effect>), StartupErr
 
     let mut effects = vec![
         Effect::EnsureDir(crate::varde_dir(&input.root, input.sidecar.as_deref())),
-        // Swept before it is made, because a crash mid-Reading escapes both
-        // the deletion the player's exit makes and the one quitting makes.
-        // Safe with no pattern to match against precisely because everything
-        // under it is Varde's (ADR 0014).
         Effect::DeleteDir(crate::tmp_dir(&input.varde_home)),
         Effect::EnsureDir(crate::tmp_dir(&input.varde_home)),
     ];
@@ -1545,38 +1204,21 @@ pub fn start(input: &Startup) -> Result<(State, Config, Vec<Effect>), StartupErr
             url: RELEASE_URL.to_string(),
         });
     }
-    // A reader's own settings survive every start, and the core is already
-    // holding the fact that decides it: `project_config` is what the edge read
-    // off `.varde/config.toml`, and it is `None` on exactly the folders that
-    // have no file to lose. An `Effect` that asked the disk again would put
-    // this promise in `main.rs`, where no scenario can reach it.
-    // A Bare workspace seeds nothing: the file would land in a Sidecar deleted
-    // at exit, and a key written where nobody can find it is worse than a key
-    // never written — the same argument the seed itself makes, read the other
-    // way. It also has no project layer to lose, so `project_config` cannot be
-    // what decides it.
     if input.sidecar.is_none() && input.project_config.is_none() {
         effects.push(Effect::WriteFile {
             path: crate::varde_dir(&input.root, input.sidecar.as_deref()).join(CONFIG_FILE),
             contents: SEEDED_CONFIG.to_string(),
         });
     }
-    // The global file by the same rule, and in a Bare workspace too: it lives
-    // in `~/.varde`, not the workspace, so nothing about the folder decides it.
     if input.global_config.is_none() {
         effects.push(Effect::WriteFile {
             path: input.varde_home.join(CONFIG_FILE),
             contents: template(),
         });
     }
-    // The editor comes back to the files it had, which is the only part of the
-    // saved state the core cannot simply be started holding: a Buffer needs its
-    // contents, and contents are the edge's to read.
     let buffers = saved_buffers(&input.root, input.state_json.as_deref());
     state.restoring = buffers.len();
     effects.extend(buffers.into_iter().map(Effect::OpenBuffer));
-    // Each file a remembered Breakpoint is in is read once, open or not, so a
-    // Breakpoint whose line has moved on is Stale from the start.
     let files: std::collections::BTreeSet<PathBuf> = state
         .breakpoints
         .iter()
@@ -1584,36 +1226,21 @@ pub fn start(input: &Startup) -> Result<(State, Config, Vec<Effect>), StartupErr
         .collect();
     effects.extend(files.into_iter().map(Effect::ReadBreakpointFile));
 
-    // Measuring starts without being asked: the figure is there when the user
-    // wants it rather than after they remember to ask for it. Unless the cache
-    // already answers for the commit that is checked out — reopening on code
-    // nobody has changed is the common case, and re-measuring it spends seconds
-    // to arrive at the number already on disk.
-    // A Bare workspace is the exception, and for the same reason the seed is:
-    // the figure would be measured into a Sidecar deleted at exit. Nothing is
-    // removed — the Risk pane's own recompute still measures on demand.
     let cache = cached(input);
     let unmeasured = cache.is_none();
     if let Some(figures) = cache {
         state.risk.figure = risk::Figure::Current(figures);
     }
 
-    // Starting in a view is arriving in it, and arriving loads what the view
-    // shows: Story's sets, Review's first diff and its own figure. After the
-    // cache, so a restored Review treats the workspace figure exactly as
-    // switching into Review would.
     let (mut state, entered) = crate::enter_view(&state, state.view);
     effects.extend(entered);
 
-    // Review view asked for its own Scope on the way in, and a workspace job
-    // would only be superseded by it.
     if unmeasured && input.sidecar.is_none() && !state.risk.in_flight() {
         effects.push(risk::analyse(&mut state, Scope::Workspace));
     }
     Ok((state, config, effects))
 }
 
-/// Why the path Varde was opened on is not a workspace, if it is not one.
 fn path_refusal(status: PathStatus) -> Option<&'static str> {
     match status {
         PathStatus::Folder => None,
@@ -1623,17 +1250,6 @@ fn path_refusal(status: PathStatus) -> Option<&'static str> {
     }
 }
 
-/// The Settings, under the global config, under the project's own. A project
-/// layer that is not there is an empty one, which merges nothing; a global one
-/// that is not there is the [`template`] this same start seeds it with, so a
-/// fresh machine has its servers on the start that writes them. The Program
-/// rows have no layer of their own beneath the files: what the files name is
-/// what runs (ADR 0018).
-///
-/// Each layer is held to the types as it is parsed, because only the source
-/// text can name a line — but a layer is a *patch*, so completeness is the
-/// merged table's to satisfy and is checked once, at the end. `origins` is what
-/// lets that fault still name a file and a line after the source text is gone.
 pub(crate) fn merged_config(
     global: Option<&str>,
     project: Option<&str>,
@@ -1656,9 +1272,6 @@ pub(crate) fn merged_config(
     Ok(table)
 }
 
-/// A `[run.*]` row that could never mark a line, refused rather than left to
-/// read as configured (R41.1): its query is compiled against the grammar of
-/// every extension it claims.
 fn refuse_unusable_runs(table: &Table, origins: &Origins) -> Result<(), ConfigError> {
     let runs = Config(table.clone()).runs();
     for (name, row) in &runs {
@@ -1675,17 +1288,6 @@ fn refuse_unusable_runs(table: &Table, origins: &Origins) -> Result<(), ConfigEr
     Ok(())
 }
 
-/// The merged table is what must be complete. The one key an entry cannot be
-/// used without — a server's `command`, a fact's `marker` — is required of the
-/// merge rather than of each layer, because requiring it of a layer refuses
-/// every partial override of a shipped language, and requiring it only of a
-/// layer that introduces a *new* entry refuses a project patching what the
-/// global config introduced, which is the same defect one layer up.
-///
-/// A presence check over the merged values rather than a deserialize: every
-/// layer was already held to the types, so nothing here can be the wrong shape
-/// — only absent. Blamed on the last layer that mentioned the entry, whose
-/// values won and whose file the reader is the one editing.
 fn refuse_incomplete(table: &Table, origins: &Origins) -> Result<(), ConfigError> {
     for (section, key) in [
         ("lsp", "command"),
@@ -1706,9 +1308,6 @@ fn refuse_incomplete(table: &Table, origins: &Origins) -> Result<(), ConfigError
             if named {
                 continue;
             }
-            // Every entry in the merged table was named by some layer, so the
-            // origin is there. Were one ever missing, the entry and the fault
-            // are still spoken — that is the part that must not be silent.
             let entry = format!("{section}.{name}");
             let (file, line) = origins.get(&entry).cloned().unwrap_or_default();
             return Err(ConfigError {
@@ -1724,10 +1323,6 @@ fn refuse_incomplete(table: &Table, origins: &Origins) -> Result<(), ConfigError
     Ok(())
 }
 
-/// An extension two `[lsp.*]` rows claim has no server a reader can predict:
-/// the rows come from a merge, and whichever one serde met first is not an
-/// answer (ADR 0018). Blamed on whichever of the two the nearest layer named,
-/// which is the file the reader is editing.
 fn refuse_claimed_twice(table: &Table, origins: &Origins) -> Result<(), ConfigError> {
     let Some(rows) = table.get("lsp").and_then(toml::Value::as_table) else {
         return Ok(());
@@ -1740,7 +1335,6 @@ fn refuse_claimed_twice(table: &Table, origins: &Origins) -> Result<(), ConfigEr
             .flatten()
             .filter_map(toml::Value::as_str)
         {
-            // A row naming one extension twice is one claim, not a collision.
             let Some(owner) = owners
                 .insert(extension, name)
                 .filter(|owner| *owner != name)
@@ -1769,7 +1363,6 @@ fn refuse_claimed_twice(table: &Table, origins: &Origins) -> Result<(), ConfigEr
     Ok(())
 }
 
-/// The workspace as the saved state and the config leave it.
 fn initial_state(
     input: &Startup,
     config: &Config,
@@ -1786,16 +1379,10 @@ fn initial_state(
             .into_iter()
             .collect(),
         tree_divider: saved_number(input.state_json.as_deref(), "tree_divider").unwrap_or(30),
-        // Absent until the AI pane's edge has been dragged, which is what the
-        // layout reads as its share of the screen.
         ai_width: saved_number(input.state_json.as_deref(), "ai_width"),
         strip_height: saved_number(input.state_json.as_deref(), "strip_height"),
         output_width: saved_number(input.state_json.as_deref(), "output_width"),
         breakpoints: saved_breakpoints(&input.root, input.state_json.as_deref()),
-        // The Snippets this project has run, oldest first, and where it last
-        // left the Evaluator's window. Both outlive the session they were
-        // made in, which is what makes them the project's rather than the
-        // Debug adapter's.
         snippets: saved_list(input.state_json.as_deref(), "snippets"),
         evaluator_at: saved_window(input.state_json.as_deref()),
         exception_filters: input
@@ -1804,27 +1391,16 @@ fn initial_state(
             .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
             .and_then(|mut parsed| serde_json::from_value(parsed["exception_filters"].take()).ok())
             .unwrap_or_default(),
-        // Beside the editor unless the project was last worked in the tall
-        // shape — including state recorded before `:tall` existed, which names
-        // no shape at all.
         ai_pane: match saved_text(input.state_json.as_deref(), "ai_pane").as_deref() {
             Some("Tall") => crate::layout::AiPane::Tall,
             _ => crate::layout::AiPane::Beside,
         },
-        // A corner nobody opened stays closed: an absent key reads as hidden.
-        //
-        // The legacy key second, and only when the new one says nothing: state
-        // written before the corner held more than the Risk list names the pane
-        // rather than the slot, and reading it is what keeps a session saved by
-        // an older Varde from silently resetting its layout.
         corner: match saved_text(input.state_json.as_deref(), "corner").as_deref() {
             Some("Risk") => crate::layout::Corner::Risk,
             Some("Buffers") => crate::layout::Corner::Buffers,
             Some("History") => crate::layout::Corner::History,
             Some("Breakpoints") => crate::layout::Corner::Breakpoints,
             Some("Conflicts") => crate::layout::Corner::Conflicts,
-            // On Errors whatever it showed last: nothing has been reported
-            // yet, and with nothing the list opens on Errors.
             Some(saved) if saved.starts_with("Diagnostics") => {
                 crate::layout::Corner::Diagnostics(crate::lsp::Severity::Error)
             }
@@ -1834,16 +1410,9 @@ fn initial_state(
                 _ => crate::layout::Corner::Hidden,
             },
         },
-        // On unless it was turned off: state recorded before `:dim` existed
-        // has no such key.
         editor_field: saved_flag(input.state_json.as_deref(), "editor_field").unwrap_or(true),
-        // What you turned it to here last time wins; `editor.minimap` is only
-        // where a project with no history starts, the same shape `ai_command`
-        // has.
         minimap: saved_flag(input.state_json.as_deref(), "minimap")
             .unwrap_or_else(|| config.get("editor.minimap").as_deref() != Some("false")),
-        // What you used here last time wins; config is the default when there
-        // is no history.
         ai_command: saved_text(input.state_json.as_deref(), "ai_command")
             .or_else(|| config.get("ai.command"))
             .unwrap_or_else(|| "claude".to_string()),
@@ -1860,11 +1429,6 @@ fn initial_state(
     state
 }
 
-/// Every `State` field the merged config alone decides — what a reload
-/// recomputes, and so the one derivation startup and a reload share. A key
-/// that only sets where a project with no history *starts*, such as
-/// `editor.minimap` or `ai.command`, is not here: it is the session's once it
-/// has started, and a saved config must not flip what the project recorded.
 fn configure(state: &mut State, config: &Config) {
     *state = State {
         editor_theme: config
@@ -1886,20 +1450,9 @@ fn configure(state: &mut State, config: &Config) {
             .get("risk.max_iterations")
             .and_then(|cap| cap.parse().ok())
             .unwrap_or(risk::DEFAULT_MAX_ITERATIONS),
-        // Absent unless the project said so: what the Gate runs is then read
-        // off the project's shape instead, and a project whose shape says
-        // nothing refuses the loop rather than passing a Gate having run
-        // nothing.
         test_command: config.get("risk.test_command"),
-        // Which command serves which language, as the merged layers left it.
-        // Naming one is not starting one: the spawn is the edge's, and only
-        // when a Buffer in that language is open.
         servers: config.servers(),
-        // And what lays each language out, which is the same table in a second
-        // shape: a formatter is named in a file, never in an arm.
         formatters: config.formatters(),
-        // And which paths a server may name, which is data for the same
-        // reason: the edge searches, the library decides nothing (R31.27).
         facts: config.facts(),
         adapters: config.adapters(),
         launches: config.launches(),
@@ -1909,21 +1462,13 @@ fn configure(state: &mut State, config: &Config) {
     };
 }
 
-/// One config layer as the edge found it when the file changed on disk.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OnDisk {
-    /// No file: merged as a start with no file would merge it.
     Missing,
     Text(String),
-    /// There, and the edge could not read it.
     Unreadable,
 }
 
-/// Both layers again, while Varde runs: the fields startup derives from the
-/// merge are derived again, and nothing else moves. Nothing is spawned or
-/// stopped either — a running child keeps the command it was started with, and
-/// the next one started reads the new one. A layer that is broken leaves the
-/// last good config in place and is returned, as a start would refuse it.
 pub(crate) fn reload(
     state: &mut State,
     global: OnDisk,
@@ -1939,7 +1484,6 @@ pub(crate) fn reload(
         }),
     };
     let global = text(global, GLOBAL_LABEL)?;
-    // The Bare workspace rule `start` keeps: no project layer at all.
     let project = match &state.sidecar {
         Some(_) => None,
         None => text(project, PROJECT_LABEL)?,
@@ -1949,17 +1493,10 @@ pub(crate) fn reload(
     Ok(())
 }
 
-/// The `[speech]` row, with the two per-OS tables already resolved for the OS
-/// this binary was built for — a lookup under the string `Startup` carried in,
-/// never a branch on it (R31.22). A row this machine has no entry on is a
-/// blank, which is the refusal `reading::start` names out loud rather than a
-/// command that cannot work.
 pub(crate) fn speech(config: &Config, os: &str) -> crate::reading::Speech {
     let named = |key: &str| config.get(key).unwrap_or_default();
     crate::reading::Speech {
         command: named("speech.command"),
-        // The one key `get` cannot answer, because it is a list and `get`
-        // flattens what it cannot name into a printing nobody can split back.
         args: config
             .0
             .get("speech")
@@ -1977,7 +1514,6 @@ pub(crate) fn speech(config: &Config, os: &str) -> crate::reading::Speech {
     }
 }
 
-/// A program Varde can be configured to run, and what installs it on one OS.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Dep {
     pub kind: &'static str,
@@ -1986,14 +1522,6 @@ pub struct Dep {
     pub install: Option<String>,
 }
 
-/// The `[lsp.*]`, `[formatter.*]`, `[dap.*]` and `[speech]` rows `~/.varde/config.toml`
-/// names — or the [`template`], when there is no file, since that is what the
-/// next start runs — read by the same merge startup does, so what `install.sh`
-/// offers is what Varde would start. A file Varde would refuse to start on is
-/// refused here too. The speech row's player is a row of its own, kind
-/// `player`, with no install: the table names none, since it ships with macOS
-/// and comes with alsa-utils on Linux. Either is left out when no file names
-/// its command, since `[speech]` is the one table the Settings share.
 pub fn deps(global_config: Option<&str>, os: &str) -> Result<Vec<Dep>, ConfigError> {
     let config = Config(merged_config(global_config, None)?);
     let row = |kind, name: &str, command: &str, install: Option<&String>| Dep {
@@ -2016,8 +1544,6 @@ pub fn deps(global_config: Option<&str>, os: &str) -> Result<Vec<Dep>, ConfigErr
                 .map(|(name, f)| row("formatter", name, &f.command, f.install.get(os))),
         )
         .chain(config.adapters().iter().map(|(name, a)| {
-            // A hosted adapter is there when the server it is loaded into is,
-            // as Tools reads it.
             let command = match &a.server {
                 Some(server) => servers
                     .get(server)
@@ -2034,23 +1560,10 @@ pub fn deps(global_config: Option<&str>, os: &str) -> Result<Vec<Dep>, ConfigErr
         .collect())
 }
 
-/// The figure on disk, if it describes the commit that is checked out. A folder
-/// that is no repository has no commit to check against, so its cache is never
-/// believed — there is nothing that could say the code had moved.
 fn cached(input: &Startup) -> Option<risk::Figures> {
     risk::cached(input.risk_json.as_deref()?, input.head.as_deref()?)
 }
 
-/// Which checkout the running binary came from, and whether it has moved ahead.
-///
-/// A directory counts as Varde's checkout only when its manifest parses and names
-/// the `varde` package. Another crate's manifest, a manifest that is not valid
-/// TOML, and a copied binary with nothing above it are all somebody else's
-/// directory, so none of them yields a checkout — which is what stops Varde from
-/// ever running a build somewhere the user did not expect. Note the deliberate
-/// contrast with the config files above: one that does not parse stops Varde
-/// from starting, because the user handed it over and needs to fix it, while the
-/// checkout manifest was never handed to Varde at all.
 fn checkout(input: &Startup) -> (Option<PathBuf>, Option<String>) {
     let Some(root) = input.checkout.as_ref() else {
         return (None, None);
@@ -2073,10 +1586,6 @@ fn checkout(input: &Startup) -> (Option<PathBuf>, Option<String>) {
     (Some(root.clone()), version.map(str::to_string))
 }
 
-/// An Update is a Version *strictly newer* than the Running version: a checkout
-/// behind the binary offers nothing, so checking out an old branch cannot nag
-/// anyone to downgrade. Ordering comes from `semver` because a string comparison
-/// puts `0.10.0` below `0.9.0` and calls the older one newer.
 fn is_update(checkout: &str, running: &str) -> bool {
     match (
         semver::Version::parse(checkout),
@@ -2087,8 +1596,6 @@ fn is_update(checkout: &str, running: &str) -> bool {
     }
 }
 
-/// Project values override global ones key by key; a table on both sides is
-/// merged rather than replaced, so naming one key does not drop its siblings.
 fn merge(base: &mut Table, overlay: Table) {
     for (key, value) in overlay {
         match (base.get_mut(&key), value) {
@@ -2102,16 +1609,6 @@ fn merge(base: &mut Table, overlay: Table) {
     }
 }
 
-/// One layer of the merge, and where it mentioned each `[lsp.*]` and
-/// `[facts.*]` entry. Two ways it can be unusable are refused here: TOML that
-/// does not parse, and a table naming a value that is not the shape it must be.
-/// The second is checked here rather than where the servers are read, because
-/// only the source text can say which line to name — and a server entry Varde
-/// cannot use, dropped quietly, is a language the user configured and nothing
-/// serves.
-///
-/// The third way — an entry no layer ever completed — cannot be seen from one
-/// layer, so the spans come back with the table and `refuse_incomplete` decides.
 fn parse(source: &str, label: &str) -> Result<(Table, Origins), ConfigError> {
     let line = |offset: usize| source[..offset].matches('\n').count() + 1;
     let at = |error: &toml::de::Error| error.span().map_or(1, |span| line(span.start));
@@ -2164,9 +1661,6 @@ fn parse(source: &str, label: &str) -> Result<(Table, Origins), ConfigError> {
     Ok((table, origins))
 }
 
-/// A list of project-relative paths the last session recorded — which folders
-/// the tree had open, which files were in the editor. Absent state means a
-/// fresh project, so the answer is empty rather than a guess.
 fn saved_paths(root: &Path, state_json: Option<&str>, key: &str) -> Vec<PathBuf> {
     let Some(parsed) = state_json.and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
     else {
@@ -2185,9 +1679,6 @@ fn saved_paths(root: &Path, state_json: Option<&str>, key: &str) -> Vec<PathBuf>
         .unwrap_or_default()
 }
 
-/// The files that were open last time, the one that was current *last*: the
-/// buffers are restored by opening them, and opening a file is what makes it
-/// current, so the order is the whole of "you come back where you left".
 fn saved_buffers(root: &Path, state_json: Option<&str>) -> Vec<PathBuf> {
     let mut paths = saved_paths(root, state_json, "buffers");
     let current = saved_text(state_json, "current_buffer").map(|rest| root.join(rest));
@@ -2235,7 +1726,6 @@ fn saved_breakpoints(root: &Path, state_json: Option<&str>) -> Vec<crate::debug:
         .collect()
 }
 
-/// A recorded list of strings — the Snippets — in the order it was written.
 fn saved_list(state_json: Option<&str>, key: &str) -> Vec<String> {
     let Some(parsed) = state_json.and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
     else {
@@ -2252,12 +1742,6 @@ fn saved_list(state_json: Option<&str>, key: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// Where the project last left the Evaluator's window, and `None` where it
-/// never opened one. Read whole or not at all: three of four numbers is a
-/// rectangle nobody drew, and the centred one is the better answer than a
-/// guess at the fourth. The screen it is placed on is `update`'s to say — a
-/// rectangle recorded on a bigger screen is clamped onto this one there,
-/// which is why nothing here asks how wide the terminal is.
 fn saved_window(state_json: Option<&str>) -> Option<crate::layout::Area> {
     let parsed: serde_json::Value = serde_json::from_str(state_json?).ok()?;
     let at = parsed.get("evaluator")?;
@@ -2303,15 +1787,10 @@ mod tests {
         DEFAULTS, GLOBAL_LABEL, PROGRAMS, PROJECT_LABEL, SEEDED_CONFIG,
     };
 
-    /// What a fresh machine starts on: the Settings under the template it
-    /// seeds as the global layer, as several tests below read the rows.
     fn fresh() -> Config {
         Config(merged_config(None, None).expect("the template parses"))
     }
 
-    /// A config text with every `# key = value` line made live, and nothing
-    /// else: prose that happens to hold ` = ` has a space or a backtick in
-    /// what would be its key.
     fn uncommented(text: &str) -> toml::Table {
         let is_key = |k: &str| k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
         text.lines()
@@ -2325,8 +1804,6 @@ mod tests {
             .expect("valid TOML uncommented")
     }
 
-    /// The Corner's occupant persists, as it does for every occupant — the
-    /// Breakpoint list too, which needs no session to be shown.
     #[test]
     fn the_breakpoint_list_is_back_in_the_corner_after_a_restart() {
         let (state, _, _) = start(&Startup {
@@ -2337,8 +1814,6 @@ mod tests {
         assert_eq!(state.corner, crate::layout::Corner::Breakpoints);
     }
 
-    /// A Breakpoint's properties, written by `state_json` and read back by a
-    /// start — both halves in one test, for the reason the Evaluator's are.
     #[test]
     fn a_breakpoints_properties_survive_a_restart() {
         let properties = crate::debug::Properties {
@@ -2365,12 +1840,6 @@ mod tests {
         assert_eq!(state.breakpoints[0].properties, properties);
     }
 
-    /// What a project keeps of the Evaluator, written by `state_json` and read
-    /// back by a start. Both halves in one test because a key spelled one way
-    /// in the writer and another in the reader is a window that silently
-    /// reopens centred every time, and nothing else in the suite compares the
-    /// two spellings: a scenario that records a rectangle writes the JSON
-    /// itself.
     #[test]
     fn the_evaluators_place_and_snippets_survive_a_restart() {
         let saved = crate::State {
@@ -2390,14 +1859,10 @@ mod tests {
         .expect("started");
         assert_eq!(state.evaluator_at, saved.evaluator_at);
         assert_eq!(state.snippets, saved.snippets);
-        // A project that never opened one opens centred, which is `None` and
-        // not a rectangle of zeroes.
         let (fresh, _, _) = start(&Startup::default()).expect("started");
         assert_eq!(fresh.evaluator_at, None);
     }
 
-    /// The Diagnostic list comes back too, on Errors: the Severity it showed
-    /// described reports from servers that are not running yet.
     #[test]
     fn the_diagnostic_list_is_back_in_the_corner_after_a_restart() {
         let (state, _, _) = start(&Startup {
@@ -2421,8 +1886,6 @@ mod tests {
         assert_eq!(state.corner, crate::layout::Corner::Conflicts);
     }
 
-    /// The refusal a project layer earns, so that the tests below assert the
-    /// file, the line *and* which of the three faults it was.
     fn refusal(project_config: &str) -> ConfigError {
         let error = start(&Startup {
             project_config: Some(project_config.to_string()),
@@ -2435,12 +1898,6 @@ mod tests {
         }
     }
 
-    /// R9.5's refusal, for the half of "malformed" that still parses: an entry
-    /// naming a command that is not a string is a server Varde cannot run, and
-    /// dropping it quietly leaves a language the user configured served by
-    /// nothing, with no message and nothing to fix. The line comes from the
-    /// source text, which is why the check is at the layer and not where the
-    /// servers are read.
     #[test]
     fn a_command_that_is_not_a_string_refuses_to_start() {
         let problem = refusal("[lsp.rust]\ncommand = 12\n");
@@ -2451,8 +1908,6 @@ mod tests {
         );
     }
 
-    /// The arguments are checked with the command, since a server started with
-    /// an argument nobody can spell is the same unusable entry.
     #[test]
     fn an_argument_that_is_not_a_string_refuses_to_start() {
         let problem = refusal("[lsp.rust]\ncommand = \"rust-analyzer\"\nargs = [\"--stdio\", 3]\n");
@@ -2602,7 +2057,6 @@ mod tests {
                 config.servers().len() + config.formatters().len() + config.adapters().len(),
                 "{os}"
             );
-            // The Debug adapter's row, installable on both.
             let codelldb = table
                 .iter()
                 .find(|dep| (dep.kind, dep.name.as_str()) == ("dap", "rust"))
@@ -2631,7 +2085,6 @@ mod tests {
                 (synth.kind, synth.name.as_str(), synth.command.as_str()),
                 ("speech", "speech", "piper")
             );
-            // What the row configures is the file its own install fetches.
             let template: toml::Table = PROGRAMS.parse().expect("the template parses");
             assert_eq!(
                 template["speech"]["configures"]["voice"].as_str(),
@@ -2655,9 +2108,6 @@ mod tests {
         }
     }
 
-    /// `varde --deps` answers from the file, not the binary: a global config
-    /// naming one server lists that server and nothing the template ships, and
-    /// one Varde would refuse to start on is refused with its file and line.
     #[test]
     fn deps_lists_the_rows_the_global_config_names() {
         let file = "[lsp.ruby]\ncommand = \"ruby-lsp\"\nextensions = [\"rb\"]\n";
@@ -2674,10 +2124,6 @@ mod tests {
         assert_eq!((broken.file.as_str(), broken.line), (GLOBAL_LABEL, 2));
     }
 
-    /// The files each language was served before its rows named their own
-    /// extensions — the `match` those rows replaced, kept as the list it was —
-    /// are served the same way after, by both tables. A row that dropped one
-    /// is a file that quietly lost its server or its formatter.
     #[test]
     fn the_shipped_rows_serve_every_file_the_match_they_replaced_served() {
         let mut state = crate::State {
@@ -2722,8 +2168,6 @@ mod tests {
         }
     }
 
-    /// A row claiming nothing is a server no file reaches, and a formatter
-    /// that lays nothing out: data that never fires.
     #[test]
     fn every_shipped_row_claims_an_extension() {
         let config = fresh();
@@ -2735,8 +2179,6 @@ mod tests {
         }
     }
 
-    /// The claim is refused naming both rows, and blamed on the layer that
-    /// made it rather than on the template it collided with.
     #[test]
     fn two_rows_claiming_one_extension_refuse_to_start_naming_both() {
         let problem = refusal("\n[lsp.rustier]\ncommand = \"r\"\nextensions = [\"rs\"]\n");
@@ -2756,10 +2198,6 @@ mod tests {
         .expect("Varde started");
     }
 
-    /// The template held to the same check as a file a reader wrote, and named
-    /// here so a typo in the data fails as itself rather than as every scenario
-    /// that starts Varde. One bad row empties its whole kind, so a count short
-    /// of the tables is any row failing.
     #[test]
     fn every_template_row_parses_into_a_valid_row() {
         let config = fresh();
@@ -2769,8 +2207,6 @@ mod tests {
         assert_eq!(config.facts().len(), named("facts"));
     }
 
-    /// Read off the template itself rather than through the merge, so the
-    /// template stays held if the merge's own refusal ever stops holding it.
     #[test]
     fn no_two_template_servers_claim_one_extension() {
         let template: toml::Table = PROGRAMS.parse().expect("the template parses");
@@ -2785,9 +2221,6 @@ mod tests {
         }
     }
 
-    /// R9.5 again, for the key this ticket adds: an install command that is not
-    /// a string is an entry Varde cannot type, and dropping it quietly leaves a
-    /// row that offers nothing for a reason nobody can see.
     #[test]
     fn an_install_command_that_is_not_a_string_refuses_to_start() {
         let problem = refusal("[lsp.zig]\ncommand = \"zls\"\ninstall.macos = 12\n");
@@ -2798,10 +2231,6 @@ mod tests {
         );
     }
 
-    /// An install key spelled for an OS no binary is built for is a command
-    /// that can never fire, and it would look configured in the file that
-    /// carries it. The three spellings are `std::env::consts::OS`'s, which is
-    /// what `main.rs` hands in.
     #[test]
     fn every_default_install_command_is_keyed_by_an_os_that_can_run_varde() {
         for (language, server) in fresh().servers() {
@@ -2814,10 +2243,6 @@ mod tests {
         }
     }
 
-    /// Honesty, held to by the two languages the ADR names: `zls` on Linux is a
-    /// build from source and `jdtls` is in no distribution, so neither has a key
-    /// there. An invented command that fails looks configured; a blank one is
-    /// one line of TOML away from being right.
     #[test]
     fn a_language_nobody_has_packaged_for_an_os_has_no_key_for_it() {
         let servers = fresh().servers();
@@ -2830,17 +2255,6 @@ mod tests {
         }
     }
 
-    /// A layer is a patch, so naming one key of a language `DEFAULTS` ships
-    /// leaves every key it did not name standing. Held over the whole entry
-    /// rather than over the one key the caller went looking for: `[lsp.vue]` is
-    /// the entry with the most on it, and a `command` that survived while
-    /// `unanswerable` was dropped is a server that starts and then waits
-    /// forever.
-    ///
-    /// Before this, `Server::command` was required of each layer, so a project
-    /// naming one key was refused outright — and the only workaround was to
-    /// copy `command` out of a binary's built-in defaults, which then silently
-    /// stopped tracking them.
     #[test]
     fn a_layer_may_name_one_key_of_a_shipped_server() {
         let (state, _config, _effects) = start(&Startup {
@@ -2867,10 +2281,6 @@ mod tests {
         );
     }
 
-    /// The same for a `[facts.*]` table, because it is the same mechanism: a
-    /// layer is a patch for both, and `marker` is to a fact what `command` is
-    /// to a server. Left asymmetric, a project overriding a shipped fact's
-    /// `value` alone would meet the refusal this ticket removed.
     #[test]
     fn a_layer_may_name_one_key_of_a_shipped_fact() {
         let (state, _config, _effects) = start(&Startup {
@@ -2883,11 +2293,6 @@ mod tests {
         assert_eq!(patched.marker, fresh().facts()["typescript_sdk"].marker);
     }
 
-    /// The `[lsp.*]` half of this is a scenario; the `[facts.*]` half is only
-    /// here, because a fact is not a stakeholder-visible thing to write one
-    /// about — and it is a table with a key the entry is no use without, so
-    /// leaving it unchecked would let a project declare a fact the edge is then
-    /// asked to find nothing for.
     #[test]
     fn a_fact_no_layer_gave_a_marker_refuses_to_start() {
         let problem = refusal("[facts.python_env]\nvalue = \"directory\"\n");
@@ -2901,11 +2306,6 @@ mod tests {
         );
     }
 
-    /// The three faults, as they read on screen. Pinned because the whole of
-    /// the second half of this ticket is that they read *differently*: one
-    /// sentence stood for all three, so a missing key wore the parse fault's
-    /// words and sent the reader hunting a syntax error that was not there.
-    /// Valid TOML is never called invalid.
     #[test]
     fn the_three_faults_read_differently() {
         let messages = [
@@ -2924,12 +2324,6 @@ mod tests {
         );
     }
 
-    /// The merge is key by key inside the install table too, so replacing the
-    /// command for this machine does not silently drop the others — the point
-    /// of shipping the defaults at all is that a later binary's corrections
-    /// arrive for every OS the user did not override. The layer repeats
-    /// `command` because each one is checked against `Server` on its own, which
-    /// is what buys the file and the line R9.5 asks for.
     #[test]
     fn a_config_overrides_one_install_command_and_leaves_its_siblings() {
         let (state, _config, _effects) = start(&Startup {
@@ -2945,19 +2339,6 @@ mod tests {
         assert_eq!(install["linux"], "rustup component add rust-analyzer");
     }
 
-    /// A name a `[facts.*]` table declares is expanded, and every other
-    /// `${...}` is passed through as the string it is (R31.27) — so a typo in
-    /// the data ships an argument that reaches the server literally, and
-    /// nobody would see it until a server complained. Arguments *and*
-    /// initialization options, because the same substitution reaches both.
-    /// Held here, where the data is.
-    ///
-    /// **Every occurrence, not every string.** Asking whether some declared
-    /// name appears in the text is satisfied by one correct name in a string
-    /// holding two, and the options table is serialized whole — so once the
-    /// TypeScript row named both an SDK and a plugin, a typo in either was
-    /// covered by the other's match. The names are pulled out of the text
-    /// instead, which is what makes the assertion count.
     #[test]
     fn every_name_the_defaults_interpolate_is_one_the_defaults_declare() {
         let config = fresh();
@@ -2978,15 +2359,9 @@ mod tests {
                 }
             }
         }
-        // A test that found nothing to check would pass for a `DEFAULTS` that
-        // stopped interpolating at all.
         assert!(seen >= 3, "only {seen} interpolated names found");
     }
 
-    /// Every `${name}` in one configured string, in order. Only used by the
-    /// test above: `lsp::filled` substitutes by walking the declared names
-    /// rather than by parsing the text, which is what leaves an undeclared
-    /// `${...}` alone (R31.27), and this is the reverse question.
     fn interpolated(text: &str) -> Vec<String> {
         text.split("${")
             .skip(1)
@@ -2995,9 +2370,6 @@ mod tests {
             .collect()
     }
 
-    /// The shipped fact, read back as the shape the edge searches with. A
-    /// `value` key that stopped deserializing would leave the SDK resolving to
-    /// `typescript.js` itself and every Vue server pointed at a file.
     #[test]
     fn the_shipped_fact_names_a_marker_and_the_directory_holding_it() {
         let facts = fresh().facts();
@@ -3014,10 +2386,6 @@ mod tests {
         assert!(is_update("1.0.0", "0.1.0"));
     }
 
-    /// Two spellings of one default: the TOML the merge starts from, and the
-    /// number the library counts with when no config was read at all. Every
-    /// key, because a default that disagrees with itself is a figure — a cap,
-    /// or an indent width — nobody can predict.
     #[test]
     fn the_defaults_are_the_ones_the_library_documents() {
         let table: toml::Table = DEFAULTS.parse().expect("valid TOML");
@@ -3035,8 +2403,6 @@ mod tests {
         );
     }
 
-    /// A Run row that could never mark a line is refused where it was
-    /// written, rather than read as configured and silently marking nothing.
     #[test]
     fn a_run_row_whose_query_cannot_mark_anything_is_refused_at_its_line() {
         let claims_nothing = merged_config(Some("[run.bare]\nquery = \"(x) @run\"\n"), None)
@@ -3060,12 +2426,6 @@ mod tests {
         );
     }
 
-    /// Each seed is decided by one fact: its layer is `None`. The edge
-    /// hands `Some("")` for a file it found and could not read — not UTF-8, or
-    /// write-only — because an empty layer merges nothing and still says "a
-    /// file is here". Seeding over it would be a silent delete of settings
-    /// Varde could not parse, which is the one way this feature can destroy
-    /// something.
     #[test]
     fn a_config_that_is_there_but_says_nothing_is_not_seeded_over() {
         let (_state, _config, effects) = start(&Startup {
@@ -3082,28 +2442,6 @@ mod tests {
         );
     }
 
-    /// Three promises about the file starting lays down, and the first is the
-    /// one no scenario can see break. Every table it holds must be *empty*: a
-    /// live key would make "the project sets nothing" false on a project's
-    /// first run, and the effective-settings scenario cannot catch it, because
-    /// the numbers quoted here are the defaults — uncommenting them changes
-    /// nothing and every assertion stays green.
-    ///
-    /// The second is why quoting the defaults is safe at all. Uncomment every
-    /// key and what is left must be the [`DEFAULTS`] layer, value for value, so
-    /// a number that moves there and not here is caught before it ships. A
-    /// stale line is worse than no line: it reads as advice and pins the answer
-    /// the reader was trying to accept.
-    ///
-    /// The third is the same promise read the other way, and it is the one
-    /// this feature exists for: every scalar [`DEFAULTS`] spells must be named
-    /// here. Walking only seeded → defaults leaves a tunable the defaults grow
-    /// findable nowhere while the whole suite stays green, which is precisely
-    /// the state `editor.tab_width` was in for its whole life. `[lsp.*]`,
-    /// `[formatter.*]` and `[facts.*]` are excluded by holding no scalar
-    /// directly under their own table: they are data a reader reaches for a
-    /// language, not numbers to tune, and listing every server here would bury
-    /// the four that are.
     #[test]
     fn the_seeded_config_is_commented_out_and_quotes_the_live_defaults() {
         let seeded: toml::Table = SEEDED_CONFIG.parse().expect("valid TOML");
@@ -3146,18 +2484,11 @@ mod tests {
         }
     }
 
-    /// The template's two halves, held the way the project seed is. Its live
-    /// text is exactly the Program rows — the Settings' tables are there, and
-    /// empty. Made live, it is exactly the built-in layers, so every Setting is
-    /// named, commented, and quoted at its default, and no Program row hides
-    /// behind a `#`.
     #[test]
     fn the_template_has_live_program_rows_and_commented_settings() {
         let mut live: toml::Table = template().parse().expect("valid TOML");
         let programs: toml::Table = PROGRAMS.parse().expect("valid TOML");
         let settings: toml::Table = DEFAULTS.parse().expect("valid TOML");
-        // A header over commented keys, which is how a Setting that is a
-        // table of tables — a `[run.*]` row — is named and left unset.
         fn blank(value: &toml::Value) -> bool {
             value
                 .as_table()
@@ -3176,19 +2507,12 @@ mod tests {
         assert_eq!(live, programs);
     }
 
-    /// The reason `semver` is a dependency: `"0.10.0" < "0.9.0"` as strings,
-    /// because `1` sorts below `9`, so a hand-rolled compare would call the
-    /// newer checkout older and never offer the Update.
     #[test]
     fn a_double_digit_component_is_compared_as_a_number() {
         assert!(is_update("0.10.0", "0.9.0"));
         assert!(!is_update("0.9.0", "0.10.0"));
     }
 
-    /// Held equal by hand to the matrix in `.github/workflows/release.yml`,
-    /// which points back here: YAML and Rust share no compiler, so a renamed
-    /// Asset on either side would leave every binary install finding nothing
-    /// built for it.
     #[test]
     fn asset_names_match_the_release_workflow() {
         assert_eq!(asset_name("macos", "aarch64"), "varde-macos-aarch64");
@@ -3197,7 +2521,6 @@ mod tests {
         assert_eq!(asset_name("linux", "aarch64"), "varde-linux-aarch64");
     }
 
-    /// `sha256sum`'s own line shape, which is what the release workflow writes.
     #[test]
     fn a_download_matching_its_line_is_verified() {
         let list = "\
@@ -3209,7 +2532,6 @@ mod tests {
         assert_eq!(verify(list, url, b"bar"), Err(ReplaceFailed::Checksum));
     }
 
-    /// A name that only ends in the Asset's is another file's line.
     #[test]
     fn a_list_without_the_assets_line_names_no_asset() {
         let list = "2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae  old-varde-linux-x86_64\n";
@@ -3219,7 +2541,6 @@ mod tests {
         );
     }
 
-    /// An Asset nobody can verify is not one `:update` may install.
     #[test]
     fn a_release_without_a_checksum_list_is_no_release() {
         let body = r#"{"tag_name": "v0.2.0", "assets": [
@@ -3233,17 +2554,12 @@ mod tests {
         assert!(!is_update("0.1.0", "0.1.0"));
     }
 
-    /// Strictly greater, so checking out an old branch does not offer to
-    /// downgrade the binary that is already newer.
     #[test]
     fn a_version_behind_the_binary_is_not_an_update() {
         assert!(!is_update("0.0.9", "0.1.0"));
         assert!(!is_update("1.0.0", "2.0.0"));
     }
 
-    /// A pre-release sits below its own release and above the version before it,
-    /// which is what makes an rc in the checkout an Update but not a downgrade
-    /// of the release it precedes.
     #[test]
     fn a_pre_release_qualifier_orders_below_its_release() {
         assert!(is_update("0.2.0-rc.1", "0.1.0"));
@@ -3251,7 +2567,6 @@ mod tests {
         assert!(is_update("0.2.0", "0.2.0-rc.1"));
     }
 
-    /// Neither side is something Varde wrote, so neither is trusted to parse.
     #[test]
     fn a_version_that_is_not_a_version_is_not_an_update() {
         assert!(!is_update("nightly", "0.1.0"));

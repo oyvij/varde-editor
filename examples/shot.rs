@@ -1,15 +1,8 @@
-//! Renders a captured byte stream to an SVG picture of the final frame, the way
-//! `replay` renders it to text. Same parser, same grid: what it draws is what the
-//! terminal drew, colours included, so a README picture cannot drift from the TUI.
-//!
-//! Usage: cargo run --example shot -- <capture> <out.svg> [rows] [columns]
-
 const CW: f64 = 8.4;
 const CH: f64 = 18.0;
 const FONT: f64 = 14.0;
 
 fn hex(color: vt100::Color, fallback: &str) -> String {
-    // xterm's 256-colour palette: 16 system colours, a 6×6×6 cube, 24 greys.
     const SYSTEM: [&str; 16] = [
         "#1c1c22", "#e05561", "#8cc265", "#d18f52", "#4aa5f0", "#c162de", "#42b3c2", "#c7c7c7",
         "#6b6b73", "#ff616e", "#a5e075", "#f0a45d", "#4dc4ff", "#de73ff", "#4cd1e0", "#f2f2f2",
@@ -73,8 +66,6 @@ fn main() {
                 std::mem::swap(&mut fg, &mut bg);
             }
             let (bold, dim, italic) = (cell.bold(), cell.dim(), cell.italic());
-            // One run per stretch of identical styling, so the SVG holds a few
-            // hundred elements rather than one per cell.
             let start = column;
             let mut text = String::new();
             while column < columns {
@@ -94,7 +85,6 @@ fn main() {
                 {
                     break;
                 }
-                // A cell never written to holds nothing and is drawn as a space.
                 let contents = next.contents();
                 text.push_str(if contents.is_empty() { " " } else { contents });
                 column += 1;
