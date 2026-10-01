@@ -43,7 +43,7 @@ speed = 1.0
 extensions = ["rs"]
 query = '((function_item name: (identifier) @name @run) (#eq? @name "main"))'
 run = "cargo run"
-debug = { adapter = "rust", request = "launch", args = { targetCreateCommands = ["platform shell cargo build --message-format=json | sed -n 's/.*\"executable\":\"\\([^\"]*\\)\".*/target create \\1/p' | head -1 > target/varde-debug.lldb", "command source target/varde-debug.lldb"] } }
+debug = { adapter = "rust", request = "launch", args = { targetCreateCommands = ["script import json, subprocess; lldb.debugger.CreateTarget(next(m['executable'] for m in map(json.loads, subprocess.run(['cargo', 'build', '--message-format=json'], stdout=subprocess.PIPE, text=True).stdout.splitlines()) if m.get('executable')))"] } }
 
 # The first test binary cargo builds, which is the crate's own tests; a test
 # under `tests/` is in a binary of its own.
@@ -51,7 +51,7 @@ debug = { adapter = "rust", request = "launch", args = { targetCreateCommands = 
 extensions = ["rs"]
 query = '((attribute_item (attribute (identifier) @attribute)) . (function_item name: (identifier) @name @run) (#eq? @attribute "test"))'
 run = "cargo test ${name} -- --exact"
-debug = { adapter = "rust", request = "launch", args = { targetCreateCommands = ["platform shell cargo test --no-run --message-format=json | sed -n 's/.*\"executable\":\"\\([^\"]*\\)\".*/target create \\1/p' | head -1 > target/varde-debug.lldb", "command source target/varde-debug.lldb"], args = ["${name}", "--exact"] } }
+debug = { adapter = "rust", request = "launch", args = { targetCreateCommands = ["script import json, subprocess; lldb.debugger.CreateTarget(next(m['executable'] for m in map(json.loads, subprocess.run(['cargo', 'test', '--no-run', '--message-format=json'], stdout=subprocess.PIPE, text=True).stdout.splitlines()) if m.get('executable') and m['profile']['test']))"], args = ["${name}", "--exact"] } }
 
 # The same test inside a module, which `--exact` names by its path. Rows are
 # tried by name, so this one takes the line before `rust_test` can.
@@ -59,7 +59,7 @@ debug = { adapter = "rust", request = "launch", args = { targetCreateCommands = 
 extensions = ["rs"]
 query = '((mod_item name: (identifier) @module body: (declaration_list (attribute_item (attribute (identifier) @attribute)) . (function_item name: (identifier) @name @run))) (#eq? @attribute "test"))'
 run = "cargo test ${module}::${name} -- --exact"
-debug = { adapter = "rust", request = "launch", args = { targetCreateCommands = ["platform shell cargo test --no-run --message-format=json | sed -n 's/.*\"executable\":\"\\([^\"]*\\)\".*/target create \\1/p' | head -1 > target/varde-debug.lldb", "command source target/varde-debug.lldb"], args = ["${module}::${name}", "--exact"] } }
+debug = { adapter = "rust", request = "launch", args = { targetCreateCommands = ["script import json, subprocess; lldb.debugger.CreateTarget(next(m['executable'] for m in map(json.loads, subprocess.run(['cargo', 'test', '--no-run', '--message-format=json'], stdout=subprocess.PIPE, text=True).stdout.splitlines()) if m.get('executable') and m['profile']['test']))"], args = ["${module}::${name}", "--exact"] } }
 
 # The source-file launcher, which compiles the file it is handed: no build to
 # ask for a class path.
@@ -808,19 +808,19 @@ const TEMPLATE_SETTINGS: &str = r#"# Varde reads this file on every start. A pro
 # extensions = ["rs"]
 # query = '((function_item name: (identifier) @name @run) (#eq? @name "main"))'
 # run = "cargo run"
-# debug = { adapter = "rust", request = "launch", args = { targetCreateCommands = ["platform shell cargo build --message-format=json | sed -n 's/.*\"executable\":\"\\([^\"]*\\)\".*/target create \\1/p' | head -1 > target/varde-debug.lldb", "command source target/varde-debug.lldb"] } }
+# debug = { adapter = "rust", request = "launch", args = { targetCreateCommands = ["script import json, subprocess; lldb.debugger.CreateTarget(next(m['executable'] for m in map(json.loads, subprocess.run(['cargo', 'build', '--message-format=json'], stdout=subprocess.PIPE, text=True).stdout.splitlines()) if m.get('executable')))"] } }
 
 [run.rust_test]
 # extensions = ["rs"]
 # query = '((attribute_item (attribute (identifier) @attribute)) . (function_item name: (identifier) @name @run) (#eq? @attribute "test"))'
 # run = "cargo test ${name} -- --exact"
-# debug = { adapter = "rust", request = "launch", args = { targetCreateCommands = ["platform shell cargo test --no-run --message-format=json | sed -n 's/.*\"executable\":\"\\([^\"]*\\)\".*/target create \\1/p' | head -1 > target/varde-debug.lldb", "command source target/varde-debug.lldb"], args = ["${name}", "--exact"] } }
+# debug = { adapter = "rust", request = "launch", args = { targetCreateCommands = ["script import json, subprocess; lldb.debugger.CreateTarget(next(m['executable'] for m in map(json.loads, subprocess.run(['cargo', 'test', '--no-run', '--message-format=json'], stdout=subprocess.PIPE, text=True).stdout.splitlines()) if m.get('executable') and m['profile']['test']))"], args = ["${name}", "--exact"] } }
 
 [run.rust_module_test]
 # extensions = ["rs"]
 # query = '((mod_item name: (identifier) @module body: (declaration_list (attribute_item (attribute (identifier) @attribute)) . (function_item name: (identifier) @name @run))) (#eq? @attribute "test"))'
 # run = "cargo test ${module}::${name} -- --exact"
-# debug = { adapter = "rust", request = "launch", args = { targetCreateCommands = ["platform shell cargo test --no-run --message-format=json | sed -n 's/.*\"executable\":\"\\([^\"]*\\)\".*/target create \\1/p' | head -1 > target/varde-debug.lldb", "command source target/varde-debug.lldb"], args = ["${module}::${name}", "--exact"] } }
+# debug = { adapter = "rust", request = "launch", args = { targetCreateCommands = ["script import json, subprocess; lldb.debugger.CreateTarget(next(m['executable'] for m in map(json.loads, subprocess.run(['cargo', 'test', '--no-run', '--message-format=json'], stdout=subprocess.PIPE, text=True).stdout.splitlines()) if m.get('executable') and m['profile']['test']))"], args = ["${module}::${name}", "--exact"] } }
 
 [run.java_main]
 # extensions = ["java"]
