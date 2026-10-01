@@ -355,7 +355,7 @@ Feature: The whole TUI is usable with the mouse
       Given the screen is 12 rows by 80 columns
       And the diff for "src/tree.js" is shown holding a 24-character line
       When I scroll right 4 times with the pointer over the editor pane
-      Then the editor view starts at column 12
+      Then the editor view starts at column 13
 
     Scenario: Swiping left at the home column stays home
       Given the screen is 12 rows by 80 columns

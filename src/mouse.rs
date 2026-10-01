@@ -2728,7 +2728,7 @@ mod tests {
                 },
             )
         };
-        let over_text = moved(&mut pointer, 44, 5);
+        let over_text = moved(&mut pointer, 45, 5);
         assert_eq!(
             over_text.events,
             vec![Event::PointerMoved(Pointed::Text(Place {
@@ -2889,7 +2889,7 @@ mod tests {
 
     #[test]
     fn dragging_in_the_editor_covers_a_span_of_the_buffer() {
-        let outcome = drag(&editing(), (40, 1), (44, 3));
+        let outcome = drag(&editing(), (41, 1), (45, 3));
         assert_eq!(
             outcome.events,
             vec![Event::DragText {
@@ -2914,7 +2914,7 @@ mod tests {
         let mut scrolled = editing();
         scrolled.editor_scroll = 4;
         assert_eq!(
-            drag(&scrolled, (41, 2), (41, 2)).events,
+            drag(&scrolled, (42, 2), (42, 2)).events,
             vec![Event::DragText {
                 from: Place { line: 6, column: 2 },
                 to: Place { line: 6, column: 2 },
@@ -2927,7 +2927,7 @@ mod tests {
         let mut scrolled = editing();
         scrolled.editor_hscroll = 12;
         assert_eq!(
-            drag(&scrolled, (41, 2), (41, 2)).events,
+            drag(&scrolled, (42, 2), (42, 2)).events,
             vec![Event::DragText {
                 from: Place {
                     line: 2,
@@ -2944,7 +2944,7 @@ mod tests {
     #[test]
     fn clicking_in_the_editor_reports_the_place_clicked() {
         assert_eq!(
-            click(&editing(), 44, 3),
+            click(&editing(), 45, 3),
             vec![Event::ClickText(Place { line: 3, column: 5 })]
         );
     }
@@ -3094,9 +3094,9 @@ mod tests {
     fn two_presses_on_one_cell_inside_the_window_pick_the_word() {
         let state = editing();
         let doubled = Event::DoubleClickText(Place { line: 3, column: 5 });
-        assert!(twice(&state, (44, 3, 0), (44, 3, 299)).contains(&doubled));
-        assert!(!twice(&state, (44, 3, 0), (44, 3, 301)).contains(&doubled));
-        assert!(!twice(&state, (45, 3, 0), (44, 3, 100)).contains(&doubled));
+        assert!(twice(&state, (45, 3, 0), (45, 3, 299)).contains(&doubled));
+        assert!(!twice(&state, (45, 3, 0), (45, 3, 301)).contains(&doubled));
+        assert!(!twice(&state, (46, 3, 0), (45, 3, 100)).contains(&doubled));
     }
 
     #[test]

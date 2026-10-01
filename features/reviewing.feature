@@ -160,7 +160,7 @@ Feature: Reaching the review flow
       And the diff for "src/tree.js" is shown holding a 24-character line
       And the editor pane has focus
       When I press "l" in the editor 4 times
-      Then the editor view starts at column 12
+      Then the editor view starts at column 13
 
     Scenario: Moving through the diff never slides it on its own
       Given the screen is 12 rows by 80 columns

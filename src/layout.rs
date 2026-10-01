@@ -58,11 +58,11 @@ pub const EDITOR_TITLE: u16 = 34;
 
 pub const CORNER_TITLE: u16 = 14;
 
-pub const GUTTER: u16 = 9;
+pub const GUTTER: u16 = 10;
 
 pub const BREAKPOINT_COLUMN: u16 = 0;
 
-pub const TOGGLE_COLUMN: u16 = 6;
+pub const TOGGLE_COLUMN: u16 = 7;
 
 pub const STEP_MENU_WIDTH: u16 = 20;
 
@@ -746,11 +746,11 @@ mod tests {
     };
 
     #[test]
-    fn the_gutter_is_nine_columns_with_breakpoints_leftmost() {
+    fn the_gutter_is_ten_columns_with_breakpoints_leftmost() {
         use super::{gutter, Gutter, BREAKPOINT_COLUMN, TOGGLE_COLUMN};
-        assert_eq!(gutter(Gutter::Numbers), 9);
+        assert_eq!(gutter(Gutter::Numbers), 10);
         assert_eq!(BREAKPOINT_COLUMN, 0);
-        assert_eq!(TOGGLE_COLUMN, 1 + 4 + 1);
+        assert_eq!(TOGGLE_COLUMN, 1 + 1 + 4 + 1);
     }
     use crate::Pane;
 

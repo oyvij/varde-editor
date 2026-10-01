@@ -4362,7 +4362,9 @@ fn on_editor_escape(state: &State, mut next: State, event: Event, wheeled: bool)
 
         Event::EditorEscape => {
             next.modal = Modal::None;
-            next.find = None;
+            if current_buffer(&next).is_none_or(|buffer| buffer.mode == editor::Mode::Normal) {
+                next.find = None;
+            }
             next.gutter = None;
             next.hover = None;
             next.diff_anchor = None;
