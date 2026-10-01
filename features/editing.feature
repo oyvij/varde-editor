@@ -209,6 +209,12 @@ Feature: Editing a file
       three
       """
 
+  Scenario: u brings the cursor back to the edit it undid
+    Given I press "x" in the editor
+    And I press "j" in the editor 2 times
+    When I press "u" in the editor
+    Then the cursor is at line 1 column 1
+
   # The modifier spellings, which reach a buffer while inserting too, where
   # `u` and `U` are letters.
   Scenario: Ctrl+Shift+z redoes what Ctrl+z undid while inserting

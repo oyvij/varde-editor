@@ -39,7 +39,7 @@ pub struct Buffer {
     anchor: usize,
     tab_width: usize,
     register: Vec<String>,
-    undo: Vec<String>,
+    undo: Vec<(String, crate::Place)>,
     redo: Vec<(String, crate::Place)>,
     step: Step,
 }
@@ -307,7 +307,11 @@ impl Buffer {
             _ => (false, kind),
         };
         if !joins {
-            self.undo.push(self.shown().to_string());
+            let at = crate::Place {
+                line: self.line,
+                column: self.column,
+            };
+            self.undo.push((self.shown().to_string(), at));
         }
         self.step = open;
         self.redo.clear();
@@ -1055,7 +1059,7 @@ impl Buffer {
     }
 
     pub fn undo(&mut self) {
-        if let Some(previous) = self.undo.pop() {
+        if let Some((previous, back)) = self.undo.pop() {
             let at = crate::Place {
                 line: self.line,
                 column: self.column,
@@ -1063,13 +1067,18 @@ impl Buffer {
             self.redo.push((self.shown().to_string(), at));
             self.draft = (previous != self.disk).then_some(previous);
             self.changed();
+            self.go_to_place(back);
         }
         self.step = Step::Other;
     }
 
     pub fn redo(&mut self) {
         if let Some((next, at)) = self.redo.pop() {
-            self.undo.push(self.shown().to_string());
+            let back = crate::Place {
+                line: self.line,
+                column: self.column,
+            };
+            self.undo.push((self.shown().to_string(), back));
             self.draft = (next != self.disk).then_some(next);
             self.changed();
             self.go_to_place(at);
