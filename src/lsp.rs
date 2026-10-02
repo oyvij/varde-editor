@@ -41,6 +41,17 @@ pub fn language<'a>(state: &'a State, path: &Path) -> Option<&'a str> {
         .map(|(language, _)| language.as_str())
 }
 
+fn language_id<'a>(state: &'a State, path: &Path) -> Option<&'a str> {
+    let language = language(state, path)?;
+    let extension = path.extension()?.to_str()?;
+    Some(
+        state.servers[language]
+            .language_ids
+            .get(extension)
+            .map_or(language, String::as_str),
+    )
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Handshake {
     Sent,
@@ -485,7 +496,7 @@ pub fn read_for_review(state: &mut State, path: &Path, contents: &str) -> Vec<Ef
                 DidOpenTextDocumentParams {
                     text_document: TextDocumentItem {
                         uri,
-                        language_id: self::language(state, path).unwrap_or(&language).to_string(),
+                        language_id: language_id(state, path).unwrap_or(&language).to_string(),
                         version: document_version(REVIEW_VERSION),
                         text: contents.to_string(),
                     },
@@ -716,7 +727,7 @@ fn documents(state: &mut State, language: &str) -> Vec<Effect> {
                 DidOpenTextDocumentParams {
                     text_document: TextDocumentItem {
                         uri,
-                        language_id: self::language(state, path).unwrap_or(language).to_string(),
+                        language_id: language_id(state, path).unwrap_or(language).to_string(),
                         version: document_version(version),
                         text: buffer.shown().to_string(),
                     },
@@ -2146,6 +2157,7 @@ mod tests {
                 command: command.to_string(),
                 args: Vec::new(),
                 also_served_by: Vec::new(),
+                language_ids: std::collections::BTreeMap::new(),
                 extensions: vec![if language == "vue" { "vue" } else { "rs" }.to_string()],
                 install: std::collections::BTreeMap::new(),
                 initialization_options: None,

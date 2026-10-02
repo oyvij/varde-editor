@@ -157,6 +157,7 @@ and its state (`installed`, `missing`, `stopped`, `no-install-command`, `missing
 | `command` | required after the merge | string | The server binary. |
 | `args` | `[]` | array of strings | Its arguments. Varde fills in `${fact}` names. |
 | `also_served_by` | `[]` | array of language names | Other languages' servers that also serve this language's files. The Vue server *and* the TypeScript server both serve a `.vue` file. |
+| `language_ids` | `{}` | table of extension to string | The language id the server is told for a file with that extension, where it is not the table name. A `.tsx` file is a `typescriptreact` document; told `typescript`, the server parses it without JSX. |
 | `install.macos`, `install.linux`, `install.windows` | per row | string | What installs the server on that OS. Runs in the terminal pane when you take the row in Tools. A row with no key for your OS says `no-install-command` and offers nothing. |
 | `initialization_options` | unset | table | Passed to the server unchanged at start-up, as JSON. Varde reads nothing inside it. It fills in `${fact}` values, and drops a key whose value asked for an optional fact it did not find. |
 | `partial` | unset | string | What this server still cannot do when installed and running, in your words. Shown on its row, which then reads `partly-working`. |
@@ -167,8 +168,8 @@ Shipped rows:
 | Language | Command | Install (macOS · Linux · Windows) | Notes |
 |---|---|---|---|
 | `rust` | `rust-analyzer` | `rustup component add rust-analyzer` on all three | |
-| `typescript` | `typescript-language-server --stdio` | `npm install -g typescript@6 typescript-language-server` on all three | `initialization_options.tsserver.path = "${typescript_sdk}/tsserver.js"`; a `@vue/typescript-plugin` entry at `${vue_typescript_plugin}` for `vue` files. |
-| `javascript` | `typescript-language-server --stdio` | same | Same `tsserver.path`; no plugin. |
+| `typescript` | `typescript-language-server --stdio` | `npm install -g typescript@6 typescript-language-server` on all three | `language_ids = { tsx = "typescriptreact" }`; `initialization_options.tsserver.path = "${typescript_sdk}/tsserver.js"`; a `@vue/typescript-plugin` entry at `${vue_typescript_plugin}` for `vue` files. |
+| `javascript` | `typescript-language-server --stdio` | same | `language_ids = { jsx = "javascriptreact" }`; same `tsserver.path`; no plugin. |
 | `vue` | `vue-language-server --stdio --tsdk=${typescript_sdk}` | `npm install -g @vue/language-server` on all three | `also_served_by = ["typescript"]`; `unanswerable` = `tsserver/request` / `tsserver/response`. |
 | `python` | `pyright-langserver --stdio` | `npm install -g pyright` on all three | |
 | `go` | `gopls` | `go install golang.org/x/tools/gopls@latest` on all three | |

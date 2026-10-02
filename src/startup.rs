@@ -183,6 +183,7 @@ install.macos = "brew install zls"
 command = "typescript-language-server"
 args = ["--stdio"]
 extensions = ["ts", "tsx", "mts", "cts"]
+language_ids = { tsx = "typescriptreact" }
 install.macos = "npm install -g typescript@6 typescript-language-server"
 install.linux = "npm install -g typescript@6 typescript-language-server"
 install.windows = "npm install -g typescript@6 typescript-language-server"
@@ -208,6 +209,7 @@ languages = ["vue"]
 command = "typescript-language-server"
 args = ["--stdio"]
 extensions = ["js", "jsx", "mjs", "cjs"]
+language_ids = { jsx = "javascriptreact" }
 install.macos = "npm install -g typescript@6 typescript-language-server"
 install.linux = "npm install -g typescript@6 typescript-language-server"
 install.windows = "npm install -g typescript@6 typescript-language-server"
@@ -996,6 +998,8 @@ pub struct Server {
     pub also_served_by: Vec<String>,
     #[serde(default)]
     pub extensions: Vec<String>,
+    #[serde(default)]
+    pub language_ids: BTreeMap<String, String>,
     #[serde(default)]
     pub install: BTreeMap<String, String>,
     /// JSON map, not toml::Table: TOML allows nan, which a later TOML-to-JSON conversion cannot express

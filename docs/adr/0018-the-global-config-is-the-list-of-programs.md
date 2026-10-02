@@ -41,8 +41,10 @@ started.
 ## A language is a row, not a match arm
 
 Every `[lsp.<language>]` row names the files it serves: `extensions = ["rs"]`. `lsp::language` is
-deleted, and the table name is the language id the protocol is sent — `rust`, `typescript`, `c`,
-the ids the LSP specification lists. A server for Ruby is then four lines of TOML and no release:
+deleted, and the table name is the language id the protocol is sent — `rust`, `typescript`, `c`, the
+ids the LSP specification lists. Where the specification gives one row's extensions different ids,
+the row's `language_ids` names them: a `.tsx` file is `typescriptreact`. A server for Ruby is then
+four lines of TOML and no release:
 
 ```toml
 [lsp.ruby]
