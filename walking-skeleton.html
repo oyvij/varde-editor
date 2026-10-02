@@ -1,0 +1,736 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Varde — the walking skeleton</title>
+<style>
+  :root{
+    --bg:#0b0e14; --panel:#121722; --panel2:#171d2b; --ink:#d8dee9; --dim:#7b8496; --faint:#2a3244;
+    --event:#7aa2f7; --effect:#e0af68; --state:#9ece6a; --answer:#bb9af7; --no:#f7768e; --ok:#9ece6a; --on:#7dcfff;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 -apple-system,BlinkMacSystemFont,"Inter","Segoe UI",sans-serif}
+  a{color:var(--on)}
+  header{padding:28px 36px 8px;max-width:1500px;margin:auto}
+  header h1{margin:0;font-size:28px;letter-spacing:.2px}
+  header h1 span{color:var(--dim);font-weight:400}
+  header p{margin:8px 0 0;color:var(--dim);max-width:1000px}
+  .big{font-size:18px;color:var(--ink)!important}
+  .wrap{max-width:1500px;margin:auto;padding:0 36px 60px}
+  .stage-card{background:radial-gradient(1200px 600px at 50% 0%,#141b2b,#0d1119);border:1px solid var(--faint);border-radius:16px;margin-top:18px;overflow:hidden}
+  .tabs{display:flex;gap:6px;padding:12px 14px 0;flex-wrap:wrap}
+  .tab{background:transparent;color:var(--dim);border:1px solid var(--faint);border-radius:999px;padding:6px 14px;cursor:pointer;font:inherit;font-size:13px}
+  .tab.active{color:var(--bg);background:var(--on);border-color:var(--on)}
+  .stage-grid{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:0}
+  svg#stage{width:100%;height:auto;display:block}
+  .side{border-left:1px solid var(--faint);padding:16px 18px;background:rgba(10,13,20,.55);display:flex;flex-direction:column;gap:14px}
+  .side h3{margin:0;font-size:12px;letter-spacing:1.4px;text-transform:uppercase;color:var(--dim);font-weight:600}
+  .caption-title{font-size:18px;font-weight:650;margin:2px 0 6px}
+  .caption-text{color:#c3cad8;font-size:14px}
+  .caption-text code, p code, li code, td code{font-family:var(--mono);font-size:.88em;background:#1b2232;padding:1px 5px;border-radius:5px}
+  pre.code{font-family:var(--mono);font-size:12.2px;line-height:1.5;background:#0d111a;border:1px solid var(--faint);border-radius:10px;padding:10px 12px;margin:0;overflow:auto;white-space:pre}
+  .file{font-family:var(--mono);font-size:11.5px;color:var(--on);margin-bottom:4px}
+  .parts{display:flex;flex-direction:column;gap:5px}
+  .part{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--dim);padding:4px 8px;border-radius:8px;border:1px solid transparent;transition:all .25s}
+  .part b{font-family:var(--mono);font-weight:500;color:var(--ink);min-width:132px;font-size:12px}
+  .part .dot{width:9px;height:9px;border-radius:50%;background:var(--faint);transition:all .25s}
+  .part.lit{background:#18233a;border-color:#2c4170;color:#c9d5f0}
+  .part.lit .dot{background:var(--on);box-shadow:0 0 10px var(--on)}
+  .state-panel{font-family:var(--mono);font-size:12px;background:#0d111a;border:1px solid var(--faint);border-radius:10px;padding:8px 10px}
+  .state-panel div{padding:1px 0;color:var(--dim)}
+  .state-panel div.changed{color:var(--state)}
+  .controls{display:flex;align-items:center;gap:8px;padding:10px 14px;border-top:1px solid var(--faint);flex-wrap:wrap}
+  .btn{background:#1a2030;color:var(--ink);border:1px solid var(--faint);border-radius:8px;padding:6px 11px;cursor:pointer;font:inherit;font-size:13px}
+  .btn:hover{border-color:#3b4660}
+  .btn.primary{background:var(--on);color:#0b0e14;border-color:var(--on);font-weight:650;min-width:78px}
+  select.btn{padding:6px 8px}
+  .timeline{display:flex;gap:4px;flex:1;min-width:280px}
+  .tick{flex:1;height:26px;border-radius:6px;background:#161c29;border:1px solid var(--faint);cursor:pointer;position:relative;font:11px var(--mono);color:var(--dim);display:flex;align-items:center;justify-content:center;transition:background .2s}
+  .tick.done{background:#1c2a44;color:#9fb5df}
+  .tick.active{background:var(--on);color:#0b0e14;border-color:var(--on)}
+  .tick .bar{position:absolute;left:0;bottom:0;height:3px;background:#0b0e14;opacity:.55;border-radius:0 0 6px 6px}
+  .counter{font:12px var(--mono);color:var(--dim);min-width:58px;text-align:right}
+
+  /* svg styling */
+  .wire{stroke:#253049;stroke-width:1.4;fill:none}
+  .wire.loop{stroke:#3a2f55;stroke-dasharray:4 5}
+  .node rect,.node ellipse,.node path{transition:stroke .25s, fill .25s}
+  .node .box{fill:#141a27;stroke:#2c3650;stroke-width:1.3}
+  .node.world .box{fill:#11161f;stroke:#33405c;stroke-dasharray:3 3}
+  .node.gate .box{fill:#161d2c;stroke:#34405e}
+  .node.store .box{fill:#14211a;stroke:#2f5a3a}
+  .node.tray .box{fill:#231d12;stroke:#5e4a26}
+  .node.domain .box{fill:#1c1628;stroke:#4b3a6e}
+  .node .t{fill:var(--ink);font:600 12.5px var(--mono);text-anchor:middle;dominant-baseline:middle}
+  .node .s{fill:var(--dim);font:10.5px var(--mono);text-anchor:middle;dominant-baseline:middle}
+  .node.small .t{font-size:9.5px;font-weight:500}
+  .node.lit-on .box{stroke:var(--on);filter:url(#glow)}
+  .node.lit-ok .box{stroke:var(--ok);fill:#183020;filter:url(#glow)}
+  .node.lit-no .box{stroke:var(--no);fill:#2c1620}
+  .node.lit-dead .box{stroke:var(--no);fill:#3a121c;filter:url(#glowRed)}
+  .post{fill:#2c3650}
+  .region{fill:rgba(122,162,247,.035);stroke:#25304a;stroke-width:1.2;stroke-dasharray:6 6}
+  .region-label{fill:#55617c;font:600 11px var(--mono);letter-spacing:1px}
+  .region-sub{fill:#3f4a62;font:10.5px var(--mono)}
+  .trail{fill:none;stroke-width:2.2;stroke-linecap:round;opacity:.9}
+  .orb-label{font:600 11px var(--mono);fill:#fff;paint-order:stroke;stroke:#0b0e14;stroke-width:4px;stroke-linejoin:round}
+  .verdict{font:700 10px var(--mono)}
+  .screen-text{font:11px var(--mono);fill:#c0caf5}
+  .screen-dim{fill:#565f89}
+
+  /* prose */
+  section{margin-top:44px}
+  section h2{font-size:21px;margin:0 0 6px}
+  section h2 small{color:var(--dim);font-weight:400;font-size:14px;margin-left:8px}
+  section > p{color:#c3cad8;max-width:1050px}
+  .cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(420px,1fr));gap:16px;margin-top:14px}
+  .card{background:var(--panel);border:1px solid var(--faint);border-radius:12px;padding:14px 16px}
+  .card h4{margin:0 0 8px;font-family:var(--mono);font-size:13px;color:var(--on);font-weight:600}
+  .card p{margin:8px 0 0;color:var(--dim);font-size:13.5px}
+  table{border-collapse:collapse;width:100%;font-size:13.5px;margin-top:12px}
+  th,td{border-bottom:1px solid var(--faint);padding:8px 10px;text-align:left;vertical-align:top}
+  th{color:var(--dim);font-weight:600;font-size:12px;letter-spacing:.6px;text-transform:uppercase}
+  ol.recipe{counter-reset:s;list-style:none;padding:0;margin:14px 0 0;max-width:1100px}
+  ol.recipe li{counter-increment:s;position:relative;padding:10px 12px 10px 52px;border-left:2px solid var(--faint);margin-left:16px}
+  ol.recipe li::before{content:counter(s);position:absolute;left:-16px;top:8px;width:30px;height:30px;border-radius:50%;background:var(--panel2);border:1px solid #34405e;display:flex;align-items:center;justify-content:center;font:600 13px var(--mono);color:var(--on)}
+  .cov{display:flex;height:22px;border-radius:7px;overflow:hidden;margin:14px 0 6px;max-width:1050px;border:1px solid var(--faint)}
+  .cov div{display:flex;align-items:center;justify-content:center;font:11px var(--mono);color:#0b0e14;white-space:nowrap;overflow:hidden}
+  .legend{display:flex;gap:18px;flex-wrap:wrap;color:var(--dim);font-size:12.5px}
+  .legend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:6px;vertical-align:-1px}
+  .dev{border-left:3px solid var(--no)}
+  .dev.warn{border-left-color:var(--effect)}
+  .dev.info{border-left-color:#4b5778}
+  .k{color:#bb9af7}.c{color:#5c6785;font-style:italic}.s{color:#9ece6a}.ty{color:#7dcfff}.f{color:#7aa2f7}
+  @media (max-width:1100px){.stage-grid{grid-template-columns:1fr}.side{border-left:0;border-top:1px solid var(--faint)}}
+</style>
+</head>
+<body>
+<header>
+  <h1>Varde <span>— the walking skeleton</span></h1>
+  <p class="big">Every feature is one <b style="color:var(--event)">slice</b>: a gesture becomes an <b style="color:var(--event)">Event</b>, one <code>on_*</code> handler in <code>lib.rs</code> answers it (usually through a pure area module), writes the carrier <b style="color:var(--state)">State</b> and returns the outside work as <b style="color:var(--effect)">Effect</b> data, which <code>main.rs</code> carries out before <code>ui.rs</code> draws the new State.</p>
+  <p>Press play. The orbs are data: blue for an <code>Event</code>, gold for an <code>Effect</code>, green for the new <code>State</code>, violet for an answer coming back from the outside world. Gates flash red when a handler declines and pass the Event on, and green when one answers.</p>
+</header>
+
+<div class="wrap">
+  <div class="stage-card">
+    <div class="tabs" id="tabs"></div>
+    <div class="stage-grid">
+      <svg id="stage" viewBox="0 0 1280 720" aria-label="Animated data flow through Varde"></svg>
+      <aside class="side">
+        <div>
+          <h3 id="frameNo">Frame</h3>
+          <div class="caption-title" id="capTitle"></div>
+          <div class="caption-text" id="capText"></div>
+        </div>
+        <div>
+          <div class="file" id="capFile"></div>
+          <pre class="code" id="capCode"></pre>
+        </div>
+        <div>
+          <h3 style="margin-bottom:6px">State (the carrier)</h3>
+          <div class="state-panel" id="statePanel"></div>
+        </div>
+        <div>
+          <h3 style="margin-bottom:6px">Skeleton part in play</h3>
+          <div class="parts" id="parts"></div>
+        </div>
+      </aside>
+    </div>
+    <div class="controls">
+      <button class="btn" id="prev" title="Previous frame (←)">⏮</button>
+      <button class="btn primary" id="play" title="Play / pause (space)">▶ Play</button>
+      <button class="btn" id="next" title="Next frame (→)">⏭</button>
+      <button class="btn" id="restart" title="Restart">↺</button>
+      <select class="btn" id="speed" title="Speed">
+        <option value="0.5">0.5×</option><option value="0.75">0.75×</option><option value="1" selected>1×</option><option value="1.5">1.5×</option><option value="2">2×</option>
+      </select>
+      <div class="timeline" id="timeline"></div>
+      <div class="counter" id="counter"></div>
+    </div>
+  </div>
+
+  <section>
+    <h2>Coverage <small>how much of the repo this one shape explains</small></h2>
+    <p>34,520 production lines of Rust in <code>src/</code>, inline <code>#[cfg(test)]</code> modules excluded. <b>96.3%</b> is the slice, its carrier and its wiring. It is still 84.5% if you count <code>ui.rs</code> as edge rather than slice.</p>
+    <div class="cov">
+      <div style="width:80%;background:var(--event)">slice parts 80.0%</div>
+      <div style="width:3.9%;background:var(--state)" title="carrier 3.9%"></div>
+      <div style="width:12.4%;background:var(--effect)">wiring 12.4%</div>
+      <div style="width:2.8%;background:#565f89" title="helpers 2.8%"></div>
+      <div style="width:0.9%;background:#3b4261" title="pty edge 0.9%"></div>
+    </div>
+    <div class="legend">
+      <span><i style="background:var(--event)"></i>slice: <code>on_*</code> handlers, area modules, <code>keys.rs</code>, <code>mouse.rs</code>, <code>ui.rs</code></span>
+      <span><i style="background:var(--state)"></i>carrier: <code>State</code> · <code>Event</code> · <code>Effect</code> types</span>
+      <span><i style="background:var(--effect)"></i>wiring: <code>update</code>/<code>route</code>/<code>settle</code>, <code>main.rs</code></span>
+      <span><i style="background:#565f89"></i>helpers: <code>layout</code> · <code>highlight</code> · <code>rpc</code></span>
+      <span><i style="background:#3b4261"></i>edge: <code>pty</code> · <code>queries</code></span>
+    </div>
+  </section>
+
+  <section>
+    <h2>The walking skeleton <small>the fewest lines that bring one slice back to life</small></h2>
+    <p>Each part below was tested by adding a toy <code>:ping</code> feature to a scratch copy, removing that part and building again. The table after the cards shows what removing each part costs.</p>
+    <div class="cols">
+      <div class="card"><h4>src/lib.rs — the shared types</h4><pre class="code" data-hl>pub enum Event { …, Ping }                 // lib.rs:274  the request
+pub struct State { …, pub pings: usize }   // lib.rs:965  the carrier field
+impl Default for State { … pings: 0 }      // lib.rs:1184 the compiler rejects a missing field
+pub enum Effect { … }                      // lib.rs:730  outside work, as data</pre></div>
+      <div class="card"><h4>src/lib.rs — the slice</h4><pre class="code" data-hl>fn on_ping(_state: &State, mut next: State, event: Event, wheeled: bool) -> Answered {
+    let effects = match event {
+        Event::Ping => {
+            next.pings += 1;                 // usually area::verb(&mut next, …)
+            vec![Effect::Notify("pinged")]
+        }
+        other => return Err((next, other)),  // not ours: decline
+    };
+    Ok(settle(next, effects, wheeled))
+}</pre></div>
+      <div class="card"><h4>src/lib.rs — registration in a route_* chain</h4><pre class="code" data-hl>// e.g. route_activate, lib.rs:2181
+let declined = match on_ping(state, declined.0, declined.1, wheeled) {
+    Ok(answer) => return Ok(answer),
+    Err(declined) => declined,
+};</pre><p>Without it the build fails: <code>function `on_ping` is never used</code>. <code>#![deny(dead_code)]</code> enforces the registration.</p></div>
+      <div class="card"><h4>src/keys.rs:1332 — the way in</h4><pre class="code" data-hl>"ping" => vec![Event::Ping],
+// a key binding also needs a CHEATSHEET row, or the cheatsheet test fails</pre><p>Without it everything still builds, but nothing ever creates the event, so the feature can't be reached.</p></div>
+      <div class="card"><h4>src/main.rs — only for a NEW Effect</h4><pre class="code" data-hl>// an arm in perform_terminal / _session / _files / _jobs (main.rs:2208)
+Effect::Pong => { /* touch the outside world */ }
+// …and the same arm in tests/cucumber.rs applied_to_* (cucumber.rs:949)</pre><p>The compiler does <b>not</b> enforce this. A release build drops the effect without a word.</p></div>
+      <div class="card"><h4>src/ui.rs · Cargo.toml</h4><pre class="code" data-hl>fn pings_lines(state: &State, width: u16) -> Vec&lt;Line&lt;'static&gt;&gt; { … }  // only if visible
+version = "x.(y+1).0"   // bumped in the same commit, then cargo build</pre></div>
+    </div>
+    <table>
+      <tr><th>Part</th><th>Without it</th></tr>
+      <tr><td>Registration in <code>route_*</code></td><td>Build fails: <code>function `on_ping` is never used</code></td></tr>
+      <tr><td>The <code>Event::Ping</code> arm</td><td>Builds, then panics on the first <code>:ping</code>: <code>no group answers Ping</code> (<code>lib.rs:1662</code>)</td></tr>
+      <tr><td><code>State</code> field / <code>Default</code></td><td>Build fails</td></tr>
+      <tr><td><code>keys.rs</code> line</td><td>Builds, but nothing creates the event, so the feature can't be reached</td></tr>
+      <tr><td><code>main.rs</code> arm for a new <code>Effect</code></td><td>Builds cleanly. Debug build: <code>debug_assert</code> (<code>main.rs:2811</code>). Release build: silently dropped. Cucumber: <code>no group applies</code></td></tr>
+    </table>
+  </section>
+
+  <section>
+    <h2>Variants <small>same skeleton, different source of data</small></h2>
+    <table>
+      <tr><th>Variant</th><th>Where it lives</th><th>Input comes from</th><th>Produces</th></tr>
+      <tr><td>Key or command</td><td><code>keys.rs</code> → <code>on_*</code></td><td><code>KeyEvent</code> via <code>keys::on_key_event</code></td><td>State + Effects</td></tr>
+      <tr><td>Pointer</td><td><code>mouse.rs</code> → <code>on_click_*</code>, <code>on_drag_row</code></td><td>mouse <code>Input</code> + <code>layout.rs</code> rectangles</td><td>Events, a <code>Selection</code> request</td></tr>
+      <tr><td>Something the edge observed</td><td><code>main.rs</code> queues <code>FileChanged</code>, <code>AiSpoke</code>, <code>Tick</code></td><td>watcher, ptys, <code>tell_core</code></td><td>State only</td></tr>
+      <tr><td>Language server / debugger</td><td><code>lsp.rs</code>, <code>debug.rs</code> over <code>rpc.rs</code></td><td><code>LspReceived</code> / <code>DapReceived</code></td><td><code>LspSend</code> / <code>DapSend</code></td></tr>
+      <tr><td>Slow job (ADR 0023)</td><td>an Effect → a thread in <code>perform_jobs</code> → an answering Event</td><td>search, risk, format, blame</td><td>State once the answer arrives (the <i>:format</i> tab)</td></tr>
+      <tr><td>Draw only, no Event</td><td><code>ui.rs</code> + <code>area::fn(&amp;State)</code></td><td>State, or the buffer text</td><td>widgets</td></tr>
+    </table>
+  </section>
+
+  <section>
+    <h2>Composition <small>a chain of responsibility, three levels deep</small></h2>
+    <p><code>route</code> → <code>section_input / editing / workspace</code> → nine <code>route_*</code> → 61 <code>on_*</code> handlers. Every level returns <code>Answered = Result&lt;(State, Vec&lt;Effect&gt;), (State, Event)&gt;</code>: <code>Ok</code> answers the Event, <code>Err</code> hands it to the next link. The runtime has the same shape: <code>perform</code> → <code>perform_terminal / session / files / jobs</code>, mirrored by cucumber's <code>apply</code> → <code>applied_to_*</code>. Slices also call each other through the same entry point: a handler can call <code>update</code> again with another event (<code>lib.rs:3896</code>), and an Effect can come back later as a new Event through the queue.</p>
+  </section>
+
+  <section>
+    <h2>Analogy: Elm, or Redux with redux-loop</h2>
+    <table>
+      <tr><th>Redux / Elm</th><th>Varde</th></tr>
+      <tr><td>action / <code>Msg</code></td><td><code>Event</code></td></tr>
+      <tr><td>reducer / <code>update</code></td><td><code>update</code> → an <code>on_*</code> arm</td></tr>
+      <tr><td>store</td><td><code>State</code></td></tr>
+      <tr><td><code>Cmd</code> / loop effect</td><td><code>Effect</code>, carried out by <code>main.rs</code> <code>perform</code></td></tr>
+      <tr><td>dispatch from the UI</td><td><code>keys.rs</code> / <code>mouse.rs</code> → queue</td></tr>
+      <tr><td><code>view</code> / selectors</td><td><code>ui.rs</code> + <code>area::fn(&amp;State)</code></td></tr>
+      <tr><td><code>combineReducers</code></td><td>the <code>section_*</code>/<code>route_*</code> chain, where each handler passes on what isn't its own instead of owning a slice of State</td></tr>
+    </table>
+  </section>
+
+  <section>
+    <h2>Recipe <small>“<code>:trim</code> strips trailing whitespace from the current buffer”</small></h2>
+    <ol class="recipe">
+      <li>Write the scenario in <code>features/editing.feature</code>. Run <code>cargo test</code> and watch it fail.</li>
+      <li>Touch <code>tests/cucumber.rs</code> only if you need a new step phrase.</li>
+      <li>Write the logic as a pure function plus a unit test next to it, in the area's module: <code>src/editor.rs</code> for buffer text (<code>search.rs</code>, <code>fold.rs</code>, … for other areas).</li>
+      <li>In <code>src/lib.rs</code>, add <code>Event::TrimBuffer</code> and its arm in the handler that owns that area (grep <code>Event::FormatBuffer</code>, which lands in <code>on_lsp</code>). Add a <code>State</code> field plus its <code>Default</code> only if the slice needs one.</li>
+      <li>In <code>src/keys.rs</code>, add <code>"trim" =&gt; vec![Event::TrimBuffer]</code> next to <code>"format"</code> (<code>keys.rs:1338</code>). A key binding also needs a <code>CHEATSHEET</code> row.</li>
+      <li>Prefer an existing Effect. If you add a new one, also add its arm to <code>src/main.rs</code> <code>perform_*</code> <b>and</b> to <code>tests/cucumber.rs</code> <code>applied_to_*</code>. The compiler won't remind you.</li>
+      <li>If it's visible, add a draw function in <code>src/ui.rs</code>. If it's clickable, add a rectangle in <code>src/layout.rs</code> and a hit-test in <code>src/mouse.rs</code>. If the editor frame changes, regenerate <code>tests/snapshots/editor_before_101.txt</code>.</li>
+      <li>Optionally, update <code>docs/guide/editing.md</code> and add any new domain word to <code>CONTEXT.md</code>.</li>
+      <li>Bump the <code>Cargo.toml</code> minor version, then run <code>cargo build</code> so <code>Cargo.lock</code> moves in the same commit.</li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>Navigation <small>the grep keys that connect the layers</small></h2>
+    <div class="cols">
+      <div class="card"><h4>Event::Foo</h4><p>Produced in <code>keys</code>/<code>mouse</code>/<code>main</code>, matched in an <code>on_*</code> arm, sent in <code>tests/cucumber.rs</code>.</p></div>
+      <div class="card"><h4>Effect::Foo</h4><p>Emitted by <code>lib</code> or <code>debug</code>/<code>lsp</code>/<code>reading</code>/…, carried out in <code>main.rs perform_*</code> and <code>cucumber.rs applied_to_*</code>.</p></div>
+      <div class="card"><h4>next.foo / state.foo</h4><p>Only <code>update</code> writes a State field, except facts the edge sets in <code>tell_core</code>. <code>ui.rs</code> reads it.</p></div>
+      <div class="card"><h4>"cmd" =&gt; · CHEATSHEET</h4><p>Every <code>:command</code> is listed in <code>keys.rs</code>, and every key in <code>CHEATSHEET</code>.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Deviations <small>what will trip someone following the recipe</small></h2>
+    <div class="cols">
+      <div class="card dev"><h4>1 · A new Effect with no executor compiles</h4><p>A release build drops it silently (<code>main.rs:2811</code>). Confirmed in a scratch build. See the third tab.</p></div>
+      <div class="card dev"><h4>2 · A new Event with no handler compiles</h4><p>It then panics on the first event (<code>lib.rs:1662</code>). Routing is by declining, so the compiler can't catch a missing arm. See the second tab.</p></div>
+      <div class="card dev warn"><h4>3 · Event::AddComment is test-only</h4><p>Defined at <code>lib.rs:322</code> with an arm at <code>lib.rs:2761</code>, but only <code>tests/cucumber.rs:3035</code> ever sends it. The product never does.</p></div>
+      <div class="card dev warn"><h4>4 · Numbered handler names</h4><p><code>on_key_2…6</code>, <code>on_editor_key_2…6</code> and <code>on_activate_2…4</code> say nothing about what they own. Find a handler by grepping its <code>Event::</code> instead.</p></div>
+      <div class="card dev info"><h4>5 · Area modules take &amp;mut State</h4><p><code>debug.rs</code>, <code>lsp.rs</code> and <code>risk.rs</code> take <code>&amp;mut State</code> rather than plain data, so a change to State reaches into those modules too.</p></div>
+      <div class="card dev info"><h4>6 · lib.rs holds every area's handlers</h4><p>About 7,600 lines. A feature always touches <code>lib.rs</code>, even when its logic lives in an area module.</p></div>
+    </div>
+  </section>
+</div>
+
+<script>
+const NS = 'http://www.w3.org/2000/svg';
+const svg = document.getElementById('stage');
+function el(tag, attrs, parent) {
+  const e = document.createElementNS(NS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  (parent || svg).appendChild(e);
+  return e;
+}
+
+const defs = el('defs', {});
+defs.innerHTML = `
+  <filter id="glow" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="3.2" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+  <filter id="glowRed" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="6" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+  <filter id="orbGlow" x="-200%" y="-200%" width="500%" height="500%"><feGaussianBlur stdDeviation="7"/></filter>
+  <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2c3854"/></marker>
+  <marker id="arrowLoop" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#4a3b6e"/></marker>`;
+
+const gRegions = el('g', {});
+const gWires = el('g', {});
+const gNodes = el('g', {});
+const gTrails = el('g', {});
+const gOrbs = el('g', {});
+const gFx = el('g', {});
+
+function region(x, y, w, h, label, sub) {
+  el('rect', { x, y, width: w, height: h, rx: 18, class: 'region' }, gRegions);
+  el('text', { x: x + 16, y: y + 22, class: 'region-label' }, gRegions).textContent = label;
+  if (sub) el('text', { x: x + 16, y: y + 38, class: 'region-sub' }, gRegions).textContent = sub;
+}
+region(18, 70, 190, 360, 'THE WORLD · IN', 'what a person or child did');
+region(430, 40, 490, 560, 'update(&State, Event)', 'lib.rs:1602 · the only place State changes');
+region(930, 40, 340, 330, 'CARRIER → VIEW', 'State · ui::draw');
+region(930, 385, 340, 255, 'main.rs · THE RUNTIME', 'perform(effect) → the world');
+
+const handlerNames = ['on_ai_spoke', 'on_close_buffer', 'on_quit_force', 'on_rebuild', 'on_drag_row', 'on_story_resolved', 'on_lsp', 'on_debug', 'on_reading'];
+const routeNames = [
+  ['route_trigger', 'route_key', 'route_submit_review'],
+  ['route_step_buffer', 'route_accept_filter', 'route_editor_key'],
+  ['route_ai_spoke', 'route_story_file_written', 'route_activate'],
+];
+const N = {
+  kbd: { x: 110, y: 130, w: 150, h: 44, t: 'Keyboard', s: 'KeyEvent', k: 'world' },
+  mouse: { x: 110, y: 200, w: 150, h: 44, t: 'Mouse', s: 'Input', k: 'world' },
+  watch: { x: 110, y: 360, w: 150, h: 60, t: 'Edge reports', s: 'watcher · pty · tell_core', k: 'world' },
+  keys: { x: 300, y: 165, w: 128, h: 56, t: 'keys.rs', s: 'mouse.rs', k: 'gate' },
+  queue: { x: 330, y: 330, w: 140, h: 46, t: 'queue', s: 'VecDeque<Event>', k: 'tray' },
+  route: { x: 480, y: 330, w: 72, h: 46, t: 'route', s: 'clone', k: 'gate' },
+  sec0: { x: 560, y: 150, w: 92, h: 40, t: 'section_', s: 'input', k: 'gate' },
+  sec1: { x: 560, y: 270, w: 92, h: 40, t: 'section_', s: 'editing', k: 'gate' },
+  sec2: { x: 560, y: 390, w: 92, h: 40, t: 'section_', s: 'workspace', k: 'gate' },
+  domain: { x: 770, y: 655, w: 210, h: 52, t: 'area module', s: 'format · fold · search · debug…', k: 'domain' },
+  settle: { x: 620, y: 555, w: 120, h: 36, t: 'settle()', s: '', k: 'gate' },
+  tail: { x: 805, y: 555, w: 180, h: 36, t: 'history · lsp::sync', s: '', k: 'gate' },
+  state: { x: 1010, y: 110, w: 130, h: 60, t: 'State', s: 'lib.rs:965', k: 'store' },
+  ui: { x: 1010, y: 220, w: 130, h: 46, t: 'ui::draw', s: 'ui.rs', k: 'gate' },
+  screen: { x: 1180, y: 190, w: 160, h: 200, t: '', s: '', k: 'screen' },
+  effects: { x: 1010, y: 320, w: 130, h: 46, t: 'Vec<Effect>', s: '[]', k: 'tray' },
+  perform: { x: 1010, y: 425, w: 110, h: 36, t: 'perform', s: '', k: 'gate' },
+  p0: { x: 975, y: 500, w: 70, h: 34, t: 'terminal', s: '', k: 'gate small' },
+  p1: { x: 1055, y: 500, w: 70, h: 34, t: 'session', s: '', k: 'gate small' },
+  p2: { x: 1135, y: 500, w: 70, h: 34, t: 'files', s: '', k: 'gate small' },
+  p3: { x: 1215, y: 500, w: 70, h: 34, t: 'jobs', s: '', k: 'gate small' },
+  w0: { x: 975, y: 595, w: 70, h: 40, t: 'pty', s: '', k: 'world small' },
+  w1: { x: 1055, y: 595, w: 70, h: 40, t: 'disk', s: '', k: 'world small' },
+  w2: { x: 1135, y: 595, w: 70, h: 40, t: 'LSP·DAP', s: '', k: 'world small' },
+  w3: { x: 1215, y: 595, w: 70, h: 40, t: 'thread', s: '', k: 'world small' },
+};
+routeNames.forEach((row, r) => row.forEach((name, c) => {
+  N['g' + r + c] = { x: 670 + c * 92, y: N['sec' + r].y, w: 86, h: 36, t: name.replace('route_', ''), s: '', k: 'gate small', full: name };
+}));
+handlerNames.forEach((name, i) => {
+  N['h' + i] = { x: 465 + i * 51, y: 470, w: 47, h: 30, t: name.replace('on_', '').replace('story_resolved', 'story_res').replace('close_buffer', 'close_buf').replace('quit_force', 'quit'), s: '', k: 'gate small', full: name };
+});
+N.extra = { x: 856, y: 435, w: 88, h: 24, t: 'on_ping ✚', s: '', k: 'gate small' };
+
+const wires = [
+  ['kbd', 'keys'], ['mouse', 'keys'], ['keys', 'queue'], ['watch', 'queue'], ['queue', 'route'],
+  ['route', 'sec0'], ['route', 'sec1'], ['route', 'sec2'],
+  ['sec0', 'g00'], ['g00', 'g01'], ['g01', 'g02'], ['sec1', 'g10'], ['g10', 'g11'], ['g11', 'g12'],
+  ['sec2', 'g20'], ['g20', 'g21'], ['g21', 'g22'], ['g20', 'h0'],
+  ['h6', 'domain'], ['h6', 'settle'], ['settle', 'tail'], ['tail', 'state'], ['tail', 'effects'],
+  ['state', 'ui'], ['ui', 'screen'], ['effects', 'perform'], ['perform', 'p0'], ['p0', 'p1'], ['p1', 'p2'], ['p2', 'p3'],
+  ['p0', 'w0'], ['p1', 'w1'], ['p2', 'w2'], ['p3', 'w3'],
+];
+for (let i = 0; i < 8; i++) wires.push(['h' + i, 'h' + (i + 1)]);
+for (const [a, b] of wires) {
+  el('line', { x1: N[a].x, y1: N[a].y, x2: N[b].x, y2: N[b].y, class: 'wire', 'marker-end': 'url(#arrow)' }, gWires);
+}
+const LOOP = [{ x: 1215, y: 615 }, { x: 1215, y: 700 }, { x: 330, y: 700 }, { x: 330, y: 353 }];
+el('polyline', { points: LOOP.map(p => p.x + ',' + p.y).join(' '), class: 'wire loop', 'marker-end': 'url(#arrowLoop)' }, gWires);
+el('text', { x: 700, y: 692, class: 'region-sub', 'text-anchor': 'middle' }, gWires).textContent = 'an answer comes back as a new Event (ADR 0023)';
+
+const nodeEls = {};
+let screenG;
+for (const id in N) {
+  const n = N[id];
+  const g = el('g', { class: 'node ' + n.k, id: 'n-' + id }, gNodes);
+  if (n.k === 'screen') {
+    el('rect', { x: n.x - n.w / 2, y: n.y - n.h / 2, width: n.w, height: n.h, rx: 10, class: 'box', style: 'fill:#0a0d14;stroke:#3b4664' }, g);
+    el('rect', { x: n.x - n.w / 2, y: n.y - n.h / 2, width: n.w, height: 20, rx: 10, style: 'fill:#1a2133' }, g);
+    for (let i = 0; i < 3; i++) el('circle', { cx: n.x - n.w / 2 + 14 + i * 12, cy: n.y - n.h / 2 + 10, r: 3.5, fill: ['#f7768e', '#e0af68', '#9ece6a'][i] }, g);
+    el('text', { x: n.x + 18, y: n.y - n.h / 2 + 11, class: 's', style: 'font-size:9.5px' }, g).textContent = 'varde · screen';
+    screenG = el('g', {}, g);
+    nodeEls[id] = g;
+    continue;
+  }
+  if (n.k.includes('store')) {
+    const top = n.y - n.h / 2, bot = n.y + n.h / 2, l = n.x - n.w / 2, r = n.x + n.w / 2;
+    el('path', { d: `M${l},${top + 8} A${n.w / 2},8 0 0 1 ${r},${top + 8} L${r},${bot - 8} A${n.w / 2},8 0 0 1 ${l},${bot - 8} Z`, class: 'box' }, g);
+    el('ellipse', { cx: n.x, cy: top + 8, rx: n.w / 2, ry: 8, class: 'box' }, g);
+  } else {
+    const pill = n.k.includes('gate');
+    el('rect', { x: n.x - n.w / 2, y: n.y - n.h / 2, width: n.w, height: n.h, rx: pill ? Math.min(12, n.h / 2) : 10, class: 'box' }, g);
+    if (pill && !n.k.includes('small')) {
+      el('rect', { x: n.x - n.w / 2 - 3, y: n.y - n.h / 2 - 4, width: 3, height: n.h + 8, rx: 1.5, class: 'post' }, g);
+      el('rect', { x: n.x + n.w / 2, y: n.y - n.h / 2 - 4, width: 3, height: n.h + 8, rx: 1.5, class: 'post' }, g);
+    }
+  }
+  const two = n.s !== '';
+  el('text', { x: n.x, y: n.y + (two ? -7 : 1), class: 't' }, g).textContent = n.t;
+  if (two) {
+    n.sEl = el('text', { x: n.x, y: n.y + 10, class: 's' }, g);
+    n.sEl.textContent = n.s;
+  }
+  if (n.full) el('title', {}, g).textContent = n.full;
+  nodeEls[id] = g;
+}
+nodeEls.extra.style.opacity = 0;
+
+function flash(id, kind) {
+  const g = nodeEls[id];
+  if (!g) return;
+  g.classList.remove('lit-on', 'lit-ok', 'lit-no', 'lit-dead');
+  void g.getBBox();
+  g.classList.add('lit-' + kind);
+  if (kind === 'no' || kind === 'ok' || kind === 'on') {
+    const n = N[id];
+    const v = el('text', { x: n.x, y: n.y - n.h / 2 - 7, class: 'verdict', 'text-anchor': 'middle', fill: kind === 'no' ? 'var(--no)' : kind === 'ok' ? 'var(--ok)' : 'var(--on)' }, gFx);
+    v.textContent = kind === 'no' ? 'Err ↷' : kind === 'ok' ? 'Ok ✓' : '';
+    v.animate([{ opacity: 0, transform: 'translateY(4px)' }, { opacity: 1, transform: 'translateY(0)', offset: .2 }, { opacity: 1, offset: .7 }, { opacity: 0 }], { duration: 1400, fill: 'forwards' });
+    setTimeout(() => v.remove(), 1500);
+  }
+  if (kind !== 'dead' && kind !== 'ok') setTimeout(() => g.classList.remove('lit-' + kind), 1100);
+}
+function clearLit() {
+  for (const id in nodeEls) nodeEls[id].classList.remove('lit-on', 'lit-ok', 'lit-no', 'lit-dead');
+}
+
+const SCREENS = {
+  before: { lines: ['fn main(){', '    let x=1 ;', '  if x>0 {print!("hi")}', '}'], status: 'NORMAL  src/main.rs' },
+  typing: { lines: ['fn main(){', '    let x=1 ;', '  if x>0 {print!("hi")}', '}'], status: ':format▌' },
+  waiting: { lines: ['fn main(){', '    let x=1 ;', '  if x>0 {print!("hi")}', '}'], status: 'NORMAL  src/main.rs' },
+  after: { lines: ['fn main() {', '    let x = 1;', '    if x > 0 {', '        print!("hi")', '    }', '}'], status: 'NORMAL  src/main.rs  ✓' },
+  ping: { lines: ['fn main() {', '    let x = 1;', '}'], status: ':ping▌' },
+  panic: { lines: ['thread \'main\' panicked', 'at src/lib.rs:1662:', 'internal error:', 'entered unreachable', 'code: no group', 'answers Ping'], status: 'varde exited', red: true },
+  silent: { lines: ['fn main() {', '    let x = 1;', '}'], status: 'NORMAL  (nothing happened)' },
+  fixed: { lines: ['fn main() {', '    let x = 1;', '}'], status: 'pinged ✓' },
+};
+function drawScreen(key) {
+  const s = SCREENS[key] || SCREENS.before;
+  screenG.innerHTML = '';
+  const n = N.screen, x0 = n.x - n.w / 2 + 10, y0 = n.y - n.h / 2 + 38;
+  s.lines.forEach((line, i) => {
+    if (!s.red) el('text', { x: x0, y: y0 + i * 16, class: 'screen-text screen-dim' }, screenG).textContent = String(i + 1);
+    el('text', { x: x0 + (s.red ? 0 : 14), y: y0 + i * 16, class: 'screen-text', style: s.red ? 'fill:var(--no)' : '' }, screenG).textContent = line;
+  });
+  el('rect', { x: n.x - n.w / 2 + 1, y: n.y + n.h / 2 - 22, width: n.w - 2, height: 21, fill: s.red ? '#3a121c' : '#1a2133' }, screenG);
+  el('text', { x: x0, y: n.y + n.h / 2 - 8, class: 'screen-text', style: 'font-size:10px;fill:' + (s.red ? 'var(--no)' : '#9aa5ce') }, screenG).textContent = s.status;
+  screenG.animate([{ opacity: .35 }, { opacity: 1 }], { duration: 400 });
+}
+
+const COLORS = { event: '#7aa2f7', effect: '#e0af68', state: '#9ece6a', answer: '#bb9af7', key: '#7dcfff', dead: '#f7768e' };
+
+const PARTS = [
+  ['input', 'keys.rs / mouse.rs', 'turns a gesture into an Event'],
+  ['event', 'Event', 'lib.rs:274'],
+  ['route', 'route_* chain', 'registration'],
+  ['arm', 'on_* arm', 'the slice itself'],
+  ['domain', 'area module', 'pure logic'],
+  ['state', 'State', 'the carrier'],
+  ['effect', 'Effect', 'outside work as data'],
+  ['perform', 'main.rs perform_*', 'the runtime'],
+  ['view', 'ui.rs', 'draws State'],
+];
+const partsEl = document.getElementById('parts');
+for (const [id, name, what] of PARTS) {
+  const d = document.createElement('div');
+  d.className = 'part'; d.dataset.part = id;
+  d.innerHTML = `<span class="dot"></span><b>${name}</b><span>${what}</span>`;
+  partsEl.appendChild(d);
+}
+
+const ws = (r, c) => 'g' + r + c;
+const declineRow = (r) => ['sec' + r, { id: ws(r, 0), f: 'no' }, { id: ws(r, 1), f: 'no' }, { id: ws(r, 2), f: 'no' }];
+const handlersTo = (k) => handlerNames.slice(0, k).map((_, i) => ({ id: 'h' + i, f: 'no' }));
+
+const BASE_STATE = ['current_buffer: Some("src/main.rs")', 'buffers["src/main.rs"].revision: 7', 'refusal: None', 'focus: Pane::Editor', 'editor_scroll: 0'];
+
+const SCENARIOS = [
+  {
+    name: ':format — a full round trip',
+    frames: [
+      { t: 'The loop is idle', d: '<code>pump</code> polls input every 16 ms. Nothing has changed, so nothing is drawn: idle CPU is 0%.', file: 'src/main.rs:1637 · pump', code: 'if event::poll(Duration::from_millis(16))? {\n    // read up to INPUT_BATCH events, then draw once\n}', parts: [], screen: 'before', pulse: ['queue'], dur: 1800 },
+      { t: 'A gesture arrives', d: 'The user types <code>:format</code> and Enter. crossterm hands <code>main.rs</code> a lossless <code>KeyEvent</code>, and <code>main.rs</code> decides nothing about what it means.', file: 'src/main.rs:1597 · translate_input', code: 'queue.extend(keys::on_key_event(state, &mut edge.drafts, event, at_ms));', parts: ['input'], screen: 'typing', moves: [{ path: ['kbd', { id: 'keys', f: 'on' }], color: 'key', label: 'KeyEvent' }] },
+      { t: 'keys.rs turns it into an Event', d: 'Interpreting input is library work with a test, not edge work. The command line maps the word to a variant.', file: 'src/keys.rs:1338', code: '"format" => vec![Event::FormatBuffer],', parts: ['input', 'event'], screen: 'typing', moves: [{ path: ['keys', 'queue'], color: 'event', label: 'Event::FormatBuffer' }] },
+      { t: 'drain → update', d: '<code>drain</code> pops the Event and calls the one function that changes State. <code>route</code> starts from <code>next = state.clone()</code>.', file: 'src/main.rs:1662 · drain', code: 'while let Some(next_event) = queue.pop_front() {\n    let (next, effects) = update(state, next_event);\n    *state = next;\n    for effect in effects { perform(effect, …) }\n}', parts: ['event'], screen: 'waiting', moves: [{ path: ['queue', { id: 'route', f: 'on' }], color: 'event', label: 'FormatBuffer' }] },
+      { t: 'section_input: decline, decline, decline', d: 'Every link returns <code>Answered</code>. <code>Err((next, event))</code> means “not mine” and passes both on unchanged.', file: 'src/lib.rs:1870 · section_input', code: 'let declined = match route_trigger(state, declined.0, declined.1, wheeled) {\n    Ok(answer) => return Ok(answer),\n    Err(declined) => declined,\n};', parts: ['route'], screen: 'waiting', moves: [{ path: ['route', ...declineRow(0)], color: 'event', label: 'FormatBuffer' }] },
+      { t: 'section_editing: still nobody', d: 'Same contract one level down. The chain is ordered, and the first handler to answer wins.', file: 'src/lib.rs:1887 · section_editing', code: 'type Answered = Result<(State, Vec<Effect>), Declined>;\ntype Declined = (State, Event);', parts: ['route'], screen: 'waiting', moves: [{ path: [ws(0, 2), 'route', ...declineRow(1)], color: 'event', label: 'FormatBuffer' }] },
+      { t: 'section_workspace → route_ai_spoke → on_lsp answers', d: 'Inside <code>route_ai_spoke</code> six handlers decline, then <code>on_lsp</code> matches <code>Event::FormatBuffer</code>.', file: 'src/lib.rs:4750 · on_lsp', code: 'Event::FormatBuffer => {\n    if previewing(state) { cross_to_source(state, &mut next); }\n    lsp::format(&mut next).unwrap_or_else(|| format::run(&next))\n}', parts: ['route', 'arm'], screen: 'waiting', moves: [{ path: [ws(1, 2), 'route', 'sec2', { id: ws(2, 0), f: 'on' }, ...handlersTo(6), { id: 'h6', f: 'ok' }], color: 'event', label: 'FormatBuffer' }], dur: 3400 },
+      { t: 'The arm asks the area module', d: 'The logic lives in <code>format.rs</code>, a pure function over data. It returns the outside work as a value: run this formatter on this text at this revision.', file: 'src/format.rs:11 · run', code: 'pub fn run(state: &State) -> Vec<Effect> {\n    let formatter = state.formatters.get(&language)?;\n    vec![Effect::RunFormatter { command, args, language, path, revision, text }]\n}', parts: ['domain', 'effect'], screen: 'waiting', moves: [{ path: ['h6', { id: 'domain', f: 'on' }], color: 'event', label: 'format::run' }, { path: ['domain', 'h6'], color: 'effect', label: 'RunFormatter', delay: .5 }] },
+      { t: 'settle, then the shared tail', d: '<code>settle</code> pulls scroll offsets back over the cursor, so no arm has to remember to. <code>update</code>\'s tail records jump history and syncs language servers.', file: 'src/lib.rs:1353 · settle', code: 'Ok(settle(next, effects, wheeled))\n// update(): history::record(…); effects.extend(lsp::sync(&mut next));', parts: ['arm'], screen: 'waiting', moves: [{ path: ['h6', { id: 'settle', f: 'on' }, { id: 'tail', f: 'on' }], color: 'effect', label: '(State, [RunFormatter])' }] },
+      { t: 'update returns two values', d: 'The new State replaces the old one. The Effects are data that nothing has carried out yet, which is why a test can compare them as plain values.', file: 'src/lib.rs:1602', code: 'pub fn update(state: &State, event: Event) -> (State, Vec<Effect>)', parts: ['state', 'effect'], screen: 'waiting', moves: [{ path: ['tail', { id: 'state', f: 'on' }], color: 'state', label: 'next: State' }, { path: ['tail', { id: 'effects', f: 'on' }], color: 'effect', label: 'RunFormatter' }], effects: 'RunFormatter', state: { 'formatting: Some(revision 7)': true } },
+      { t: 'perform: the runtime carries it out', d: 'Another chain of responsibility. <code>perform_jobs</code> moves the slow work off the loop onto a thread.', file: 'src/main.rs:2804 · perform_jobs', code: 'Effect::RunFormatter { … } => {\n    let answer = edge.formatted.clone();\n    std::thread::spawn(move || {\n        let made = answer_formatter(&command, &args, &root, &text);\n        let _ = answer.send((language, path, revision, made));\n    });\n}', parts: ['perform'], screen: 'waiting', moves: [{ path: ['effects', { id: 'perform', f: 'on' }, { id: 'p0', f: 'no' }, { id: 'p1', f: 'no' }, { id: 'p2', f: 'no' }, { id: 'p3', f: 'ok' }, { id: 'w3', f: 'on' }], color: 'effect', label: 'RunFormatter' }], effects: '', dur: 3000 },
+      { t: 'One frame for the batch', d: '<code>ui::draw</code> only reads State. The loop keeps responding while the formatter runs.', file: 'src/ui.rs:104 · draw', code: 'terminal.draw(|frame| ui::draw(frame, &state, …))', parts: ['view'], screen: 'waiting', moves: [{ path: ['state', { id: 'ui', f: 'on' }, 'screen'], color: 'state', label: 'frame' }] },
+      { t: 'The answer comes back as an Event', d: 'Results from outside never write State directly. The thread sends on a channel, and <code>main.rs</code> queues <code>Event::FormatterAnswered</code>.', file: 'src/main.rs:959', code: 'while let Ok((language, path, revision, answer)) = formatted.try_recv() {\n    queue.push_back(Event::FormatterAnswered { language, path, revision, answer });\n}', parts: ['event'], screen: 'waiting', moves: [{ path: ['w3', ...LOOP], color: 'answer', label: 'FormatterAnswered' }], dur: 2800 },
+      { t: 'Same route, another arm', d: 'Same chain, fast-forwarded. The same handler owns the answer, and <code>format::answered</code> swaps in the new text unless the buffer has moved on since revision 7.', file: 'src/lib.rs:4757 · on_lsp', code: 'Event::FormatterAnswered { language, path, revision, answer } =>\n    format::answered(&mut next, &language, &path, revision, answer),', parts: ['route', 'arm', 'domain', 'state'], screen: 'waiting', moves: [{ path: ['queue', 'route', 'sec2', ws(2, 0), { id: 'h6', f: 'ok' }, { id: 'domain', f: 'on' }, 'h6', 'settle', 'tail', { id: 'state', f: 'on' }], color: 'answer', label: 'FormatterAnswered' }], state: { 'buffers["src/main.rs"].revision: 8': true, 'formatting: None': true }, dur: 3600 },
+      { t: 'Drawn, then idle again', d: 'The State changed, so one frame is drawn. With nothing in flight, the loop stops drawing.', file: 'src/ui.rs · source_lines', code: '// ui reads State; it never decides anything', parts: ['view'], screen: 'after', moves: [{ path: ['state', { id: 'ui', f: 'on' }, 'screen'], color: 'state', label: 'frame' }], state: { 'buffers["src/main.rs"].revision: 8': true } },
+    ],
+  },
+  {
+    name: 'Missing handler arm → panic',
+    frames: [
+      { t: 'A new Event, a missing arm', d: 'Someone added <code>Event::Ping</code> and a <code>keys.rs</code> line, but no handler matches it. <code>cargo build</code> passes.', file: 'src/keys.rs', code: '"ping" => vec![Event::Ping],   // the way in exists\n// …but no on_* arm says Event::Ping =>', parts: ['input', 'event'], screen: 'ping', moves: [{ path: ['kbd', { id: 'keys', f: 'on' }, 'queue'], color: 'event', label: 'Event::Ping' }] },
+      { t: 'Declined by every input route', d: 'Every handler tries its <code>match</code>, falls through to <code>other =&gt; return Err((next, other))</code> and passes it on.', file: 'src/lib.rs:1870', code: 'other => return Err((next, other)),', parts: ['route'], screen: 'ping', moves: [{ path: ['queue', 'route', ...declineRow(0)], color: 'event', label: 'Ping' }] },
+      { t: '…and every editing route', d: 'Still no owner.', file: 'src/lib.rs:1887', code: 'Err(declined)', parts: ['route'], screen: 'ping', moves: [{ path: [ws(0, 2), 'route', ...declineRow(1)], color: 'event', label: 'Ping' }] },
+      { t: '…and every workspace handler', d: 'All 61 <code>on_*</code> handlers decline.', file: 'src/lib.rs:1904', code: 'Err(declined)', parts: ['route', 'arm'], screen: 'ping', moves: [{ path: [ws(1, 2), 'route', 'sec2', { id: ws(2, 0), f: 'no' }, ...handlersTo(9), { id: ws(2, 1), f: 'no' }, { id: ws(2, 2), f: 'no' }], color: 'event', label: 'Ping' }], dur: 3800 },
+      { t: 'unreachable!', d: 'Nothing answered, so <code>route</code> panics. The compiler couldn\'t catch it: routing is by declining, not one exhaustive <code>match</code>. A behaviour scenario or unit test is the only guard.', file: 'src/lib.rs:1662 · route', code: 'unreachable!("no group answers {:?}", declined.1)\n// → internal error: entered unreachable code: no group answers Ping', parts: [], screen: 'panic', moves: [{ path: [ws(2, 2), { id: 'route', f: 'dead' }], color: 'dead', label: 'Ping', end: 'burst' }] },
+      { t: 'The fix: an arm, registered', d: 'Write <code>on_ping</code> (or add an arm to an existing handler) and link it into a <code>route_*</code> chain. Forget the link and <code>#![deny(dead_code)]</code> fails the build with “function `on_ping` is never used”.', file: 'src/lib.rs · route_activate', code: 'let declined = match on_ping(state, declined.0, declined.1, wheeled) {\n    Ok(answer) => return Ok(answer),\n    Err(declined) => declined,\n};', parts: ['route', 'arm', 'state'], screen: 'fixed', showExtra: true, moves: [{ path: ['queue', 'route', 'sec2', ws(2, 0), ws(2, 1), { id: ws(2, 2), f: 'on' }, { id: 'extra', f: 'ok' }, 'settle', 'tail', { id: 'state', f: 'on' }], color: 'event', label: 'Ping' }], state: { 'pings: 1': true }, dur: 3200 },
+    ],
+  },
+  {
+    name: 'Effect without executor → dropped',
+    frames: [
+      { t: 'A slice returns a new Effect', d: 'The handler is correct and its unit test passes. It returns <code>Effect::Pong</code>, a variant nobody taught <code>main.rs</code> to carry out.', file: 'src/lib.rs · on_ping', code: 'Event::Ping => {\n    next.pings += 1;\n    vec![Effect::Pong]\n}', parts: ['arm', 'effect'], screen: 'ping', showExtra: true, moves: [{ path: ['extra', 'settle', 'tail'], color: 'event', label: 'Ping' }, { path: ['tail', { id: 'effects', f: 'on' }], color: 'effect', label: 'Effect::Pong', delay: .55 }], effects: 'Pong', state: { 'pings: 1': true } },
+      { t: 'Every perform group declines', d: '<code>perform</code> tries each group in turn. Each returns <code>Some(effect)</code>, meaning “not mine”.', file: 'src/main.rs:2208 · perform', code: 'let Some(effect) = perform_terminal(effect, split, edge) else { return; };\nlet Some(effect) = perform_session(effect, edge, queue) else { return; };\nlet Some(effect) = perform_files(effect, edge, queue) else { return; };\nperform_jobs(effect, edge, queue);', parts: ['perform'], screen: 'ping', moves: [{ path: ['effects', { id: 'perform', f: 'on' }, { id: 'p0', f: 'no' }, { id: 'p1', f: 'no' }, { id: 'p2', f: 'no' }, { id: 'p3', f: 'no' }], color: 'effect', label: 'Pong', end: 'fade' }], effects: '', state: { 'pings: 1': true }, dur: 3000 },
+      { t: 'Gone, and nothing says so', d: 'A release build drops the Effect without a word. A debug build stops on <code>debug_assert</code>, and cucumber\'s fake runtime panics, but only if a scenario reaches it. <code>cargo build</code> finished cleanly.', file: 'src/main.rs:2811', code: 'other => debug_assert!(false, "no group executes {other:?}"),\n// tests/cucumber.rs:1050\nother => unreachable!("no group applies {other:?}"),', parts: [], screen: 'silent', moves: [], state: { 'pings: 1': true } },
+      { t: 'The fix: two arms, by hand', d: 'Add the executor in a <code>main.rs perform_*</code> group <b>and</b> the same arm in <code>tests/cucumber.rs applied_to_*</code>. The recipe has to say so, because the compiler won\'t.', file: 'src/main.rs · perform_jobs', code: 'Effect::Pong => { /* touch the outside world */ }', parts: ['perform', 'effect'], screen: 'fixed', moves: [{ path: ['effects', 'perform', { id: 'p0', f: 'no' }, { id: 'p1', f: 'no' }, { id: 'p2', f: 'no' }, { id: 'p3', f: 'ok' }, { id: 'w3', f: 'on' }], color: 'effect', label: 'Pong' }], effects: 'Pong', state: { 'pings: 1': true } },
+    ],
+  },
+];
+
+function pt(w) {
+  if (typeof w === 'string') return { x: N[w].x, y: N[w].y, id: w };
+  if (w.id) return { x: N[w.id].x, y: N[w.id].y, id: w.id, f: w.f };
+  return { x: w.x, y: w.y };
+}
+const ease = t => t < .5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+
+let scen = 0, frame = 0, playing = false, speed = 1, raf = null, frameStart = 0, active = [], frameDone = false, holdTimer = null;
+
+function makeOrb(move) {
+  const color = COLORS[move.color] || COLORS.event;
+  const pts = move.path.map(pt);
+  const segs = [];
+  let total = 0;
+  for (let i = 1; i < pts.length; i++) {
+    const L = Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+    segs.push({ a: total, L });
+    total += L;
+  }
+  const trail = el('polyline', { class: 'trail', stroke: color, points: '' }, gTrails);
+  const g = el('g', { opacity: 0 }, gOrbs);
+  el('circle', { r: 15, fill: color, opacity: .55, filter: 'url(#orbGlow)' }, g);
+  el('circle', { r: 7.5, fill: color }, g);
+  el('circle', { r: 3, cx: -2, cy: -2, fill: '#fff', opacity: .8 }, g);
+  const label = el('text', { class: 'orb-label', x: 13, y: -12 }, g);
+  label.textContent = move.label || '';
+  return { move, pts, segs, total, g, trail, color, hit: 0, ended: false };
+}
+
+function positionAt(o, d) {
+  if (o.pts.length === 1) return o.pts[0];
+  let i = o.segs.findIndex(s => d <= s.a + s.L);
+  if (i < 0) i = o.segs.length - 1;
+  const s = o.segs[i];
+  const t = s.L ? (d - s.a) / s.L : 1;
+  const a = o.pts[i], b = o.pts[i + 1];
+  return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t, i };
+}
+
+function burst(x, y, color) {
+  for (let k = 0; k < 3; k++) {
+    const c = el('circle', { cx: x, cy: y, r: 6, fill: 'none', stroke: color, 'stroke-width': 3 }, gFx);
+    c.animate([{ r: 6, opacity: 1 }, { r: 70 + k * 25, opacity: 0 }], { duration: 1200 + k * 200, delay: k * 120, fill: 'forwards' });
+    setTimeout(() => c.remove(), 1800);
+  }
+  for (let k = 0; k < 14; k++) {
+    const a = (k / 14) * Math.PI * 2;
+    const s = el('circle', { cx: x, cy: y, r: 3, fill: color }, gFx);
+    s.animate([{ transform: 'translate(0,0)', opacity: 1 }, { transform: `translate(${Math.cos(a) * 60}px,${Math.sin(a) * 60}px)`, opacity: 0 }], { duration: 900, fill: 'forwards', easing: 'cubic-bezier(.2,.7,.3,1)' });
+    setTimeout(() => s.remove(), 1000);
+  }
+}
+
+function hl(code) {
+  const esc = code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return esc.split('\n').map(line => {
+    const i = line.indexOf('//');
+    const body = i >= 0 ? line.slice(0, i) : line;
+    const com = i >= 0 ? `<span class="c">${line.slice(i)}</span>` : '';
+    return body
+      .replace(/("[^"]*")/g, '<span class="s">$1</span>')
+      .replace(/\b(fn|let|mut|pub|struct|enum|impl|match|return|if|else|for|while|in|move|type|Some|None|Ok|Err)\b/g, '<span class="k">$1</span>')
+      .replace(/\b(State|Event|Effect|Answered|Declined|Vec|Result|Duration|PathBuf|Line)\b/g, '<span class="ty">$1</span>') + com;
+  }).join('\n');
+}
+document.querySelectorAll('pre[data-hl]').forEach(p => { p.innerHTML = hl(p.textContent); });
+
+function renderState(f) {
+  const changes = f.state || {};
+  const lines = BASE_STATE.filter(l => !Object.keys(changes).some(c => c.split(':')[0] === l.split(':')[0]));
+  const panel = document.getElementById('statePanel');
+  panel.innerHTML = '';
+  for (const l of [...lines, ...Object.keys(changes)]) {
+    const d = document.createElement('div');
+    d.textContent = l;
+    if (changes[l]) d.className = 'changed';
+    panel.appendChild(d);
+  }
+}
+
+function buildTabs() {
+  const tabs = document.getElementById('tabs');
+  tabs.innerHTML = '';
+  SCENARIOS.forEach((s, i) => {
+    const b = document.createElement('button');
+    b.className = 'tab' + (i === scen ? ' active' : '');
+    b.textContent = s.name;
+    b.onclick = () => { scen = i; buildTabs(); buildTimeline(); go(0, playing); };
+    tabs.appendChild(b);
+  });
+}
+function buildTimeline() {
+  const tl = document.getElementById('timeline');
+  tl.innerHTML = '';
+  SCENARIOS[scen].frames.forEach((f, i) => {
+    const t = document.createElement('div');
+    t.className = 'tick';
+    t.title = (i + 1) + ' · ' + f.t;
+    t.innerHTML = `${i + 1}<span class="bar"></span>`;
+    t.onclick = () => go(i, playing);
+    tl.appendChild(t);
+  });
+}
+function markTimeline(progress) {
+  const ticks = document.querySelectorAll('.tick');
+  ticks.forEach((t, i) => {
+    t.classList.toggle('active', i === frame);
+    t.classList.toggle('done', i < frame);
+    t.querySelector('.bar').style.width = i === frame ? (progress * 100) + '%' : '0';
+  });
+}
+
+function go(i, autoplay) {
+  const frames = SCENARIOS[scen].frames;
+  frame = Math.max(0, Math.min(frames.length - 1, i));
+  clearTimeout(holdTimer);
+  cancelAnimationFrame(raf);
+  gOrbs.innerHTML = ''; gTrails.innerHTML = ''; gFx.innerHTML = '';
+  clearLit();
+  const f = frames[frame];
+  document.getElementById('frameNo').textContent = `Frame ${frame + 1} of ${frames.length}`;
+  document.getElementById('capTitle').textContent = f.t;
+  document.getElementById('capText').innerHTML = f.d;
+  document.getElementById('capFile').textContent = f.file || '';
+  document.getElementById('capCode').innerHTML = hl(f.code || '');
+  document.getElementById('counter').textContent = `${frame + 1}/${frames.length}`;
+  document.querySelectorAll('.part').forEach(p => p.classList.toggle('lit', (f.parts || []).includes(p.dataset.part)));
+  renderState(f);
+  drawScreen(f.screen);
+  nodeEls.extra.style.opacity = f.showExtra ? 1 : 0;
+  N.effects.sEl.textContent = f.effects ? '[' + f.effects + ']' : '[]';
+  for (const id of f.pulse || []) flash(id, 'on');
+  active = (f.moves || []).map(makeOrb);
+  frameDone = false;
+  frameStart = performance.now();
+  playing = autoplay;
+  setPlayLabel();
+  raf = requestAnimationFrame(tick);
+}
+
+function tick(now) {
+  const f = SCENARIOS[scen].frames[frame];
+  const dur = (f.dur || 2400) / speed;
+  const p = Math.min(1, (now - frameStart) / dur);
+  markTimeline(p);
+  for (const o of active) {
+    const delay = o.move.delay || 0;
+    const local = Math.max(0, Math.min(1, (p - delay) / (1 - delay)));
+    if (p < delay) continue;
+    const d = ease(local) * o.total;
+    const pos = positionAt(o, d);
+    o.g.setAttribute('opacity', 1);
+    o.g.setAttribute('transform', `translate(${pos.x},${pos.y})`);
+    const visited = o.pts.slice(0, (pos.i ?? 0) + 1).map(q => q.x + ',' + q.y);
+    visited.push(pos.x + ',' + pos.y);
+    o.trail.setAttribute('points', visited.join(' '));
+    o.trail.setAttribute('opacity', .55);
+    let reached = 0;
+    for (let k = 0; k < o.pts.length; k++) {
+      const at = k === 0 ? 0 : o.segs[k - 1].a + o.segs[k - 1].L;
+      if (d >= at - 0.5) reached = k + 1;
+    }
+    while (o.hit < reached) {
+      const w = o.pts[o.hit];
+      if (w.f) flash(w.id, w.f);
+      o.hit++;
+    }
+    if (local >= 1 && !o.ended) {
+      o.ended = true;
+      const last = o.pts[o.pts.length - 1];
+      if (o.move.end === 'burst') { burst(last.x, last.y, COLORS.dead); o.g.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 300, fill: 'forwards' }); }
+      if (o.move.end === 'fade') {
+        o.g.animate([{ opacity: 1, transform: `translate(${last.x}px,${last.y}px) scale(1)` }, { opacity: 0, transform: `translate(${last.x}px,${last.y + 40}px) scale(.3)` }], { duration: 1400, fill: 'forwards' });
+      }
+    }
+  }
+  if (p < 1) { raf = requestAnimationFrame(tick); return; }
+  frameDone = true;
+  if (playing) {
+    holdTimer = setTimeout(() => {
+      if (!playing) return;
+      if (frame < SCENARIOS[scen].frames.length - 1) go(frame + 1, true);
+      else { playing = false; setPlayLabel(); }
+    }, 1100 / speed);
+  }
+}
+
+function setPlayLabel() { document.getElementById('play').textContent = playing ? '⏸ Pause' : '▶ Play'; }
+document.getElementById('play').onclick = () => {
+  if (playing) { playing = false; clearTimeout(holdTimer); setPlayLabel(); return; }
+  const last = frame === SCENARIOS[scen].frames.length - 1;
+  if (last && frameDone) { go(0, true); return; }
+  playing = true; setPlayLabel();
+  if (frameDone) go(frame + 1, true);
+};
+document.getElementById('next').onclick = () => go(frame + 1, playing);
+document.getElementById('prev').onclick = () => go(frame - 1, playing);
+document.getElementById('restart').onclick = () => go(0, true);
+document.getElementById('speed').onchange = e => { speed = parseFloat(e.target.value); };
+document.addEventListener('keydown', e => {
+  if (e.key === 'ArrowRight') go(frame + 1, playing);
+  else if (e.key === 'ArrowLeft') go(frame - 1, playing);
+  else if (e.key === ' ') { e.preventDefault(); document.getElementById('play').click(); }
+});
+
+buildTabs();
+buildTimeline();
+go(0, false);
+</script>
+</body>
+</html>
