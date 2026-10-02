@@ -150,6 +150,14 @@ Feature: Language intelligence
       Then a language server was started with "ruby-lsp"
       And the language server for "ruby" was told "lib/app.rb" is a "ruby" document
 
+    # A row's `language_ids` names the id for an extension the table name does
+    # not cover: a .tsx file sent as "typescript" is parsed without JSX, so every
+    # import used only as a tag reads as unused.
+    Scenario: An extension a row gives its own language id is sent as that id
+      Given a language server for "typescript" is ready
+      When I open "src/App.tsx"
+      Then the language server for "typescript" was told "src/App.tsx" is a "typescriptreact" document
+
     Scenario: Two rows claiming one extension stop Varde from starting
       Given the project config is:
         """

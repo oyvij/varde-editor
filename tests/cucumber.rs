@@ -10199,6 +10199,11 @@ fn server_configured(world: &mut VardeWorld, command: String, language: String) 
                 .get(&language)
                 .map(|server| server.extensions.clone())
                 .unwrap_or_default(),
+            language_ids: shipped()
+                .servers
+                .get(&language)
+                .map(|server| server.language_ids.clone())
+                .unwrap_or_default(),
             install: BTreeMap::new(),
             initialization_options: None,
             partial: None,
@@ -10223,6 +10228,11 @@ fn server_is_ready(world: &mut VardeWorld, language: String) {
                 .get(&language)
                 .map(|server| server.extensions.clone())
                 .unwrap_or_default(),
+            language_ids: shipped()
+                .servers
+                .get(&language)
+                .map(|server| server.language_ids.clone())
+                .unwrap_or_default(),
             install: BTreeMap::new(),
             initialization_options: None,
             partial: None,
@@ -10246,6 +10256,11 @@ fn server_is_already_running(world: &mut VardeWorld, language: String) {
                 .servers
                 .get(&language)
                 .map(|server| server.extensions.clone())
+                .unwrap_or_default(),
+            language_ids: shipped()
+                .servers
+                .get(&language)
+                .map(|server| server.language_ids.clone())
                 .unwrap_or_default(),
             install: BTreeMap::new(),
             initialization_options: None,
