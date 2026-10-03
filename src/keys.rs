@@ -1346,6 +1346,7 @@ fn view_command(line: &str) -> Option<Vec<Event>> {
         "help" => vec![Event::ToggleCheatsheet],
         "dim" => vec![Event::ToggleField],
         "minimap" => vec![Event::ToggleMinimap],
+        "hotswap" => vec![Event::HotReplace],
         _ => return None,
     })
 }
@@ -4259,6 +4260,12 @@ mod tests {
 
     fn with_an_edit(state: &State) -> State {
         crate::update(state, Event::EditorKey('x')).0
+    }
+
+    #[test]
+    fn hotswap_is_the_command_that_replaces_the_running_code() {
+        assert_eq!(command("hotswap"), vec![Event::HotReplace]);
+        assert_eq!(command("hotswa"), vec![]);
     }
 
     #[test]
