@@ -3194,6 +3194,7 @@ pub(crate) fn paused(mut state: State) -> State {
             server: None,
             plugin: None,
             hot_replace: None,
+            ..Default::default()
         },
     );
     state.launches.insert(
@@ -3407,6 +3408,7 @@ mod tests {
                 server: None,
                 plugin: None,
                 hot_replace: None,
+                ..Default::default()
             },
         );
         can.launches.insert(
@@ -3946,6 +3948,7 @@ mod tests {
                 server: None,
                 plugin: None,
                 hot_replace: None,
+                ..Default::default()
             },
         );
         state.launches.insert(
@@ -4022,6 +4025,7 @@ mod tests {
                 server: None,
                 plugin: None,
                 hot_replace: None,
+                ..Default::default()
             },
         );
         state.launches.insert(
@@ -4376,6 +4380,7 @@ mod tests {
                 server: Some("java".to_string()),
                 plugin: None,
                 hot_replace: None,
+                ..Default::default()
             },
         );
         state.launches.insert(
@@ -4427,6 +4432,7 @@ mod tests {
                 server: None,
                 plugin: None,
                 hot_replace: None,
+                ..Default::default()
             },
         );
         state.launches.insert(

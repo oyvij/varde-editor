@@ -192,7 +192,15 @@ pub const TOOL_LIST_KEYS: [(&str, &str); 3] =
 
 pub const BRANCH_LIST_KEYS: [(&str, &str); 2] = [("Enter", "story this branch"), ("Esc", "close")];
 
-pub const LAUNCH_LIST_KEYS: [(&str, &str); 2] = [("Enter", "start"), ("Esc", "close")];
+pub const LAUNCH_LIST_KEYS: [(&str, &str); 3] =
+    [("Enter", "start"), ("c", "create"), ("Esc", "close")];
+
+pub const LAUNCH_FORM_KEYS: [(&str, &str); 4] = [
+    ("Tab", "next field"),
+    ("\u{2423}", "switch the choice"),
+    ("Enter", "create"),
+    ("Esc", "cancel"),
+];
 
 pub const BRANCH_FILTER_HINT: &str = "type to filter";
 
@@ -388,17 +396,7 @@ fn modal_key(state: &State, drafts: &mut Drafts, event: KeyEvent) -> Vec<Event> 
                 _ => vec![],
             },
         },
-        Modal::Launches { row } => match event.code {
-            KeyCode::Esc => vec![Event::Cancel],
-            KeyCode::Up => vec![Event::MoveLaunchRow(Direction::Up)],
-            KeyCode::Down => vec![Event::MoveLaunchRow(Direction::Down)],
-            KeyCode::Enter => crate::debug::launches(state)
-                .get(*row)
-                .map(|name| Event::StartLaunch(name.to_string()))
-                .into_iter()
-                .collect(),
-            _ => vec![],
-        },
+        Modal::Launches { .. } | Modal::NewLaunch(_) => launch_key(state, event),
         Modal::Branches { filter, .. } => match event.code {
             KeyCode::Esc => vec![Event::Cancel],
             KeyCode::Up => vec![Event::MoveBranchRow(Direction::Up)],
@@ -482,6 +480,7 @@ fn answered(modal: &Modal, event: KeyEvent) -> Vec<Event> {
         | Modal::Chord
         | Modal::Tools { .. }
         | Modal::Launches { .. }
+        | Modal::NewLaunch(_)
         | Modal::Branches { .. }
         | Modal::Comment
         | Modal::Candidates(_)
@@ -934,6 +933,58 @@ fn breakpoint_box(field: debug::Field, draft: &debug::Properties, event: KeyEven
             Some(c) => vec![Event::BreakpointDraft(format!(
                 "{}{c}",
                 debug::field_text(draft, field)
+            ))],
+            None => vec![],
+        },
+    }
+}
+
+pub fn launch_key(state: &State, event: KeyEvent) -> Vec<Event> {
+    let draft = match &state.modal {
+        Modal::Launches { row } => {
+            return match event.code {
+                KeyCode::Esc => vec![Event::Cancel],
+                KeyCode::Up => vec![Event::MoveLaunchRow(Direction::Up)],
+                KeyCode::Down => vec![Event::MoveLaunchRow(Direction::Down)],
+                KeyCode::Enter => crate::debug::launches(state)
+                    .get(*row)
+                    .map(|name| Event::StartLaunch(name.to_string()))
+                    .into_iter()
+                    .collect(),
+                _ => {
+                    match typed(event).filter(|_| !event.modifiers.contains(KeyModifiers::SUPER)) {
+                        Some('c') => vec![Event::CreateLaunch],
+                        _ => vec![],
+                    }
+                }
+            }
+        }
+        Modal::NewLaunch(draft) => draft,
+        _ => return Vec::new(),
+    };
+    let slots = crate::launch::slots(state, draft);
+    let walk = |by: usize| Event::LaunchSlot(crate::launch::walk(state, draft, by));
+    let back = event.modifiers.contains(KeyModifiers::SHIFT);
+    let choice = crate::launch::switchable(&draft.slot);
+    match event.code {
+        KeyCode::Esc => vec![Event::Cancel],
+        KeyCode::Enter => vec![Event::ConfirmLaunch],
+        KeyCode::Tab if back => vec![walk(slots.len() - 1)],
+        KeyCode::Up => vec![walk(slots.len() - 1)],
+        KeyCode::Tab | KeyCode::Down => vec![walk(1)],
+        _ if choice => match typed(event) {
+            Some(' ') => vec![Event::SwitchLaunchChoice],
+            _ => vec![],
+        },
+        KeyCode::Backspace => {
+            let mut text = crate::launch::text(draft, &draft.slot);
+            text.pop();
+            vec![Event::LaunchDraft(text)]
+        }
+        _ => match typed(event) {
+            Some(c) => vec![Event::LaunchDraft(format!(
+                "{}{c}",
+                crate::launch::text(draft, &draft.slot)
             ))],
             None => vec![],
         },
@@ -3963,6 +4014,60 @@ mod tests {
         assert!(
             unnamed.is_empty(),
             "the launch list answers keys its box does not name: {unnamed:?}"
+        );
+    }
+
+    #[test]
+    fn the_launch_form_answers_exactly_the_keys_its_box_names() {
+        let mut filling = State {
+            modal: crate::Modal::None,
+            ..editing()
+        };
+        filling.adapters.insert(
+            "rust".to_string(),
+            crate::startup::Adapter {
+                command: "codelldb".to_string(),
+                launch_args: vec![crate::startup::Argument {
+                    key: "program".to_string(),
+                    explain: "Path to the built executable to run".to_string(),
+                    required: true,
+                }],
+                ..Default::default()
+            },
+        );
+        filling.modal = crate::Modal::NewLaunch(crate::launch::open(&filling));
+        for (key, word) in super::LAUNCH_FORM_KEYS {
+            let event = every_key()
+                .into_iter()
+                .find(|event| label(*event) == key)
+                .unwrap_or_else(|| panic!("no key spells {key}"));
+            assert!(
+                answers(&filling, &[event]),
+                "the box offers {key} for {word} and the form does nothing with it"
+            );
+        }
+        let closed = State {
+            modal: crate::Modal::None,
+            ..filling.clone()
+        };
+        let gesture = |event| {
+            let events = on_key_event(&filling, &mut Drafts::default(), event, 0);
+            !events.is_empty() && !events.iter().all(|e| matches!(e, Event::LaunchDraft(_)))
+        };
+        let mut unnamed: Vec<String> = every_key()
+            .into_iter()
+            .filter(|event| gesture(*event) && !answers(&closed, &[*event]))
+            .map(label)
+            .filter(|label| {
+                !super::LAUNCH_FORM_KEYS.iter().any(|(key, _)| key == label)
+                    && !label.contains("arr")
+            })
+            .collect();
+        unnamed.sort();
+        unnamed.dedup();
+        assert!(
+            unnamed.is_empty(),
+            "the launch form answers keys its box does not name: {unnamed:?}"
         );
     }
 

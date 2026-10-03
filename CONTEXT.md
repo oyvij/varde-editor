@@ -717,9 +717,18 @@ _Avoid_: debug mode, debug view, debugger (that is the Debug adapter)
 
 **Launch configuration**:
 A named way to start a Debug session — launching a program or attaching to one already running,
-such as a service listening on a debug port. Kept in configuration, globally or per project, with
-the project's winning by name.
+such as a service listening on a debug port. Kept in configuration as `[launch.<name>]`, globally
+or per project, with the project's winning by name. The Launch box's Create writes one through a
+form whose fields are the chosen `[dap.*]` row's own `launch_args` or `attach_args`, so which
+arguments an adapter takes is that row's knowledge and never Varde's.
 _Avoid_: run configuration, debug profile, target
+
+**Launch form**:
+What Create opens over the Launch box: the fields a new Launch configuration is named and filled
+in, walked with Tab, and the layer it is written to. A form rather than a sequence of prompts
+because the arguments an adapter takes are a list the `[dap.*]` row hands over whole, and which
+request is chosen changes which of them there are.
+_Avoid_: launch dialog, launch wizard, new launch box
 
 **Run mark**:
 The ▶ in the gutter beside something that can be started on its own — a `main`, a test — offering

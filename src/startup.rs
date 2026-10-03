@@ -644,8 +644,30 @@ install.windows = "npm install -g prettier"
 # `~/.varde/codelldb` and puts a two-line script on `PATH` that runs it from
 # there: the adapter finds its own LLDB beside its real path, which a symlink
 # is not on every OS.
+#
+# `launch_args` and `attach_args` are what the Launch box's Create offers as
+# fields for that request, each with the one-line explanation shown beside it
+# and whether leaving it empty is refused. They are this row's knowledge, not
+# Varde's: a row without them gets free key/value fields instead, which is what
+# an adapter nobody here has tried gets
+# (`docs/adr/0021-a-debug-adapter-is-a-hosted-child-reached-three-ways.md`).
 [dap.rust]
 command = "codelldb"
+launch_args = [
+  { key = "program", explain = "Path to the built executable to run", required = true },
+  { key = "args", explain = "Arguments for the program, as a list" },
+  { key = "cwd", explain = "Directory the program runs in" },
+  { key = "env", explain = "Environment variables, as a table" },
+  { key = "stopOnEntry", explain = "Pause on the first line, true or false" },
+  { key = "sourceLanguages", explain = "Languages whose expressions LLDB should read, as a list" },
+  { key = "initCommands", explain = "LLDB commands run before the target is created, as a list" },
+  { key = "targetCreateCommands", explain = "LLDB commands that create the target instead of `program`, as a list" },
+]
+attach_args = [
+  { key = "pid", explain = "Process id to attach to", required = true },
+  { key = "program", explain = "Path to the running executable, if its symbols are wanted" },
+  { key = "waitFor", explain = "Wait for the process to start, true or false" },
+]
 install.macos = "curl -sL --create-dirs https://github.com/vadimcn/codelldb/releases/latest/download/codelldb-darwin-$(uname -m | sed 's/x86_64/x64/').vsix -o ~/.varde/codelldb.vsix && unzip -qo ~/.varde/codelldb.vsix -d ~/.varde/codelldb && mkdir -p ~/.local/bin && printf '#!/bin/sh\\nexec %s \"$@\"\\n' ~/.varde/codelldb/extension/adapter/codelldb > ~/.local/bin/codelldb && chmod +x ~/.local/bin/codelldb"
 install.linux = "curl -sL --create-dirs https://github.com/vadimcn/codelldb/releases/latest/download/codelldb-linux-$(uname -m | sed 's/x86_64/x64/;s/aarch64/arm64/').vsix -o ~/.varde/codelldb.vsix && unzip -qo ~/.varde/codelldb.vsix -d ~/.varde/codelldb && mkdir -p ~/.local/bin && printf '#!/bin/sh\\nexec %s \"$@\"\\n' ~/.varde/codelldb/extension/adapter/codelldb > ~/.local/bin/codelldb && chmod +x ~/.local/bin/codelldb"
 
@@ -665,6 +687,21 @@ server = "java"
 command = "vscode.java.startDebugSession"
 plugin = { bundles = ["${java_debug_plugin}"] }
 hot_replace = { request = "redefineClasses", event = "hotcodereplace" }
+launch_args = [
+  { key = "mainClass", explain = "Fully qualified class holding main, or a source file path", required = true },
+  { key = "projectName", explain = "Project the class belongs to, where the workspace holds several" },
+  { key = "args", explain = "Arguments for main, as a list" },
+  { key = "vmArgs", explain = "Arguments for the JVM itself" },
+  { key = "cwd", explain = "Directory the program runs in" },
+  { key = "env", explain = "Environment variables, as a table" },
+  { key = "classPaths", explain = "Entries to put on the class path, as a list" },
+]
+attach_args = [
+  { key = "hostName", explain = "Host the paused JVM listens on", required = true },
+  { key = "port", explain = "Port its debug agent listens on", required = true },
+  { key = "projectName", explain = "Project whose sources the frames are read against" },
+  { key = "timeout", explain = "Milliseconds to keep trying before giving up" },
+]
 
 # js-debug listens on the port it is given, and asks for a child session per
 # process and worker it attaches to, each over another connection to that port.
@@ -676,12 +713,46 @@ hot_replace = { request = "redefineClasses", event = "hotcodereplace" }
 [dap.javascript]
 command = "js-debug-adapter"
 args = ["${port}"]
+launch_args = [
+  { key = "type", explain = "Which js-debug launcher: pwa-node for a program, pwa-chrome for a page", required = true },
+  { key = "program", explain = "Entry file to run under node" },
+  { key = "cwd", explain = "Directory the program runs in" },
+  { key = "args", explain = "Arguments for the program, as a list" },
+  { key = "env", explain = "Environment variables, as a table" },
+  { key = "runtimeExecutable", explain = "Command to run instead of node, such as npx" },
+  { key = "runtimeArgs", explain = "Arguments for that command, as a list" },
+  { key = "skipFiles", explain = "Globs to step over rather than into, as a list" },
+]
+attach_args = [
+  { key = "type", explain = "Which js-debug launcher: pwa-node for a process, pwa-chrome for a page", required = true },
+  { key = "port", explain = "Inspector port the process was started with", required = true },
+  { key = "address", explain = "Host the inspector listens on" },
+  { key = "localRoot", explain = "Workspace directory the remote paths map from" },
+  { key = "remoteRoot", explain = "Directory those paths are rooted at on the far side" },
+]
 install.macos = "curl -sL --create-dirs $(curl -s https://api.github.com/repos/microsoft/vscode-js-debug/releases/latest | grep -o 'https://[^\"]*js-debug-dap-v[^\"]*[.]tar[.]gz' | head -1) -o ~/.varde/js-debug.tar.gz && tar xzf ~/.varde/js-debug.tar.gz -C ~/.varde && mkdir -p ~/.local/bin && printf '#!/bin/sh\\nexec node %s \"$@\"\\n' ~/.varde/js-debug/src/dapDebugServer.js > ~/.local/bin/js-debug-adapter && chmod +x ~/.local/bin/js-debug-adapter"
 install.linux = "curl -sL --create-dirs $(curl -s https://api.github.com/repos/microsoft/vscode-js-debug/releases/latest | grep -o 'https://[^\"]*js-debug-dap-v[^\"]*[.]tar[.]gz' | head -1) -o ~/.varde/js-debug.tar.gz && tar xzf ~/.varde/js-debug.tar.gz -C ~/.varde && mkdir -p ~/.local/bin && printf '#!/bin/sh\\nexec node %s \"$@\"\\n' ~/.varde/js-debug/src/dapDebugServer.js > ~/.local/bin/js-debug-adapter && chmod +x ~/.local/bin/js-debug-adapter"
 
 [dap.typescript]
 command = "js-debug-adapter"
 args = ["${port}"]
+launch_args = [
+  { key = "type", explain = "Which js-debug launcher: pwa-node for a program, pwa-chrome for a page", required = true },
+  { key = "program", explain = "Entry file to run under node" },
+  { key = "cwd", explain = "Directory the program runs in" },
+  { key = "args", explain = "Arguments for the program, as a list" },
+  { key = "env", explain = "Environment variables, as a table" },
+  { key = "runtimeExecutable", explain = "Command to run instead of node, such as npx" },
+  { key = "runtimeArgs", explain = "Arguments for that command, as a list" },
+  { key = "skipFiles", explain = "Globs to step over rather than into, as a list" },
+]
+attach_args = [
+  { key = "type", explain = "Which js-debug launcher: pwa-node for a process, pwa-chrome for a page", required = true },
+  { key = "port", explain = "Inspector port the process was started with", required = true },
+  { key = "address", explain = "Host the inspector listens on" },
+  { key = "localRoot", explain = "Workspace directory the remote paths map from" },
+  { key = "remoteRoot", explain = "Directory those paths are rooted at on the far side" },
+]
 install.macos = "curl -sL --create-dirs $(curl -s https://api.github.com/repos/microsoft/vscode-js-debug/releases/latest | grep -o 'https://[^\"]*js-debug-dap-v[^\"]*[.]tar[.]gz' | head -1) -o ~/.varde/js-debug.tar.gz && tar xzf ~/.varde/js-debug.tar.gz -C ~/.varde && mkdir -p ~/.local/bin && printf '#!/bin/sh\\nexec node %s \"$@\"\\n' ~/.varde/js-debug/src/dapDebugServer.js > ~/.local/bin/js-debug-adapter && chmod +x ~/.local/bin/js-debug-adapter"
 install.linux = "curl -sL --create-dirs $(curl -s https://api.github.com/repos/microsoft/vscode-js-debug/releases/latest | grep -o 'https://[^\"]*js-debug-dap-v[^\"]*[.]tar[.]gz' | head -1) -o ~/.varde/js-debug.tar.gz && tar xzf ~/.varde/js-debug.tar.gz -C ~/.varde && mkdir -p ~/.local/bin && printf '#!/bin/sh\\nexec node %s \"$@\"\\n' ~/.varde/js-debug/src/dapDebugServer.js > ~/.local/bin/js-debug-adapter && chmod +x ~/.local/bin/js-debug-adapter"
 
@@ -1037,7 +1108,7 @@ pub struct Formatter {
     pub extensions: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Deserialize)]
 pub struct Adapter {
     #[serde(default)]
     pub command: String,
@@ -1051,6 +1122,18 @@ pub struct Adapter {
     pub plugin: Option<serde_json::Map<String, serde_json::Value>>,
     #[serde(default)]
     pub hot_replace: Option<HotReplace>,
+    #[serde(default)]
+    pub launch_args: Vec<Argument>,
+    #[serde(default)]
+    pub attach_args: Vec<Argument>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct Argument {
+    pub key: String,
+    pub explain: String,
+    #[serde(default)]
+    pub required: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]

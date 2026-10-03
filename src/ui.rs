@@ -413,10 +413,8 @@ fn draw_modal(frame: &mut Frame, state: &State, chrome: &Chrome) {
             let height = frame.area().height;
             overlay(frame, "TOOLS", tool_lines(state, *row, height))
         }
-        Modal::Launches { row } => {
-            let height = frame.area().height;
-            overlay(frame, "LAUNCH", launch_lines(state, *row, height))
-        }
+        Modal::Launches { .. } => launch_box(frame, state, "LAUNCH"),
+        Modal::NewLaunch(_) => launch_box(frame, state, "NEW LAUNCH"),
         Modal::Branches { refs, filter, row } => {
             let height = frame.area().height;
             overlay(
@@ -2043,6 +2041,48 @@ fn run_offer(frame: &mut Frame, state: &State) {
     }
 }
 
+fn launch_box(frame: &mut Frame, state: &State, title: &str) {
+    let screen = frame.area();
+    let Some((area, rows)) = varde::launch::shown(state, screen.width, screen.height) else {
+        return;
+    };
+    let lines: Vec<Line> = rows
+        .into_iter()
+        .map(|(tone, row)| match tone {
+            varde::Tone::Dimmed => {
+                Line::from(Span::styled(row, Style::default().fg(Color::DarkGray)))
+            }
+            _ => Line::from(row),
+        })
+        .collect();
+    let box_area = rect(area);
+    frame.render_widget(Clear, box_area);
+    frame.render_widget(
+        Paragraph::new(lines).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Thick)
+                .title(title.to_string()),
+        ),
+        box_area,
+    );
+    let chips = varde::launch::chips(state);
+    let labels = layout::chip_labels(&chips, area.width, 0);
+    let Some(mut x) =
+        (area.x + area.width.saturating_sub(1)).checked_sub(layout::strip_width(&labels))
+    else {
+        return;
+    };
+    for (chip, label) in chips.iter().zip(labels) {
+        let columns = label.width() as u16;
+        frame.render_widget(
+            Line::from(chip_spans(state, chip, label).to_vec()),
+            Rect::new(x, area.y, columns, 1),
+        );
+        x += columns + 1;
+    }
+}
+
 fn with_run_mark(line: Line<'static>) -> Line<'static> {
     let style = line.style;
     let mut spans = line.spans.into_iter();
@@ -2357,6 +2397,12 @@ fn refusal_spans(state: &State) -> Vec<Span<'static>> {
         }
         varde::preview::Refusal::NoRunMark => " nothing on this line to run ".to_string(),
         varde::preview::Refusal::SetValueFailed(why) => format!(" could not set: {why} "),
+        varde::preview::Refusal::LaunchNameTaken(name) => {
+            format!(" {name} is already a launch configuration there — nothing was written ")
+        }
+        varde::preview::Refusal::LaunchFieldNeeded(field) => {
+            format!(" {field} cannot be left empty ")
+        }
     };
     vec![Span::styled(wording, Style::default().fg(WARNING))]
 }
@@ -3930,35 +3976,6 @@ fn tool_lines(state: &State, selected: usize, height: u16) -> Vec<Line<'static>>
     lines
 }
 
-fn launch_lines(state: &State, selected: usize, height: u16) -> Vec<Line<'static>> {
-    let mut lines: Vec<Line> = varde::debug::launches(state)
-        .iter()
-        .enumerate()
-        .map(|(index, name)| {
-            let cursor = match index == selected {
-                true => '>',
-                false => ' ',
-            };
-            Line::from(format!("{cursor} {name}"))
-        })
-        .collect();
-    if lines.is_empty() {
-        lines.push(Line::from(
-            "  No Launch configurations: name one as [launch.<name>] in a config file.",
-        ));
-    }
-    let mut lines = window_on(lines, selected, height, 4);
-    lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        keys::LAUNCH_LIST_KEYS
-            .iter()
-            .map(|(key, word)| format!("   {key}  {word}"))
-            .collect::<String>(),
-        Style::default().fg(Color::DarkGray),
-    )));
-    lines
-}
-
 fn branch_lines(
     names: &[String],
     filter: &str,
@@ -4080,8 +4097,8 @@ fn overlay(frame: &mut Frame, title: &str, lines: Vec<Line<'static>>) {
 mod tests {
     use super::{
         action_icon, authorship_clause, branch_lines, buffer_title, code_lines, colour, diff_rows,
-        editor_block, faint, guided, highlight, icon_colour, launch_lines, layout, output_lines,
-        paint_drag, pane_actions_title, preview_line, right_title, risk_lines, risk_title, shift,
+        editor_block, faint, guided, highlight, icon_colour, layout, output_lines, paint_drag,
+        pane_actions_title, preview_line, right_title, risk_lines, risk_title, shift,
         snippet_lines, source_lines, status_line, story_title, title_room, tree_lines, truncate,
         variables_lines, with_breakpoint, with_caret, Block, Borders, Code, Color, Kind, Line,
         Modifier, Place, Selection, Span, State, Style, Tone, UnicodeWidthStr, DIRTY, DOTS,
@@ -4159,33 +4176,6 @@ mod tests {
         assert_eq!(lines[14], "> branch-30");
     }
 
-    #[test]
-    fn a_long_launch_list_follows_its_selection() {
-        let mut state = State::default();
-        for at in 10..50 {
-            state.launches.insert(
-                format!("launch-{at}"),
-                varde::startup::Launch {
-                    adapter: "rust".to_string(),
-                    request: "launch".to_string(),
-                    args: serde_json::Map::new(),
-                    reattach: false,
-                },
-            );
-        }
-        let lines: Vec<String> = launch_lines(&state, 30, 20)
-            .iter()
-            .map(|line| {
-                line.spans
-                    .iter()
-                    .map(|span| span.content.as_ref())
-                    .collect()
-            })
-            .collect();
-        assert_eq!(lines.len() + 2, 20);
-        assert_eq!(lines.first().map(String::as_str), Some("  launch-25"));
-        assert_eq!(lines[15], "> launch-40");
-    }
     use varde::tree::{IconKind, Row};
     use varde::{DiffLine, Event};
 

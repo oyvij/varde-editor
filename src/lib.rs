@@ -12,6 +12,7 @@ pub mod format;
 pub mod highlight;
 pub mod history;
 pub mod keys;
+pub mod launch;
 pub mod layout;
 pub mod lsp;
 pub mod minimap;
@@ -232,6 +233,7 @@ pub enum Modal {
     Launches {
         row: usize,
     },
+    NewLaunch(launch::Draft),
     RunMark {
         line: usize,
         mark: run::Mark,
@@ -590,6 +592,12 @@ pub enum Event {
         write: tools::Write,
         text: Option<String>,
     },
+    CreateLaunch,
+    LaunchSlot(launch::Slot),
+    LaunchDraft(String),
+    SwitchLaunchChoice,
+    ConfirmLaunch,
+    LaunchTargetRead(Option<String>),
     ConfigEdited {
         global: startup::OnDisk,
         project: startup::OnDisk,
@@ -838,6 +846,9 @@ pub enum Effect {
         kind: tools::Kind,
         name: String,
         write: tools::Write,
+    },
+    ReadLaunchTarget {
+        path: PathBuf,
     },
     ReadInstallStatus(PathBuf),
     ReadBranches,
@@ -4688,6 +4699,73 @@ fn on_debug(state: &State, mut next: State, event: Event, wheeled: bool) -> Answ
         Event::LeaveStepping => {
             next.stepping = false;
             vec![]
+        }
+        Event::CreateLaunch => {
+            next.modal = Modal::NewLaunch(launch::open(&next));
+            vec![]
+        }
+        Event::LaunchSlot(slot) => {
+            if let Modal::NewLaunch(draft) = &mut next.modal {
+                draft.slot = slot;
+            }
+            vec![]
+        }
+        Event::LaunchDraft(text) => {
+            if let Modal::NewLaunch(draft) = &mut next.modal {
+                launch::typed(draft, text);
+            }
+            vec![]
+        }
+        Event::SwitchLaunchChoice => {
+            let mut draft = match &next.modal {
+                Modal::NewLaunch(draft) => draft.clone(),
+                _ => return Ok(settle(next, vec![], wheeled)),
+            };
+            launch::switch(&next, &mut draft);
+            next.modal = Modal::NewLaunch(draft);
+            vec![]
+        }
+        Event::ConfirmLaunch => {
+            let Modal::NewLaunch(draft) = &next.modal else {
+                return Ok(settle(next, vec![], wheeled));
+            };
+            match launch::missing(&next, draft) {
+                Some(field) => {
+                    next.refusal = Some(preview::Refusal::LaunchFieldNeeded(field));
+                    vec![]
+                }
+                None => vec![Effect::ReadLaunchTarget {
+                    path: launch::path(&next, draft.target),
+                }],
+            }
+        }
+        Event::LaunchTargetRead(text) => {
+            let Modal::NewLaunch(draft) = next.modal.clone() else {
+                return Ok(settle(next, vec![], wheeled));
+            };
+            let created = match text {
+                Some(text) => launch::created(&next, &draft, &text),
+                None => Err(launch::unreadable(draft.target)),
+            };
+            match created {
+                Err(refusal) => {
+                    next.refusal = Some(refusal);
+                    vec![]
+                }
+                Ok((contents, name, entry)) => {
+                    next.launches.insert(name.clone(), entry);
+                    let row = next
+                        .launches
+                        .keys()
+                        .position(|offered| *offered == name)
+                        .unwrap_or(0);
+                    next.modal = Modal::Launches { row };
+                    vec![Effect::WriteFile {
+                        path: launch::path(&next, draft.target),
+                        contents,
+                    }]
+                }
+            }
         }
         Event::MoveLaunchRow(direction) => {
             let last = state.launches.len().saturating_sub(1);

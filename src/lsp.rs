@@ -2076,6 +2076,7 @@ mod tests {
             server: Some(server.to_string()),
             plugin: serde_json::from_str(plugin).ok(),
             hot_replace: None,
+            ..Default::default()
         };
         state.adapters.insert(
             "rust".to_string(),

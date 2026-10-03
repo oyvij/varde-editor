@@ -438,6 +438,10 @@ fn pressed(
     if let Some(action) = crate::run::chip_at(state, screen.0, screen.1, input.column, input.row) {
         return vec![Event::ChooseRun(action)];
     }
+    if let Some(events) = crate::launch::clicked(state, screen.0, screen.1, input.column, input.row)
+    {
+        return events;
+    }
     if let Some(index) = buffer_dot_at(state, panes, input.column, input.row) {
         return match state.buffers.keys().nth(index) {
             Some(path) => vec![Event::ShowBuffer(path.clone())],
