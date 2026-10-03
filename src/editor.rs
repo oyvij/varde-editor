@@ -86,15 +86,89 @@ pub fn span_text(lines: &[String], from: crate::Place, to: crate::Place) -> Stri
     picked.join("\n")
 }
 
-pub fn link_at(row: &str, column: usize) -> Option<String> {
-    let index = row.char_indices().nth(column.checked_sub(1)?)?.0;
-    linkify::LinkFinder::new()
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Link {
+    pub from: usize,
+    pub to: usize,
+    pub target: Target,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Target {
+    Url(String),
+    File { path: String, at: crate::Place },
+}
+
+pub fn link_at(row: &str, column: usize) -> Option<Link> {
+    let chars: Vec<char> = row.chars().collect();
+    let at = column.checked_sub(1).filter(|at| *at < chars.len())?;
+    let index = row.char_indices().nth(at)?.0;
+    let column_of = |byte: usize| row[..byte].chars().count() + 1;
+    if let Some(url) = linkify::LinkFinder::new()
         .kinds(&[linkify::LinkKind::Url])
         .links(row)
         .find(|link| link.start() <= index && index < link.end())
-        .map(|link| link.as_str())
-        .filter(|url| url.starts_with("http://") || url.starts_with("https://"))
-        .map(str::to_string)
+    {
+        return (url.as_str().starts_with("http://") || url.as_str().starts_with("https://")).then(
+            || Link {
+                from: column_of(url.start()),
+                to: column_of(url.end()) - 1,
+                target: Target::Url(url.as_str().to_string()),
+            },
+        );
+    }
+    let delimiter = |c: char| c.is_whitespace() || "\"'`()[]{}<>,;|*".contains(c);
+    if delimiter(chars[at]) {
+        return None;
+    }
+    let mut from = at;
+    while from > 0 && !delimiter(chars[from - 1]) {
+        from -= 1;
+    }
+    let token: String = chars[from..]
+        .iter()
+        .take_while(|c| !delimiter(**c))
+        .collect();
+    let path = token
+        .split([':', '#'])
+        .next()?
+        .trim_end_matches(['.', '!', '?']);
+    let named = std::path::Path::new(path)
+        .extension()
+        .is_some_and(|extension| extension.to_string_lossy().chars().any(char::is_alphabetic));
+    if path.ends_with('/') || !(path.contains('/') || named) {
+        return None;
+    }
+    let mut rest = &token[path.len()..];
+    let mut taken = path.chars().count();
+    let mut numbers = Vec::new();
+    while numbers.len() < 2 {
+        let Some(after) = rest
+            .strip_prefix(':')
+            .or_else(|| rest.strip_prefix("#L").filter(|_| numbers.is_empty()))
+        else {
+            break;
+        };
+        let digits = after.chars().take_while(char::is_ascii_digit).count();
+        let Ok(number) = after[..digits].parse::<usize>() else {
+            break;
+        };
+        numbers.push(number);
+        taken += rest.len() - after.len() + digits;
+        rest = &after[digits..];
+    }
+    let to = from + taken;
+    (at < to).then(|| Link {
+        from: from + 1,
+        to,
+        target: Target::File {
+            path: path.strip_prefix("./").unwrap_or(path).to_string(),
+            at: crate::Place {
+                line: numbers.first().copied().unwrap_or(1).max(1),
+                column: numbers.get(1).copied().unwrap_or(1).max(1),
+            },
+        },
+    })
 }
 
 pub fn occurrences(lines: &[String], word: &str) -> Vec<crate::Place> {
@@ -1361,15 +1435,21 @@ fn block(
 
 #[cfg(test)]
 mod tests {
-    use super::{grid_row, link_at, moved, occurrences, span_text, word_span, Buffer, PAIRS};
+    use super::{
+        grid_row, link_at, moved, occurrences, span_text, word_span, Buffer, Link, Target, PAIRS,
+    };
     use crate::Place;
 
     #[test]
     fn a_link_is_the_url_under_the_column_and_nothing_else() {
         let row = "Sé (https://example.com/a_(b)). Not file:///etc/passwd or ftp://x.y";
         assert_eq!(
-            link_at(row, 6).as_deref(),
-            Some("https://example.com/a_(b)")
+            link_at(row, 6),
+            Some(Link {
+                from: 5,
+                to: 29,
+                target: Target::Url("https://example.com/a_(b)".to_string()),
+            })
         );
         assert_eq!(link_at(row, 1), None, "a word before the link");
         assert_eq!(link_at(row, 31), None, "the sentence's own punctuation");
@@ -1377,6 +1457,50 @@ mod tests {
         assert_eq!(link_at(row, 60), None, "ftp");
         assert_eq!(link_at(row, 200), None, "past the end of the row");
         assert_eq!(link_at(row, 0), None);
+    }
+
+    #[test]
+    fn a_path_is_a_link_to_the_line_and_column_it_names() {
+        let file = |path: &str, line, column| {
+            Some(Target::File {
+                path: path.to_string(),
+                at: Place { line, column },
+            })
+        };
+        let target = |row: &str, column| link_at(row, column).map(|link| link.target);
+        assert_eq!(
+            target("  --> src/lib.rs:42:7", 9),
+            file("src/lib.rs", 42, 7)
+        );
+        assert_eq!(
+            target("in src/mouse.rs:12.", 5),
+            file("src/mouse.rs", 12, 1)
+        );
+        assert_eq!(target("see ./Cargo.toml", 7), file("Cargo.toml", 1, 1));
+        assert_eq!(target("open src/lib.rs.", 7), file("src/lib.rs", 1, 1));
+        assert_eq!(target("src/a.rs:0:0", 1), file("src/a.rs", 1, 1));
+        assert_eq!(target("see **src/a.rs:4**", 8), file("src/a.rs", 4, 1));
+        assert_eq!(target("src/a.rs#L8", 2), file("src/a.rs", 8, 1));
+        assert_eq!(target("lines src/a.rs:3-9", 9), file("src/a.rs", 3, 1));
+        assert_eq!(target("/w/b.rs:5:fn main", 1), file("/w/b.rs", 5, 1));
+        assert_eq!(target("(at /w/src/c.rs:5)", 10), file("/w/src/c.rs", 5, 1));
+        assert_eq!(target("$ cargo test", 3), None, "a word is not a path");
+        assert_eq!(target("version 1.2.3", 10), None, "a number is not a file");
+        assert_eq!(
+            target("into src/", 7),
+            None,
+            "a folder does not open in the editor"
+        );
+        assert_eq!(
+            target("/w/b.rs:5:fn main", 11),
+            None,
+            "past what the path names"
+        );
+        assert_eq!(
+            link_at("  --> src/lib.rs:42:7, here", 8).map(|link| (link.from, link.to)),
+            Some((7, 21)),
+            "the span is the path and its place, and not the comma after it"
+        );
     }
 
     #[test]

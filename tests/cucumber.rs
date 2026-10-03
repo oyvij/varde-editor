@@ -231,6 +231,16 @@ impl VardeWorld {
         }
     }
 
+    fn place_of(&self, pane: Pane, text: &str) -> (usize, usize) {
+        let lines = self.pane_lines(pane);
+        let index = lines
+            .iter()
+            .position(|line| line.contains(text))
+            .unwrap_or_else(|| panic!("{text:?} is not in that pane"));
+        let at = lines[index].find(text).expect("the column");
+        (index + 1, lines[index][..at].chars().count() + 1)
+    }
+
     fn click_twice(&mut self, pane: Pane, at: (usize, usize), apart: u64) {
         let panes = self.panes();
         let (column, row) = pointer_at(&self.state, &panes, pane, at);
@@ -3458,14 +3468,8 @@ fn jump_click_text(world: &mut VardeWorld, line: usize, column: usize) {
 #[when(expr = "I click on {string} in the {word} pane with the jump modifier held")]
 fn jump_click_text_in_pane(world: &mut VardeWorld, text: String, pane: String) {
     let pane = parse_pane(&pane);
-    let lines = world.pane_lines(pane);
-    let index = lines
-        .iter()
-        .position(|line| line.contains(&text))
-        .unwrap_or_else(|| panic!("{text:?} is not in that pane"));
-    let at = lines[index].find(&text).expect("the column");
-    let column = lines[index][..at].chars().count() + 1;
-    world.click(pane, (index + 1, column), JUMP);
+    let at = world.place_of(pane, &text);
+    world.click(pane, at, JUMP);
 }
 
 #[then(expr = "the browser opens {string}")]
@@ -3482,6 +3486,41 @@ fn browser_opens_nothing(world: &mut VardeWorld) {
 #[when(expr = "I hold the jump modifier over line {int} column {int} in the editor")]
 fn hold_over_text(world: &mut VardeWorld, line: usize, column: usize) {
     world.point(Pane::Editor, Some((line, column)), JUMP);
+}
+
+#[given(expr = "I hold the jump modifier over {string} in the {word} pane")]
+#[when(expr = "I hold the jump modifier over {string} in the {word} pane")]
+fn hold_over_pane_text(world: &mut VardeWorld, text: String, pane: String) {
+    let pane = parse_pane(&pane);
+    let at = world.place_of(pane, &text);
+    world.point(pane, Some(at), JUMP);
+}
+
+#[when(expr = "I point at {string} in the {word} pane")]
+fn point_at_pane_text(world: &mut VardeWorld, text: String, pane: String) {
+    let pane = parse_pane(&pane);
+    let at = world.place_of(pane, &text);
+    world.point(pane, Some(at), terminput::KeyModifiers::NONE);
+}
+
+#[then(expr = "the {word} pane underlines {string}")]
+fn pane_underlines(world: &mut VardeWorld, pane: String, text: String) {
+    let pane = parse_pane(&pane);
+    let lines = world.pane_lines(pane);
+    let (line, from, to) = varde::hosted_link(&world.state, pane, &lines).expect("an underline");
+    let underlined: String = lines[line - 1]
+        .chars()
+        .skip(from - 1)
+        .take(to + 1 - from)
+        .collect();
+    assert_eq!(underlined, text);
+}
+
+#[then(expr = "the {word} pane underlines nothing")]
+fn pane_underlines_nothing(world: &mut VardeWorld, pane: String) {
+    let pane = parse_pane(&pane);
+    let lines = world.pane_lines(pane);
+    assert_eq!(varde::hosted_link(&world.state, pane, &lines), None);
 }
 
 #[when(expr = "I point at line {int} column {int} in the editor")]
@@ -5395,15 +5434,9 @@ fn ai_session_shows(world: &mut VardeWorld, step: &Step) {
 #[when(expr = "I drag across {string} in the {word} pane")]
 fn drag_in_pane(world: &mut VardeWorld, text: String, pane: String) {
     let pane = parse_pane(&pane);
-    let lines = world.pane_lines(pane);
-    let index = lines
-        .iter()
-        .position(|line| line.contains(&text))
-        .unwrap_or_else(|| panic!("{text:?} is not in that pane"));
-    let at = lines[index].find(&text).expect("the column");
-    let column = lines[index][..at].chars().count() + 1;
+    let (line, column) = world.place_of(pane, &text);
     let last = column + text.chars().count() - 1;
-    world.drag(pane, (index + 1, column), (index + 1, last));
+    world.drag(pane, (line, column), (line, last));
 }
 
 #[given(expr = "I drag in the {word} pane from line {int} column {int} to line {int} column {int}")]

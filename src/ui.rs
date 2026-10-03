@@ -159,7 +159,16 @@ pub fn draw(
                 };
                 let focused = state.focus == Pane::Terminal && k == state.split();
                 frame.render_widget(
-                    terminal_widget(shell, &title, focused, state, Pane::Terminal),
+                    terminal_widget(
+                        shell,
+                        &title,
+                        focused,
+                        state,
+                        Pane::Terminal,
+                        (k == state.split())
+                            .then(|| pty_link(state, shell, Pane::Terminal))
+                            .flatten(),
+                    ),
                     *area,
                 );
             }
@@ -182,6 +191,7 @@ pub fn draw(
                         state.focus == Pane::Output,
                         state,
                         Pane::Output,
+                        None,
                     ),
                     rect(areas.panes.output),
                 );
@@ -293,7 +303,14 @@ fn draw_ai_pane(
         return;
     };
     frame.render_widget(
-        terminal_widget(pane, "ai", state.focus == Pane::Ai, state, Pane::Ai),
+        terminal_widget(
+            pane,
+            "ai",
+            state.focus == Pane::Ai,
+            state,
+            Pane::Ai,
+            pty_link(state, pane, Pane::Ai),
+        ),
         areas.ai,
     );
     if state.focus == Pane::Ai && caret_is_free {
@@ -3571,12 +3588,27 @@ fn colour(kind: Kind, dark: bool) -> Color {
     }
 }
 
+fn pty_link(state: &State, pane: &PtyPane, which: Pane) -> Option<(usize, usize, usize)> {
+    state.link.filter(|(on, _)| *on == which)?;
+    let screen = pane.screen();
+    let (rows, columns) = screen.size();
+    let rows: Vec<String> = (0..rows)
+        .map(|row| {
+            varde::editor::grid_row(
+                (0..columns).map(|column| screen.cell(row, column).map(vt100::Cell::contents)),
+            )
+        })
+        .collect();
+    varde::hosted_link(state, which, &rows)
+}
+
 fn terminal_widget(
     pane: &PtyPane,
     title: &str,
     focused: bool,
     state: &State,
     which: Pane,
+    link: Option<(usize, usize, usize)>,
 ) -> Paragraph<'static> {
     let screen = pane.screen();
     let (rows, columns) = screen.size();
@@ -3608,11 +3640,16 @@ fn terminal_widget(
                             style = style.add_modifier(Modifier::REVERSED);
                         }
                     }
+                    let at = (row as usize + 1, column as usize + 1);
                     if let Some((from, to)) = picked {
-                        let at = (row as usize + 1, column as usize + 1);
                         if at >= (from.line, from.column) && at <= (to.line, to.column) {
                             style = style.add_modifier(Modifier::REVERSED);
                         }
+                    }
+                    if link
+                        .is_some_and(|(line, from, to)| at.0 == line && (from..=to).contains(&at.1))
+                    {
+                        style = style.add_modifier(Modifier::UNDERLINED);
                     }
                     Span::styled(text, style)
                 })
