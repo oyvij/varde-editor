@@ -2075,6 +2075,7 @@ mod tests {
             install: std::collections::BTreeMap::new(),
             server: Some(server.to_string()),
             plugin: serde_json::from_str(plugin).ok(),
+            hot_replace: None,
         };
         state.adapters.insert(
             "rust".to_string(),

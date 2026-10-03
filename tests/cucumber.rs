@@ -3926,6 +3926,7 @@ fn debug_adapter_configured(world: &mut VardeWorld, language: String) {
             install: BTreeMap::new(),
             server: None,
             plugin: None,
+            hot_replace: None,
         });
     let row = format!("[dap.{language}]\ncommand = \"{}\"", adapter.command);
     world.startup.global_config = Some(match world.startup.global_config.take() {
@@ -3950,6 +3951,51 @@ fn debug_adapter_configured(world: &mut VardeWorld, language: String) {
 
 #[given(expr = "no Debug session exists")]
 fn no_debug_session(_world: &mut VardeWorld) {}
+
+#[given(
+    expr = "the Debug adapter's row names the hot replace request {string} on the event {string}"
+)]
+fn adapter_names_hot_replace(world: &mut VardeWorld, request: String, event: String) {
+    let language = world
+        .state
+        .adapters
+        .keys()
+        .next()
+        .cloned()
+        .expect("a Debug adapter is configured");
+    let adapter = world
+        .state
+        .adapters
+        .get_mut(&language)
+        .expect("the configured adapter");
+    adapter.hot_replace = Some(startup::HotReplace { request, event });
+}
+
+#[given(expr = "I ask for a hot replace from the command line")]
+#[when(expr = "I ask for a hot replace from the command line")]
+fn ask_for_a_hot_replace(world: &mut VardeWorld) {
+    world.send(Event::HotReplace);
+}
+
+#[given(expr = "the Debug adapter answers {string}")]
+#[when(expr = "the Debug adapter answers {string}")]
+fn adapter_answers_plainly(world: &mut VardeWorld, command: String) {
+    let seq = last_request(world, &command)["seq"].clone();
+    adapter_event(
+        world,
+        json!({ "type": "response", "request_seq": seq, "success": true, "command": command, "body": {} }),
+    );
+}
+
+#[then(expr = "the Transport has no {string} Chip")]
+fn transport_has_no_chip(world: &mut VardeWorld, name: String) {
+    let chips = varde::debug::strip_transport(&world.state);
+    assert!(
+        !chips.iter().any(|chip| chip.name == name),
+        "the Transport offers {:?}",
+        chips.iter().map(|chip| chip.name).collect::<Vec<_>>()
+    );
+}
 
 #[given(expr = "the screen is {int} columns by {int} rows")]
 #[when(expr = "the screen is resized to {int} columns by {int} rows")]
@@ -13462,6 +13508,7 @@ fn adapter_reports_continued(world: &mut VardeWorld) {
     );
 }
 
+#[given(expr = "the Debug adapter answers {string} with the error {string}")]
 #[when(expr = "the Debug adapter answers {string} with the error {string}")]
 fn adapter_answers_with_error(world: &mut VardeWorld, command: String, error: String) {
     let seq = last_request(world, &command)["seq"].clone();

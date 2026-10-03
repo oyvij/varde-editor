@@ -74,3 +74,46 @@ headers, but DAP messages have no `jsonrpc` field, so the language server's mess
 read them. The channel is a second one, not a reuse.
 
 The behaviour this serves is specified in issue #45.
+
+## Amendment: hot code replace is a second thing the row names as data
+
+A program rebuilt under a paused process keeps running the bytecode it was loaded with. DAP has no
+request for replacing it, so the adapters that can do it expose their own. The row names them:
+
+```toml
+hot_replace = { request = "redefineClasses", event = "hotcodereplace" }
+```
+
+Varde sends `request` when the adapter sends `event`, and when `:hotswap` or the Debug group's Chip
+asks for it. It knows neither name, exactly as it does not know what
+`vscode.java.startDebugSession` is. A row without the key offers no hot replace at all — no Chip,
+and a Command that declines out loud. This is the second place the row carries adapter-specific
+protocol as data, and it is held to the same falsifiable grep: every hit for `redefineClasses` or
+`hotcodereplace` in `src/` is in the programs template or a comment.
+
+The outcome is read from the protocol and nothing else. `success: false` is a failure, and its
+`message` is shown as the adapter wrote it; anything else is a success. An adapter that answers
+`success: true` with a body listing the classes it could not replace is therefore reported as a
+success, because the shape of that body is the one adapter's and reading it would be the branch this
+ADR forbids. The cost is a notice that overstates one adapter's partial replace; the alternative is
+a parser for a body no second adapter shares.
+
+A failure offers a restart and takes nothing. The session carries on with the old code, because the
+pause is the reader's and a debugger that restarts a process on its own loses the state they were
+looking at. The offer is the restart that already exists, undimmed for as long as the failure
+stands, and taking it disconnects the adapter and starts the same Launch configuration once the
+process is gone — `State::relaunch` is that one deferred Launch, because starting a session while
+the old adapter is still being torn down would hand the new one the old one's exit.
+
+**Does the event fire for builds run outside the language server?** For java-debug, no — not
+reliably. Eclipse's hot code replace is driven off resource deltas on `.class` files on the
+project's build path, so jdtls's own builds always announce themselves and a Maven, Gradle or
+dev-server build only does when its output lands on that build path *and* jdtls has refreshed it as
+a resource change. The request itself has no such limit: it reads the class files that are on disk
+when it runs, so the manual trigger is what covers an external rebuild, and the brief stands as
+written — which is why `:hotswap` and the Chip exist rather than the event alone. What the JVM
+refuses is separate and unchanged by either path: method bodies can be replaced, a changed class
+shape cannot, and that refusal is the failure the notice carries.
+
+This was read off Eclipse's JDT debug documentation and java-debug's own, not verified against a
+live jdtls; the acceptance run on a Java project is the thing that would.

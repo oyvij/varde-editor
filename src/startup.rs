@@ -653,10 +653,18 @@ install.linux = "curl -sL --create-dirs https://github.com/vadimcn/codelldb/rele
 # a class is. `plugin` is merged into the `[lsp.java]` server's
 # `initializationOptions` when it starts, and `command` is what that server is
 # sent once a session begins; it answers with the port the adapter listens on.
+#
+# `hot_replace` is how a rebuilt program reaches a paused process. The protocol
+# has no request for it, so the row names the adapter's own: `request` is sent
+# whenever the adapter sends `event`, and by `:hotswap` or the Chip. Varde knows
+# neither name, the way it knows nothing about `command` above
+# (`docs/adr/0021-a-debug-adapter-is-a-hosted-child-reached-three-ways.md`). A
+# row without the key offers no hot replace.
 [dap.java]
 server = "java"
 command = "vscode.java.startDebugSession"
 plugin = { bundles = ["${java_debug_plugin}"] }
+hot_replace = { request = "redefineClasses", event = "hotcodereplace" }
 
 # js-debug listens on the port it is given, and asks for a child session per
 # process and worker it attaches to, each over another connection to that port.
@@ -1041,6 +1049,14 @@ pub struct Adapter {
     pub server: Option<String>,
     #[serde(default)]
     pub plugin: Option<serde_json::Map<String, serde_json::Value>>,
+    #[serde(default)]
+    pub hot_replace: Option<HotReplace>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct HotReplace {
+    pub request: String,
+    pub event: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
