@@ -3607,6 +3607,21 @@ const NOTICES: &[(&str, &str, ui::Tone)] = &[
         ui::Tone::Warning,
     ),
     (
+        "hot-replaced",
+        "The running program has the new code",
+        ui::Tone::Notice,
+    ),
+    (
+        "hot-replace-failed",
+        "The running program still has the old code — Space r restarts it",
+        ui::Tone::Warning,
+    ),
+    (
+        "no-hot-replace",
+        "This Debug adapter's row names no hot replace request",
+        ui::Tone::Warning,
+    ),
+    (
         "no-language-server",
         "No language server answering for this file — none is configured, or it has not started",
         ui::Tone::Warning,

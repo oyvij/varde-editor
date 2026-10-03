@@ -208,6 +208,7 @@ pub const REMOVE_WATCH: &str = "debug-remove-watch";
 pub const EVALUATE: &str = "debug-evaluate";
 pub const ROW_ASK_AI: &str = "debug-ask-ai-value";
 pub const NEXT_THREAD: &str = "debug-next-thread";
+pub const HOT_REPLACE: &str = "debug-hot-replace";
 
 pub fn row_actions(state: &crate::State) -> Vec<&'static str> {
     match selected(state) {
@@ -320,7 +321,7 @@ pub fn strip_transport(state: &crate::State) -> Vec<crate::Chip> {
                 stepping,
             ),
             chip(STOP, "stop", "\u{25a0}", "C-F2 \u{2423}q", Hue::Halt, false),
-            restart(true),
+            restart(!session.offered),
             chip(
                 ASK_AI,
                 "ask-ai",
@@ -338,6 +339,16 @@ pub fn strip_transport(state: &crate::State) -> Vec<crate::Chip> {
                 session.others.is_empty(),
             ),
         ]);
+        if hot_replace(state).is_some() {
+            chips.push(chip(
+                HOT_REPLACE,
+                "hot-replace",
+                "\u{21c4}",
+                "",
+                Hue::Go,
+                between,
+            ));
+        }
     }
     if state.debug.is_none() && state.last_launch.is_some() {
         chips.push(restart(false));
@@ -445,6 +456,7 @@ pub struct Session {
     filters: Vec<Filter>,
     can_name_class: bool,
     class: Option<String>,
+    offered: bool,
     corner: layout::Corner,
     strip: layout::Group,
     children: BTreeMap<usize, Child>,
@@ -729,11 +741,19 @@ pub fn launch_with(next: &mut State, launch: crate::startup::Launch) -> Vec<Effe
         filters: Vec::new(),
         can_name_class: false,
         class: None,
+        offered: false,
         corner: next.corner,
         strip: next.strip,
     });
     next.strip = layout::Group::Debug;
     vec![effect]
+}
+
+pub fn relaunch(next: &mut State) -> Vec<Effect> {
+    match next.relaunch.take() {
+        Some(launch) => launch_with(next, launch),
+        None => Vec::new(),
+    }
 }
 
 pub fn waiting_on(state: &State) -> Option<(&str, u16)> {
@@ -774,6 +794,7 @@ pub fn reattach(next: &mut State) -> Vec<Effect> {
         others: BTreeMap::new(),
         children: BTreeMap::new(),
         previous: None,
+        offered: false,
         ..session
     });
     next.strip = layout::Group::Debug;
@@ -991,6 +1012,7 @@ pub fn received(next: &mut State, json: &str, from: usize) -> Vec<Effect> {
 }
 
 fn answered(next: &mut State, message: &Value) -> Vec<Effect> {
+    let named = hot_replace(next).map(|named| named.request.clone());
     let session = next.debug.as_mut().expect("a session");
     let answering = message["request_seq"].as_i64().unwrap_or_default();
     let Some(Ask {
@@ -1051,6 +1073,13 @@ fn answered(next: &mut State, message: &Value) -> Vec<Effect> {
             "setVariable" => {
                 next.refusal = Some(Refusal::SetValueFailed(adapter_error(message, &command)));
                 Vec::new()
+            }
+            replace if Some(replace) == named.as_deref() => {
+                session.offered = true;
+                vec![Effect::notify_about(
+                    "hot-replace-failed",
+                    adapter_error(message, &command),
+                )]
             }
             _ => Vec::new(),
         };
@@ -1249,6 +1278,10 @@ fn answered(next: &mut State, message: &Value) -> Vec<Effect> {
             Vec::new()
         }
         "disconnect" => let_go(next),
+        replace if Some(replace) == named.as_deref() => {
+            session.offered = false;
+            vec![Effect::Notify("hot-replaced")]
+        }
         _ => Vec::new(),
     }
 }
@@ -1356,6 +1389,11 @@ fn told(next: &mut State, message: &Value, from: usize) -> Vec<Effect> {
             let effects = ask_all(session, "disconnect", json!({}));
             next.stepping = false;
             effects
+        }
+        Some(named) if hot_replace(next).is_some_and(|row| row.event == named) => {
+            let request = hot_replace(next).expect("a named request").request.clone();
+            let session = next.debug.as_mut().expect("a session");
+            vec![ask_on(session, from, &request, json!({}))]
         }
         _ => Vec::new(),
     }
@@ -1588,8 +1626,30 @@ pub fn restart(next: &mut State) -> Vec<Effect> {
         next.refusal = Some(Refusal::NoLastSession);
         return Vec::new();
     };
-    let effects = launch_with(next, launch);
+    let offered = next.debug.as_ref().is_some_and(|session| session.offered);
+    let effects = match offered {
+        true => {
+            next.relaunch = Some(launch);
+            stop(next)
+        }
+        false => launch_with(next, launch),
+    };
     lit(next, RESTART, &effects);
+    effects
+}
+
+fn hot_replace(state: &State) -> Option<&crate::startup::HotReplace> {
+    let session = state.debug.as_ref()?;
+    state.adapters.get(&session.adapter)?.hot_replace.as_ref()
+}
+
+pub fn replace_classes(next: &mut State) -> Vec<Effect> {
+    let Some(request) = hot_replace(next).map(|named| named.request.clone()) else {
+        return vec![Effect::Notify("no-hot-replace")];
+    };
+    let session = next.debug.as_mut().expect("a session");
+    let effects = vec![ask_on(session, 0, &request, json!({}))];
+    lit(next, HOT_REPLACE, &effects);
     effects
 }
 
@@ -3133,6 +3193,7 @@ pub(crate) fn paused(mut state: State) -> State {
             install: BTreeMap::new(),
             server: None,
             plugin: None,
+            hot_replace: None,
         },
     );
     state.launches.insert(
@@ -3345,6 +3406,7 @@ mod tests {
                 install: BTreeMap::new(),
                 server: None,
                 plugin: None,
+                hot_replace: None,
             },
         );
         can.launches.insert(
@@ -3883,6 +3945,7 @@ mod tests {
                 install: BTreeMap::new(),
                 server: None,
                 plugin: None,
+                hot_replace: None,
             },
         );
         state.launches.insert(
@@ -3958,6 +4021,7 @@ mod tests {
                 install: BTreeMap::new(),
                 server: None,
                 plugin: None,
+                hot_replace: None,
             },
         );
         state.launches.insert(
@@ -4311,6 +4375,7 @@ mod tests {
                 install: BTreeMap::new(),
                 server: Some("java".to_string()),
                 plugin: None,
+                hot_replace: None,
             },
         );
         state.launches.insert(
@@ -4361,6 +4426,7 @@ mod tests {
                 install: BTreeMap::new(),
                 server: None,
                 plugin: None,
+                hot_replace: None,
             },
         );
         state.launches.insert(
