@@ -208,6 +208,17 @@ fn config_layer(path: &Path) -> Option<String> {
     read(path).or_else(|| path.try_exists().unwrap_or(false).then(String::new))
 }
 
+fn config_text(path: &Path) -> Option<String> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => Some(text),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Some(String::new()),
+        Err(error) => {
+            eprintln!("varde: cannot read {}: {error}", path.display());
+            None
+        }
+    }
+}
+
 fn entries(folder: &Path) -> Vec<Entry> {
     std::fs::read_dir(folder)
         .map(|dir| {
@@ -2706,20 +2717,16 @@ fn perform_jobs(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>) {
             };
             queue.push_back(Event::Branches(branching));
         }
+        Effect::ReadLaunchTarget { path } => {
+            queue.push_back(Event::LaunchTargetRead(config_text(&path)));
+        }
         Effect::ReadGlobalConfig {
             path,
             kind,
             name,
             write,
         } => {
-            let text = match std::fs::read_to_string(&path) {
-                Ok(text) => Some(text),
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Some(String::new()),
-                Err(error) => {
-                    eprintln!("varde: cannot read {}: {error}", path.display());
-                    None
-                }
-            };
+            let text = config_text(&path);
             queue.push_back(Event::GlobalConfigRead {
                 kind,
                 name,
@@ -3604,6 +3611,21 @@ const NOTICES: &[(&str, &str, ui::Tone)] = &[
     (
         "launch-failed",
         "The Debug adapter would not start the program",
+        ui::Tone::Warning,
+    ),
+    (
+        "hot-replaced",
+        "The running program has the new code",
+        ui::Tone::Notice,
+    ),
+    (
+        "hot-replace-failed",
+        "The running program still has the old code — Space r restarts it",
+        ui::Tone::Warning,
+    ),
+    (
+        "no-hot-replace",
+        "This Debug adapter's row names no hot replace request",
         ui::Tone::Warning,
     ),
     (

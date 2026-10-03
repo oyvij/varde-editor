@@ -83,6 +83,8 @@ pub enum Refusal {
     NoLastSession,
     NoRunMark,
     SetValueFailed(String),
+    LaunchNameTaken(String),
+    LaunchFieldNeeded(String),
 }
 
 impl Refusal {
@@ -104,6 +106,8 @@ impl Refusal {
             Refusal::NoLastSession => "no-last-session",
             Refusal::NoRunMark => "no-run-mark",
             Refusal::SetValueFailed(_) => "set-value-failed",
+            Refusal::LaunchNameTaken(_) => "launch-name-taken",
+            Refusal::LaunchFieldNeeded(_) => "launch-field-needed",
         }
     }
 }

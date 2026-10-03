@@ -390,6 +390,8 @@ mod tests {
                 install: BTreeMap::new(),
                 server: None,
                 plugin: None,
+                hot_replace: None,
+                ..Default::default()
             },
         );
         let offered = crate::update(&state, crate::Event::OfferRun(1)).0;

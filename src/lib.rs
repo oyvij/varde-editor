@@ -12,6 +12,7 @@ pub mod format;
 pub mod highlight;
 pub mod history;
 pub mod keys;
+pub mod launch;
 pub mod layout;
 pub mod lsp;
 pub mod minimap;
@@ -232,6 +233,7 @@ pub enum Modal {
     Launches {
         row: usize,
     },
+    NewLaunch(launch::Draft),
     RunMark {
         line: usize,
         mark: run::Mark,
@@ -574,6 +576,7 @@ pub enum Event {
     DebugStep(debug::Step),
     DebugStop,
     DebugRestart,
+    HotReplace,
     LeaveStepping,
     CandidatesDue,
     PointerMoved(Pointed),
@@ -589,6 +592,12 @@ pub enum Event {
         write: tools::Write,
         text: Option<String>,
     },
+    CreateLaunch,
+    LaunchSlot(launch::Slot),
+    LaunchDraft(String),
+    SwitchLaunchChoice,
+    ConfirmLaunch,
+    LaunchTargetRead(Option<String>),
     ConfigEdited {
         global: startup::OnDisk,
         project: startup::OnDisk,
@@ -837,6 +846,9 @@ pub enum Effect {
         kind: tools::Kind,
         name: String,
         write: tools::Write,
+    },
+    ReadLaunchTarget {
+        path: PathBuf,
     },
     ReadInstallStatus(PathBuf),
     ReadBranches,
@@ -1095,6 +1107,7 @@ pub struct State {
     pub launches: BTreeMap<String, startup::Launch>,
     pub runs: BTreeMap<String, startup::Run>,
     pub last_launch: Option<startup::Launch>,
+    pub relaunch: Option<startup::Launch>,
     pub debug: Option<debug::Session>,
     pub stepping: bool,
     pub tick: u64,
@@ -1261,6 +1274,7 @@ impl Default for State {
             launches: BTreeMap::new(),
             runs: BTreeMap::new(),
             last_launch: None,
+            relaunch: None,
             debug: None,
             stepping: false,
             output_running: false,
@@ -4665,7 +4679,7 @@ fn on_debug(state: &State, mut next: State, event: Event, wheeled: bool) -> Answ
         Event::DapStarted { from } => debug::started(&mut next, from),
         Event::DapGone { .. } if state.debug.is_none() || debug::waiting_on(state).is_some() => {
             next.refusal = state.refusal.clone();
-            vec![]
+            debug::relaunch(&mut next)
         }
         Event::DapGone { why, from } => debug::gone(&mut next, why, from),
         Event::DapPortAnswers => debug::reattach(&mut next),
@@ -4681,9 +4695,77 @@ fn on_debug(state: &State, mut next: State, event: Event, wheeled: bool) -> Answ
         Event::DebugStep(step) => debug::step(&mut next, step),
         Event::DebugStop => debug::stop(&mut next),
         Event::DebugRestart => debug::restart(&mut next),
+        Event::HotReplace => debug::replace_classes(&mut next),
         Event::LeaveStepping => {
             next.stepping = false;
             vec![]
+        }
+        Event::CreateLaunch => {
+            next.modal = Modal::NewLaunch(launch::open(&next));
+            vec![]
+        }
+        Event::LaunchSlot(slot) => {
+            if let Modal::NewLaunch(draft) = &mut next.modal {
+                draft.slot = slot;
+            }
+            vec![]
+        }
+        Event::LaunchDraft(text) => {
+            if let Modal::NewLaunch(draft) = &mut next.modal {
+                launch::typed(draft, text);
+            }
+            vec![]
+        }
+        Event::SwitchLaunchChoice => {
+            let mut draft = match &next.modal {
+                Modal::NewLaunch(draft) => draft.clone(),
+                _ => return Ok(settle(next, vec![], wheeled)),
+            };
+            launch::switch(&next, &mut draft);
+            next.modal = Modal::NewLaunch(draft);
+            vec![]
+        }
+        Event::ConfirmLaunch => {
+            let Modal::NewLaunch(draft) = &next.modal else {
+                return Ok(settle(next, vec![], wheeled));
+            };
+            match launch::missing(&next, draft) {
+                Some(field) => {
+                    next.refusal = Some(preview::Refusal::LaunchFieldNeeded(field));
+                    vec![]
+                }
+                None => vec![Effect::ReadLaunchTarget {
+                    path: launch::path(&next, draft.target),
+                }],
+            }
+        }
+        Event::LaunchTargetRead(text) => {
+            let Modal::NewLaunch(draft) = next.modal.clone() else {
+                return Ok(settle(next, vec![], wheeled));
+            };
+            let created = match text {
+                Some(text) => launch::created(&next, &draft, &text),
+                None => Err(launch::unreadable(draft.target)),
+            };
+            match created {
+                Err(refusal) => {
+                    next.refusal = Some(refusal);
+                    vec![]
+                }
+                Ok((contents, name, entry)) => {
+                    next.launches.insert(name.clone(), entry);
+                    let row = next
+                        .launches
+                        .keys()
+                        .position(|offered| *offered == name)
+                        .unwrap_or(0);
+                    next.modal = Modal::Launches { row };
+                    vec![Effect::WriteFile {
+                        path: launch::path(&next, draft.target),
+                        contents,
+                    }]
+                }
+            }
         }
         Event::MoveLaunchRow(direction) => {
             let last = state.launches.len().saturating_sub(1);
@@ -5772,6 +5854,7 @@ fn on_pane_action(state: &State, mut next: State, event: Event, wheeled: bool) -
         }
         Event::PaneAction(debug::STOP) => return Ok(update(state, Event::DebugStop)),
         Event::PaneAction(debug::RESTART) => return Ok(update(state, Event::DebugRestart)),
+        Event::PaneAction(debug::HOT_REPLACE) => return Ok(update(state, Event::HotReplace)),
         Event::PaneAction(debug::TOGGLE_OUTPUT) => return Ok(update(state, Event::ToggleOutput)),
         Event::PaneAction(debug::CLEAR_ALL) if !state.breakpoints.is_empty() => {
             next.breakpoints.clear();

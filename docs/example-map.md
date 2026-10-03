@@ -3185,6 +3185,18 @@ session. **Debug** starts a session for exactly the marked function, and restart
 (`launch` or `attach`), `args` and optionally `reattach`. It is allowed in both config layers, and a
 project entry beats a global one of the same name — R9's precedence, applied by name. `args` reach the
 adapter as opaque JSON. The launch palette lists both layers.
+**R41.3a** `c` in the launch palette opens a form that writes one. Its fields are the name, the
+adapter chosen from the configured `[dap.*]` rows, the request, the arguments that row lists for
+that request — `launch_args` or `attach_args`, each a key, a one-line explanation and whether it is
+required — and the target, `project` by default or `global`, switchable in the form and `global`
+only in a Bare workspace. A row listing no arguments offers free key/value pairs instead, so no
+branch in Varde names an adapter (R41.2). Confirming writes `[launch.<name>]` with `adapter`,
+`request` and `args` into the chosen file through `toml_edit`, keeping its comments and layout and
+creating a missing project file; an argument whose text reads as a TOML number, boolean, list or
+table is written as one, and anything else as a string. A name the target file already holds
+refuses as `launch-name-taken`, and a required field left empty refuses as `launch-field-needed`
+naming the field; neither writes anything. On success the palette shows the new entry selected and
+does not start it.
 **R41.4** Startup follows the protocol: initialize → launch or attach → wait for `initialized` →
 `setBreakpoints` per file → `setExceptionBreakpoints` → `configurationDone`. Nothing after launch is
 sent before `initialized`.

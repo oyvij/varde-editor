@@ -121,6 +121,7 @@ pub struct VardeWorld {
     dwell_armed: Option<u64>,
     reported: Vec<String>,
     hold_site_texts: bool,
+    configs_unreadable: bool,
     named: Vec<String>,
     dap: FakeAdapter,
 }
@@ -982,6 +983,19 @@ impl VardeWorld {
                     Some(_) => story::Branching::Listed(self.branch_refs.clone()),
                 };
                 self.send_now(Event::Branches(branching));
+            }
+            Effect::ReadLaunchTarget { path } => {
+                if self.configs_unreadable {
+                    self.send_now(Event::LaunchTargetRead(None));
+                    return;
+                }
+                let text = self.files.get(&path).cloned().or_else(|| {
+                    match path == self.startup.varde_home.join(startup::CONFIG_FILE) {
+                        true => self.startup.global_config.clone(),
+                        false => self.startup.project_config.clone(),
+                    }
+                });
+                self.send_now(Event::LaunchTargetRead(Some(text.unwrap_or_default())));
             }
             Effect::ReadGlobalConfig {
                 path,
@@ -3926,8 +3940,28 @@ fn debug_adapter_configured(world: &mut VardeWorld, language: String) {
             install: BTreeMap::new(),
             server: None,
             plugin: None,
+            hot_replace: None,
+            ..Default::default()
         });
-    let row = format!("[dap.{language}]\ncommand = \"{}\"", adapter.command);
+    let list = |key: &str, args: &[startup::Argument]| match args.is_empty() {
+        true => String::new(),
+        false => format!(
+            "\n{key} = [{}]",
+            args.iter()
+                .map(|argument| format!(
+                    "{{ key = {:?}, explain = {:?}, required = {} }}",
+                    argument.key, argument.explain, argument.required
+                ))
+                .collect::<Vec<String>>()
+                .join(", ")
+        ),
+    };
+    let row = format!(
+        "[dap.{language}]\ncommand = \"{}\"{}{}",
+        adapter.command,
+        list("launch_args", &adapter.launch_args),
+        list("attach_args", &adapter.attach_args),
+    );
     world.startup.global_config = Some(match world.startup.global_config.take() {
         Some(config) => format!("{config}\n{row}"),
         None => row,
@@ -3950,6 +3984,51 @@ fn debug_adapter_configured(world: &mut VardeWorld, language: String) {
 
 #[given(expr = "no Debug session exists")]
 fn no_debug_session(_world: &mut VardeWorld) {}
+
+#[given(
+    expr = "the Debug adapter's row names the hot replace request {string} on the event {string}"
+)]
+fn adapter_names_hot_replace(world: &mut VardeWorld, request: String, event: String) {
+    let language = world
+        .state
+        .adapters
+        .keys()
+        .next()
+        .cloned()
+        .expect("a Debug adapter is configured");
+    let adapter = world
+        .state
+        .adapters
+        .get_mut(&language)
+        .expect("the configured adapter");
+    adapter.hot_replace = Some(startup::HotReplace { request, event });
+}
+
+#[given(expr = "I ask for a hot replace from the command line")]
+#[when(expr = "I ask for a hot replace from the command line")]
+fn ask_for_a_hot_replace(world: &mut VardeWorld) {
+    world.send(Event::HotReplace);
+}
+
+#[given(expr = "the Debug adapter answers {string}")]
+#[when(expr = "the Debug adapter answers {string}")]
+fn adapter_answers_plainly(world: &mut VardeWorld, command: String) {
+    let seq = last_request(world, &command)["seq"].clone();
+    adapter_event(
+        world,
+        json!({ "type": "response", "request_seq": seq, "success": true, "command": command, "body": {} }),
+    );
+}
+
+#[then(expr = "the Transport has no {string} Chip")]
+fn transport_has_no_chip(world: &mut VardeWorld, name: String) {
+    let chips = varde::debug::strip_transport(&world.state);
+    assert!(
+        !chips.iter().any(|chip| chip.name == name),
+        "the Transport offers {:?}",
+        chips.iter().map(|chip| chip.name).collect::<Vec<_>>()
+    );
+}
 
 #[given(expr = "the screen is {int} columns by {int} rows")]
 #[when(expr = "the screen is resized to {int} columns by {int} rows")]
@@ -8162,6 +8241,7 @@ fn modal_is(world: &mut VardeWorld, expected: String) {
         Modal::Chord => "chord",
         Modal::Tools { .. } => "tools",
         Modal::Launches { .. } => "launches",
+        Modal::NewLaunch(_) => "new-launch",
         Modal::Branches { .. } => "branches",
         Modal::Comment => "comment",
         Modal::NameBox { .. } => "name-box",
@@ -13344,6 +13424,7 @@ fn debug_adapter_ready(world: &mut VardeWorld, _language: String) {
     world.dap.ready = true;
 }
 
+#[given(expr = "I open the launch palette")]
 #[when(expr = "I open the launch palette")]
 fn open_launch_palette(world: &mut VardeWorld) {
     load_debug_config(world);
@@ -13379,6 +13460,308 @@ fn launch_palette_offers(world: &mut VardeWorld, name: String) {
         varde::debug::launches(&world.state).contains(&name.as_str()),
         "offered: {:?}",
         varde::debug::launches(&world.state)
+    );
+}
+
+fn launch_draft(world: &VardeWorld) -> varde::launch::Draft {
+    match &world.state.modal {
+        Modal::NewLaunch(draft) => draft.clone(),
+        other => panic!("the Launch form is not open: {other:?}"),
+    }
+}
+
+fn launch_slots(world: &VardeWorld) -> Vec<varde::launch::Slot> {
+    varde::launch::slots(&world.state, &launch_draft(world))
+}
+
+fn focus_launch_field(world: &mut VardeWorld, field: &str) {
+    let wanted = launch_slots(world)
+        .into_iter()
+        .find(|slot| varde::launch::label(slot) == field)
+        .unwrap_or_else(|| {
+            panic!(
+                "the Launch form offers no {field:?}: {:?}",
+                launch_slots(world)
+                    .iter()
+                    .map(varde::launch::label)
+                    .collect::<Vec<String>>()
+            )
+        });
+    for _ in 0..=launch_slots(world).len() {
+        if launch_draft(world).slot == wanted {
+            return;
+        }
+        route_key(world, "Tab", 0);
+    }
+    panic!("Tab never reached {field:?}");
+}
+
+fn fill_launch_field(world: &mut VardeWorld, field: &str, value: &str) {
+    focus_launch_field(world, field);
+    let choice = matches!(field, "adapter" | "request" | "target");
+    if choice {
+        for _ in 0..=world.state.adapters.len() + 2 {
+            let draft = launch_draft(world);
+            if varde::launch::text(&draft, &draft.slot) == value {
+                return;
+            }
+            route_key(world, " ", 0);
+        }
+        panic!("the Launch form never offered {value:?} for {field:?}");
+    }
+    for character in value.chars() {
+        route_key(world, &character.to_string(), 0);
+    }
+}
+
+#[given(expr = "I open the Launch form for the adapter {string}")]
+#[when(expr = "I open the Launch form for the adapter {string}")]
+fn open_launch_form(world: &mut VardeWorld, adapter: String) {
+    started(world);
+    open_launch_palette(world);
+    route_key(world, "c", 0);
+    fill_launch_field(world, "adapter", &adapter);
+}
+
+#[when("I switch the Launch form's request")]
+fn switch_launch_request(world: &mut VardeWorld) {
+    focus_launch_field(world, "request");
+    route_key(world, " ", 0);
+}
+
+fn fill_launch(world: &mut VardeWorld, target: Option<&str>, step: &Step) {
+    started(world);
+    open_launch_palette(world);
+    route_key(world, "c", 0);
+    let rows = &step.table().expect("a table of fields").rows;
+    let adapter = rows
+        .iter()
+        .find(|row| row[0] == "adapter")
+        .map(|row| row[1].clone());
+    if let Some(adapter) = adapter {
+        fill_launch_field(world, "adapter", &adapter);
+    }
+    if let Some(request) = rows.iter().find(|row| row[0] == "request") {
+        fill_launch_field(world, "request", &request[1]);
+    }
+    for row in rows {
+        if row[0] == "adapter" || row[0] == "request" {
+            continue;
+        }
+        fill_launch_field(world, &row[0], &row[1]);
+    }
+    if let Some(target) = target {
+        fill_launch_field(world, "target", target);
+    }
+}
+
+fn create_launch(world: &mut VardeWorld, target: Option<&str>, step: &Step) {
+    fill_launch(world, target, step);
+    route_key(world, "Enter", 0);
+}
+
+#[given("I filled in a Launch configuration with:")]
+fn filled_in_launch(world: &mut VardeWorld, step: &Step) {
+    fill_launch(world, None, step);
+}
+
+#[when(expr = "I click the Launch box's {string} Chip")]
+fn click_launch_chip(world: &mut VardeWorld, name: String) {
+    let (width, height) = world.screen();
+    let (area, _) =
+        varde::launch::shown(&world.state, width, height).expect("the Launch box is open");
+    let chips = varde::launch::chips(&world.state);
+    let at = chips
+        .iter()
+        .position(|chip| chip.name == name)
+        .unwrap_or_else(|| panic!("the Launch box offers no {name:?} Chip"));
+    let labels = layout::chip_labels(&chips, area.width, 0);
+    let column = (area.x..area.right())
+        .find(|&column| layout::strip_at(area, &labels, column) == Some(at))
+        .expect("the Chip on screen");
+    world.pointer = mouse::Pointer::default();
+    world.report(mouse::Kind::LeftDown, column, area.y);
+    world.report(mouse::Kind::LeftUp, column, area.y);
+}
+
+#[when("I create a Launch configuration with:")]
+fn create_launch_here(world: &mut VardeWorld, step: &Step) {
+    create_launch(world, None, step);
+}
+
+#[when("I create a Launch configuration in the global layer with:")]
+fn create_launch_globally(world: &mut VardeWorld, step: &Step) {
+    create_launch(world, Some("global"), step);
+}
+
+#[then(expr = "the Launch form offers the field {string}")]
+fn launch_form_offers(world: &mut VardeWorld, field: String) {
+    let offered: Vec<String> = launch_slots(world)
+        .iter()
+        .map(varde::launch::label)
+        .collect();
+    assert!(offered.contains(&field), "offered: {offered:?}");
+}
+
+#[then(expr = "the Launch form offers no field {string}")]
+fn launch_form_offers_no(world: &mut VardeWorld, field: String) {
+    let offered: Vec<String> = launch_slots(world)
+        .iter()
+        .map(varde::launch::label)
+        .collect();
+    assert!(!offered.contains(&field), "offered: {offered:?}");
+}
+
+#[then(expr = "the Launch form explains the field {string} as {string}")]
+fn launch_form_explains(world: &mut VardeWorld, field: String, explain: String) {
+    let argument = varde::launch::arguments(&world.state, &launch_draft(world))
+        .into_iter()
+        .find(|row| row.key == field)
+        .unwrap_or_else(|| panic!("the form lists no {field:?}"));
+    assert_eq!(argument.explain, explain);
+}
+
+#[then(expr = "the Launch form names {string} as required")]
+fn launch_form_requires(world: &mut VardeWorld, field: String) {
+    let argument = varde::launch::arguments(&world.state, &launch_draft(world))
+        .into_iter()
+        .find(|row| row.key == field)
+        .unwrap_or_else(|| panic!("the form lists no {field:?}"));
+    assert!(argument.required, "{field} is not required");
+}
+
+#[then("the Launch form offers a free key and value field")]
+fn launch_form_offers_free_pair(world: &mut VardeWorld) {
+    let offered: Vec<String> = launch_slots(world)
+        .iter()
+        .map(varde::launch::label)
+        .collect();
+    assert!(
+        offered.contains(&"key 1".to_string()) && offered.contains(&"value 1".to_string()),
+        "offered: {offered:?}"
+    );
+}
+
+#[then("the Launch form offers no target field")]
+fn launch_form_offers_no_target(world: &mut VardeWorld) {
+    launch_form_offers_no(world, "target".to_string());
+}
+
+#[then(expr = "the Launch form's target is {string}")]
+fn launch_form_target(world: &mut VardeWorld, target: String) {
+    assert_eq!(launch_draft(world).target.as_str(), target);
+}
+
+#[then(expr = "the Launch box has {string} selected")]
+fn launch_box_selects(world: &mut VardeWorld, name: String) {
+    let Modal::Launches { row } = world.state.modal else {
+        panic!("the Launch box is not open: {:?}", world.state.modal);
+    };
+    assert_eq!(
+        varde::debug::launches(&world.state).get(row),
+        Some(&name.as_str())
+    );
+}
+
+#[then("no Debug adapter was asked for")]
+fn no_adapter_asked_for(world: &mut VardeWorld) {
+    assert!(
+        world.dap.spawned.is_empty(),
+        "spawned: {:?}",
+        world.dap.spawned
+    );
+    assert!(
+        world.dap.dialed.is_empty(),
+        "dialed: {:?}",
+        world.dap.dialed
+    );
+}
+
+#[then(expr = "the refusal names {string}")]
+fn refusal_names(world: &mut VardeWorld, named: String) {
+    let refusal = world.state.refusal.clone().expect("a refusal");
+    let said = match refusal {
+        varde::preview::Refusal::LaunchFieldNeeded(field) => field,
+        varde::preview::Refusal::LaunchNameTaken(name) => name,
+        other => panic!("{other:?} names nothing"),
+    };
+    assert_eq!(said, named);
+}
+
+#[given("the config files can no longer be read")]
+fn configs_unreadable(world: &mut VardeWorld) {
+    started(world);
+    world.configs_unreadable = true;
+}
+
+#[then(expr = "the refusal names the layer {string}")]
+fn refusal_names_layer(world: &mut VardeWorld, layer: String) {
+    let refusal = world.state.refusal.clone().expect("a refusal");
+    let varde::preview::Refusal::BrokenConfig(error) = refusal else {
+        panic!("{refusal:?} names no layer");
+    };
+    assert_eq!(error.file, layer);
+}
+
+#[given("the project config has since been edited to:")]
+fn project_config_edited(world: &mut VardeWorld, step: &Step) {
+    started(world);
+    let path = world.startup.root.join(".varde").join(startup::CONFIG_FILE);
+    world.files.insert(
+        path,
+        step.docstring().expect("docstring").trim().to_string(),
+    );
+}
+
+fn written_launch(world: &VardeWorld, name: &str) -> startup::Launch {
+    let path = varde::launch::path(&world.state, varde::launch::Target::Project);
+    let text = world
+        .files
+        .get(&path)
+        .unwrap_or_else(|| panic!("nothing was written to {}", path.display()));
+    let table: toml::Table = text.parse().expect("the written file parses");
+    table
+        .get("launch")
+        .and_then(toml::Value::as_table)
+        .and_then(|rows| rows.get(name))
+        .cloned()
+        .unwrap_or_else(|| panic!("no [launch.{name}] in:\n{text}"))
+        .try_into()
+        .expect("the written row is a launch configuration")
+}
+
+#[then(expr = "the project config names the launch {string}")]
+fn project_config_names_launch(world: &mut VardeWorld, name: String) {
+    written_launch(world, &name);
+}
+
+#[then(expr = "the project launch {string} uses the adapter {string} with the request {string}")]
+fn project_launch_uses(world: &mut VardeWorld, name: String, adapter: String, request: String) {
+    let launch = written_launch(world, &name);
+    assert_eq!(launch.adapter, adapter);
+    assert_eq!(launch.request, request);
+}
+
+#[then(expr = "the project launch {string} sets the argument {string} to {string}")]
+fn project_launch_sets(world: &mut VardeWorld, name: String, key: String, value: String) {
+    let launch = written_launch(world, &name);
+    assert_eq!(
+        launch.args.get(&key),
+        Some(&json!(value)),
+        "wrote {:?}",
+        launch.args
+    );
+}
+
+#[then(expr = "the project launch {string} sets the argument {string} to the number {string}")]
+fn project_launch_sets_number(world: &mut VardeWorld, name: String, key: String, value: String) {
+    let launch = written_launch(world, &name);
+    let number: i64 = value.parse().expect("a number");
+    assert_eq!(
+        launch.args.get(&key),
+        Some(&json!(number)),
+        "wrote {:?}",
+        launch.args
     );
 }
 
@@ -13462,6 +13845,7 @@ fn adapter_reports_continued(world: &mut VardeWorld) {
     );
 }
 
+#[given(expr = "the Debug adapter answers {string} with the error {string}")]
 #[when(expr = "the Debug adapter answers {string} with the error {string}")]
 fn adapter_answers_with_error(world: &mut VardeWorld, command: String, error: String) {
     let seq = last_request(world, &command)["seq"].clone();
