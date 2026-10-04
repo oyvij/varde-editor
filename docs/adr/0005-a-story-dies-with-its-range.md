@@ -35,7 +35,12 @@ to reproduce it.
 Nobody can hand-write a Story and expect it to last, and nothing in Varde will help them try. A
 future contributor who wants durable, curated tours of the codebase — onboarding material, an
 architecture walk — is not asking for a longer-lived Story; they are asking for a different feature,
-and it should be argued for on its own terms rather than added as a retention setting here.
+and it should be argued for on its own terms rather than added as a retention setting here. One
+such feature has since been argued and taken:
+`docs/adr/0024-an-inquiry-is-a-story-without-a-range.md` authors a Story set from free text about
+the code as it stands. It is not the durable tour this paragraph turns away — it is as
+disposable as a Story set for a Range, and what it gives up is the clean death this ADR is named
+for.
 
 Fuzzy re-anchoring — following a moved Step by searching for its text nearby — is not forbidden by
 this decision, only unnecessary for it. It would make a Story survive small movements *within* its

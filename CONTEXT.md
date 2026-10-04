@@ -409,6 +409,20 @@ would otherwise read as the head deleting everything that landed meanwhile. `wor
 head and names the uncommitted change; there is only one working tree, so there is only one of those.
 _Avoid_: diff, revision range (say Range), commit range, base..head
 
+**Inquiry**:
+What a developer typed to ask for a Story set: free text and one Tag, naming what they want
+explained. The alternative to a Range — a Story set is authored for one or the other. An Inquiry
+describes the code as it stands on disk, so it has no base, no head and nothing changed, and it dies
+by going stale and by being pruned rather than by its Range merging
+(`docs/adr/0024-an-inquiry-is-a-story-without-a-range.md`).
+_Avoid_: prompt (that is what Varde sends the AI), query, ask, question, freetext
+
+**Tag**:
+The one word a developer picks beside an Inquiry to say what kind of thing it is about — a bug, a
+feature, the architecture, or nothing in particular. One at a time, and it scopes what the AI is
+asked for; it is never recorded in the Story set.
+_Avoid_: label, category, kind, topic, scope
+
 **Guest repo**:
 A repository Varde cloned into a Sidecar to author a Story set for a branch of it — somebody else's
 code, on somebody else's remote, present for one session. Its files are never in the file tree and
@@ -424,9 +438,10 @@ a Step's staleness belong to the repository the Story describes.
 _Avoid_: workspace root (that is the folder), target repo, current repo
 
 **Story set**:
-Every Story authored for one range, plus a title naming what the range accomplishes at large —
-a feature added, a bug fixed, an improvement made — so a reviewer with zero context knows what
-the whole set is for before reading a single Story. One file, one range, one title (`docs/adr/0005-a-story-dies-with-its-range.md`).
+Every Story authored for one Range or one Inquiry, plus a title naming what it accomplishes at large
+— a feature added, a bug fixed, an improvement made — so a reviewer with zero context knows what the
+whole set is for before reading a single Story. One file, one title, and one Range or one Inquiry
+(`docs/adr/0005-a-story-dies-with-its-range.md`).
 _Avoid_: story artifact, story batch, change (too generic — this is specifically the authored set)
 
 **Story**:
@@ -499,18 +514,20 @@ whatever moved into its place.
 _Avoid_: broken, outdated, drifted, invalid
 
 **Coverage**:
-Which of a change's hunks the Stories claim. Never a ratio: a percentage needs a denominator, every
-denominator is a judgement about which files deserve a reviewer's eye, and a low percentage teaches
-the reviewer to ignore the line. Coverage is a count and a list. The word is this and only this:
-the tested-lines ratio a CRAP figure needs is *test coverage*, always spelled out, because it is the
-ratio this entry exists to refuse.
+Which of a change's hunks the Stories claim. A Range has it and an Inquiry does not: there are no
+hunks to divide. Never a ratio: a percentage needs a denominator, every denominator is a judgement
+about which files deserve a reviewer's eye, and a low percentage teaches the reviewer to ignore the
+line. Coverage is a count and a list. The word is this and only this: the tested-lines ratio a CRAP
+figure needs is *test coverage*, always spelled out, because it is the ratio this entry exists to
+refuse.
 _Avoid_: completeness, progress, percentage, score
 
 **Remainder**:
-The hunks no Step claims, once the Stories are subtracted from what git reports. It is walkable but
-it is not a Story - no premise, no claim, nothing authored - and it says nothing about whether
-leaving those hunks out was wrong. Deletions are counted separately, so a range that deleted nothing
-is distinguishable from a range whose deletions nobody walked.
+The hunks no Step claims, once the Stories are subtracted from what git reports. Like Coverage, it
+belongs to a Range and not to an Inquiry. It is walkable but it is not a Story - no premise, no
+claim, nothing authored - and it says nothing about whether leaving those hunks out was wrong.
+Deletions are counted separately, so a range that deleted nothing is distinguishable from a range
+whose deletions nobody walked.
 _Avoid_: gap, leftovers, uncovered, missed
 
 ### Paying down risk
