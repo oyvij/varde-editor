@@ -3695,6 +3695,16 @@ const NOTICES: &[(&str, &str, ui::Tone)] = &[
         ui::Tone::Warning,
     ),
     (
+        "cannot-inject-lines",
+        "This CLI cannot be told a paste from typing — inject one line at a time",
+        ui::Tone::Warning,
+    ),
+    (
+        "nothing-to-inject",
+        "Nothing to inject — select some text or put the cursor on a line",
+        ui::Tone::Warning,
+    ),
+    (
         "ai-already-running",
         "An AI is already running — :ai! <command> to replace it",
         ui::Tone::Warning,

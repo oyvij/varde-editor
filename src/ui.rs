@@ -168,6 +168,7 @@ pub fn draw(
                         (k == state.split())
                             .then(|| pty_link(state, shell, Pane::Terminal))
                             .flatten(),
+                        &[],
                     ),
                     *area,
                 );
@@ -192,6 +193,7 @@ pub fn draw(
                         state,
                         Pane::Output,
                         None,
+                        &[],
                     ),
                     rect(areas.panes.output),
                 );
@@ -310,6 +312,7 @@ fn draw_ai_pane(
             state,
             Pane::Ai,
             pty_link(state, pane, Pane::Ai),
+            &[varde::INJECT],
         ),
         areas.ai,
     );
@@ -633,21 +636,35 @@ fn risk_widget(state: &State, width: u16) -> Paragraph<'static> {
     Paragraph::new(risk_lines(state, width))
         .scroll((state.risk_scroll as u16, 0))
         .block(
-            pane_block(risk_title(state, width), state, Pane::Risk)
-                .title(pane_actions_title(state)),
+            pane_block(risk_title(state, width), state, Pane::Risk).title(pane_actions_title(
+                state,
+                &varde::risk::pane_actions(state),
+                risk_armed(state),
+            )),
         )
 }
 
-fn pane_actions_title(state: &State) -> Line<'static> {
-    let on_them = varde::risk::on_actions(state);
+fn risk_armed(state: &State) -> Option<usize> {
+    varde::risk::on_actions(state)
+        .then_some(state.selected_action)
+        .flatten()
+}
+
+fn pane_actions_title(
+    state: &State,
+    actions: &[&'static str],
+    armed: Option<usize>,
+) -> Line<'static> {
     Line::from(
-        varde::risk::pane_actions(state)
-            .into_iter()
+        actions
+            .iter()
             .enumerate()
             .flat_map(|(at, action)| {
-                let armed = on_them && state.selected_action == Some(at);
                 [
-                    Span::styled(action_icon(action), action_style(state, action, armed)),
+                    Span::styled(
+                        action_icon(action),
+                        action_style(state, action, armed == Some(at)),
+                    ),
                     Span::raw(" "),
                 ]
             })
@@ -3609,6 +3626,7 @@ fn terminal_widget(
     state: &State,
     which: Pane,
     link: Option<(usize, usize, usize)>,
+    actions: &[&'static str],
 ) -> Paragraph<'static> {
     let screen = pane.screen();
     let (rows, columns) = screen.size();
@@ -3666,6 +3684,7 @@ fn terminal_widget(
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
             .title(title.to_string())
+            .title(pane_actions_title(state, actions, None))
             .border_style(Style::default().fg(border)),
     )
 }
@@ -3692,9 +3711,9 @@ fn start_ai_widget(state: &State, draft: &str) -> Paragraph<'static> {
         "Enter to start",
         Style::default().fg(Color::DarkGray),
     )));
-    Paragraph::new(lines)
-        .centered()
-        .block(pane_block("ai", state, Pane::Ai))
+    Paragraph::new(lines).centered().block(
+        pane_block("ai", state, Pane::Ai).title(pane_actions_title(state, &[varde::INJECT], None)),
+    )
 }
 
 fn icon_colour(kind: varde::tree::IconKind) -> Color {
@@ -3746,6 +3765,7 @@ fn action_icon(action: &str) -> &'static str {
         varde::history::GO_TO => "\u{f0a9}",
         varde::debug::REMOVE => "\u{2715}",
         varde::debug::EDIT => "\u{270e}",
+        varde::INJECT => "\u{f061}",
         varde::risk::REFACTOR => "\u{f0ad}",
         varde::risk::RECOMPUTE => "\u{f021}",
         varde::risk::START_LOOP => "\u{f04b}",
@@ -4463,6 +4483,29 @@ mod tests {
         assert!(drawn.ends_with(":5 0"), "{drawn}");
     }
 
+    fn risk_actions(state: &State) -> ratatui::text::Line<'static> {
+        pane_actions_title(
+            state,
+            &varde::risk::pane_actions(state),
+            super::risk_armed(state),
+        )
+    }
+
+    #[test]
+    fn the_ai_panes_inject_icon_lands_on_the_column_it_is_hit_tested_from() {
+        use ratatui::widgets::Widget;
+        let state = State::default();
+        let area = ratatui::layout::Rect::new(0, 0, 30, 4);
+        let mut buffer = ratatui::buffer::Buffer::empty(area);
+        super::pane_block("ai", &state, varde::Pane::Ai)
+            .title(pane_actions_title(&state, &[varde::INJECT], None))
+            .render(area, &mut buffer);
+        let top: Vec<String> = (0..30)
+            .map(|column| buffer[(column, 0)].symbol().to_string())
+            .collect();
+        assert_eq!(top[27], super::action_icon(varde::INJECT), "{top:?}");
+    }
+
     #[test]
     fn the_panes_action_icons_land_on_the_columns_they_are_hit_tested_from() {
         use ratatui::widgets::Widget;
@@ -4470,7 +4513,7 @@ mod tests {
         let area = ratatui::layout::Rect::new(0, 0, 30, 4);
         let mut buffer = ratatui::buffer::Buffer::empty(area);
         super::pane_block("risk", &state, varde::Pane::Risk)
-            .title(pane_actions_title(&state))
+            .title(risk_actions(&state))
             .render(area, &mut buffer);
         let top: Vec<String> = (0..30)
             .map(|column| buffer[(column, 0)].symbol().to_string())
@@ -4488,7 +4531,7 @@ mod tests {
         assert!(varde::risk::on_actions(&armed));
         let mut buffer = ratatui::buffer::Buffer::empty(area);
         super::pane_block("risk", &armed, varde::Pane::Risk)
-            .title(pane_actions_title(&armed))
+            .title(risk_actions(&armed))
             .render(area, &mut buffer);
         assert_eq!(buffer[(25, 0)].style().fg, Some(Color::DarkGray));
         assert_eq!(buffer[(27, 0)].style().fg, Some(Color::Cyan), "the loop");
@@ -4499,7 +4542,7 @@ mod tests {
         assert!(!varde::risk::on_actions(&on_a_row));
         let mut buffer = ratatui::buffer::Buffer::empty(area);
         super::pane_block("risk", &on_a_row, varde::Pane::Risk)
-            .title(pane_actions_title(&on_a_row))
+            .title(risk_actions(&on_a_row))
             .render(area, &mut buffer);
         assert_eq!(buffer[(25, 0)].style().fg, Some(Color::DarkGray));
     }

@@ -203,3 +203,130 @@ Feature: The AI pane
       And I make the AI pane tall from the command line
       When Varde starts in the project
       Then the AI pane spans the whole height
+
+  Rule: What you are looking at can be put in the AI's prompt without sending it
+
+    Asking an AI about the code in front of you starts with getting the code
+    into its prompt, and retyping it is the step nobody takes. `:inject` puts
+    the selection there — from any pane, because the terminal's error message
+    is as worth asking about as the editor's line — and leaves the Enter to
+    you, so you can say what you want about it first. With nothing selected
+    the cursor's line is enough of a pointer. The action sits on the AI
+    pane's own border, because a command nobody can see is a command nobody
+    uses.
+
+    Scenario: The selected text goes into the prompt unsubmitted
+      Given an AI session is running in the AI pane
+      And "src/tree.js" is open in the editor holding:
+        """
+        run("unquoted path")
+        """
+      And I drag across "unquoted path" in the editor pane
+      When I run ":inject"
+      Then the AI received the bytes "unquoted path"
+      And the AI pane has focus
+
+    Scenario: With nothing selected the cursor's line goes in
+      Given an AI session is running in the AI pane
+      And "src/tree.js" is open in the editor holding:
+        """
+        one two
+        three four
+        """
+      And I press "j" in the editor
+      When I run ":inject"
+      Then the AI received the bytes "three four"
+
+    Scenario: A selection in the terminal goes in the same way
+      Given an AI session is running in the AI pane
+      And the terminal shows:
+        """
+        bash-5.3$ ls
+        """
+      And I drag across "bash-5.3$ ls" in the terminal pane
+      When I run ":inject"
+      Then the AI received the bytes "bash-5.3$ ls"
+
+    Scenario: A multi-line selection reaches the session as one paste
+      Given an AI session is running in the AI pane
+      And the AI program asked for bracketed paste
+      And "src/tree.js" is open in the editor holding:
+        """
+        one two
+        three four
+        """
+      And I press "Vj" in the editor
+      When I run ":inject"
+      Then the AI received the bytes "\e[200~one two\nthree four\e[201~"
+
+    Scenario: Injecting with nothing running starts a session
+      Given no AI session is running in the AI pane
+      And "src/tree.js" is open in the editor holding:
+        """
+        one two
+        """
+      When I run ":inject"
+      Then an AI session was started with "claude"
+      And the AI received nothing
+
+    Scenario: The text waits for a session that has not spoken yet
+      Given no AI session is running in the AI pane
+      And "src/tree.js" is open in the editor holding:
+        """
+        one two
+        """
+      And I run ":inject"
+      When the AI session is ready for input
+      Then the AI received the bytes "one two"
+
+    Scenario: A session that cannot be told a paste from typing is not sent lines it would submit
+      Given an AI session is running in the AI pane
+      And "src/tree.js" is open in the editor holding:
+        """
+        one two
+        three four
+        """
+      And I press "Vj" in the editor
+      When I run ":inject"
+      Then the AI received nothing
+      And the reviewer is told the lines cannot be injected
+
+    Scenario: One line still goes to a session that never asked about pasting
+      Given an AI session is running in the AI pane
+      And "src/tree.js" is open in the editor holding:
+        """
+        one two
+        three four
+        """
+      When I run ":inject"
+      Then the AI received the bytes "one two"
+
+    Scenario: The action is on the border before any session runs
+      Given no AI session is running in the AI pane
+      And "src/tree.js" is open in the editor holding:
+        """
+        one two
+        """
+      When I click the inject action on the AI pane's border
+      Then an AI session was started with "claude"
+
+    Scenario: With nothing to inject nothing is sent and nothing is started
+      Given no AI session is running in the AI pane
+      And "src/tree.js" is open in the editor holding:
+        """
+
+        """
+      When I run ":inject"
+      Then the AI received nothing
+      And no new AI session was started
+      And the reviewer is told there is nothing to inject
+
+    Scenario: The action is reachable on the AI pane's border
+      Given an AI session is running in the AI pane
+      And "src/tree.js" is open in the editor holding:
+        """
+        run("unquoted path")
+        """
+      And I drag across "unquoted path" in the editor pane
+      When I click the inject action on the AI pane's border
+      Then the AI received the bytes "unquoted path"

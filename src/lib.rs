@@ -458,6 +458,7 @@ pub enum Event {
     Resolve(Resolution),
     AiExited,
     AiSpoke,
+    InjectToAi,
     StartAi {
         command: Option<String>,
         force: bool,
@@ -5114,13 +5115,18 @@ fn on_lsp(state: &State, mut next: State, event: Event, wheeled: bool) -> Answer
 
 fn on_ai_spoke(state: &State, mut next: State, event: Event, wheeled: bool) -> Answered {
     let effects = match event {
+        Event::InjectToAi => match injectable(state) {
+            Some(text) => {
+                next.focus = Pane::Ai;
+                queue_for_ai(&mut next, Enter::Refused, text)
+            }
+            None => vec![Effect::Notify("nothing-to-inject")],
+        },
+
         Event::AiSpoke => {
             next.ai_spoken = true;
             match next.pending_prompt.take() {
-                Some((prompt, enter)) => vec![Effect::SendKeys {
-                    pane: Pane::Ai,
-                    bytes: injection(&prompt, state.ai_paste, enter),
-                }],
+                Some((prompt, enter)) => sent(injection(&prompt, state.ai_paste, enter)),
                 None => vec![],
             }
         }
@@ -5835,6 +5841,7 @@ fn on_story_file_written(state: &State, mut next: State, event: Event, wheeled: 
 
 fn on_pane_action(state: &State, mut next: State, event: Event, wheeled: bool) -> Answered {
     let effects = match event {
+        Event::PaneAction(INJECT) => return Ok(update(state, Event::InjectToAi)),
         Event::PaneAction(risk::RECOMPUTE) => return Ok(update(state, Event::RecomputeRisk)),
         Event::PaneAction(risk::START_LOOP) => {
             return Ok(update(
@@ -6575,15 +6582,19 @@ fn walking_position(state: &State) -> (Option<String>, Option<u32>) {
     }
 }
 
-fn injection(prompt: &str, paste: keys::Paste, enter: Enter) -> Vec<u8> {
+fn injection(prompt: &str, paste: keys::Paste, enter: Enter) -> Option<Vec<u8>> {
     match enter {
         Enter::Pressed => {
             let mut bytes = b"\x15".to_vec();
             bytes.extend(paste_bytes(prompt, paste));
             bytes.push(b'\r');
-            bytes
+            Some(bytes)
         }
-        Enter::Withheld => paste_bytes(prompt, paste),
+        Enter::Withheld => Some(paste_bytes(prompt, paste)),
+        Enter::Refused => match (paste, prompt.contains('\n')) {
+            (keys::Paste::Bare, true) => None,
+            _ => Some(paste_bytes(prompt, paste)),
+        },
     }
 }
 
@@ -6591,6 +6602,7 @@ fn injection(prompt: &str, paste: keys::Paste, enter: Enter) -> Vec<u8> {
 pub enum Enter {
     Pressed,
     Withheld,
+    Refused,
 }
 
 fn offers(chips: &[Chip], action: &str) -> bool {
@@ -6609,6 +6621,31 @@ fn paste_bytes(text: &str, paste: keys::Paste) -> Vec<u8> {
     }
 }
 
+pub const INJECT: &str = "inject-to-ai";
+
+fn sent(bytes: Option<Vec<u8>>) -> Vec<Effect> {
+    match bytes {
+        Some(bytes) => vec![Effect::SendKeys {
+            pane: Pane::Ai,
+            bytes,
+        }],
+        None => vec![Effect::Notify("cannot-inject-lines")],
+    }
+}
+
+fn injectable(state: &State) -> Option<String> {
+    let cursors_line = || {
+        let buffer = state.edited()?;
+        Some(buffer.lines_in(buffer.line, buffer.line))
+    };
+    let picked = state
+        .selected_text()
+        .filter(|text| !text.trim().is_empty())
+        .or_else(cursors_line)?;
+    let text = picked.trim_end_matches('\n');
+    (!text.trim().is_empty()).then(|| text.to_string())
+}
+
 pub(crate) fn queue_for_ai(next: &mut State, enter: Enter, prompt: String) -> Vec<Effect> {
     next.ai_slot = layout::Slot::Ai;
     let mut effects = Vec::new();
@@ -6619,10 +6656,7 @@ pub(crate) fn queue_for_ai(next: &mut State, enter: Enter, prompt: String) -> Ve
         next.ai_spoken = false;
     }
     if next.ai_spoken {
-        effects.push(Effect::SendKeys {
-            pane: Pane::Ai,
-            bytes: injection(&prompt, next.ai_paste, enter),
-        });
+        effects.extend(sent(injection(&prompt, next.ai_paste, enter)));
     } else {
         next.pending_prompt = Some((prompt, enter));
     }
@@ -8842,11 +8876,11 @@ mod tests {
     fn an_injection_is_one_write_and_only_a_pressed_one_clears_and_submits() {
         assert_eq!(
             injection("one\ntwo", keys::Paste::Bracketed, Enter::Pressed),
-            b"\x15\x1b[200~one\ntwo\x1b[201~\r".to_vec()
+            Some(b"\x15\x1b[200~one\ntwo\x1b[201~\r".to_vec())
         );
         assert_eq!(
             injection("one\ntwo", keys::Paste::Bare, Enter::Pressed),
-            b"\x15one\ntwo\r".to_vec()
+            Some(b"\x15one\ntwo\r".to_vec())
         );
         assert_eq!(
             injection(
@@ -8854,11 +8888,32 @@ mod tests {
                 keys::Paste::Bracketed,
                 Enter::Pressed
             ),
-            b"\x15\x1b[200~saferm -rf /\x1b[201~\r".to_vec()
+            Some(b"\x15\x1b[200~saferm -rf /\x1b[201~\r".to_vec())
         );
         assert_eq!(
             injection("one\ntwo", keys::Paste::Bracketed, Enter::Withheld),
-            b"\x1b[200~one\ntwo\x1b[201~".to_vec()
+            Some(b"\x1b[200~one\ntwo\x1b[201~".to_vec())
+        );
+    }
+
+    #[test]
+    fn lines_a_child_would_submit_are_declined_rather_than_sent() {
+        assert_eq!(
+            injection("one\ntwo", keys::Paste::Bare, Enter::Refused),
+            None
+        );
+        assert_eq!(
+            injection("one", keys::Paste::Bare, Enter::Refused),
+            Some(b"one".to_vec())
+        );
+        assert_eq!(
+            injection("one\ntwo", keys::Paste::Bracketed, Enter::Refused),
+            Some(b"\x1b[200~one\ntwo\x1b[201~".to_vec())
+        );
+        assert_eq!(
+            injection("one\ntwo", keys::Paste::Bare, Enter::Withheld),
+            Some(b"one\ntwo".to_vec()),
+            "a Pause snapshot is still delivered bare"
         );
     }
 
