@@ -143,6 +143,61 @@ Feature: Editing a file
       """
     And the cursor is at line 1 column 4
 
+  Scenario: Backspace at the start of a line joins it to an empty line above
+    Given "src/blank.js" is open in the editor holding:
+      """
+      one
+
+      three
+      """
+    And the editor mode is insert
+    And I press the Down arrow in the editor
+    And I press the Down arrow in the editor
+    When I press Backspace in the editor
+    Then the buffer holds:
+      """
+      one
+      three
+      """
+    And the cursor is at line 2 column 1
+
+  Scenario: Backspace on a line holding only indentation jumps to the line above
+    Given "src/deep.js" is open in the editor holding:
+      """
+      function f() {
+          one
+      }
+      """
+    And I press "j$a" in the editor
+    And I press "Enter" in the editor
+    When I press Backspace in the editor
+    Then the buffer holds:
+      """
+      function f() {
+          one
+      }
+      """
+    And the cursor is at line 2 column 8
+
+  Scenario: An indented line jumps up even when the line above is empty
+    Given "src/gap.js" is open in the editor holding:
+      """
+      one
+
+
+      three
+      """
+    And I press "jji" in the editor
+    And I type "    " in the editor
+    When I press Backspace in the editor
+    Then the buffer holds:
+      """
+      one
+
+      three
+      """
+    And the cursor is at line 2 column 1
+
   Scenario: Backspace at the very start does nothing
     Given the editor mode is insert
     When I press Backspace in the editor
