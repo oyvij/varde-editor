@@ -83,6 +83,7 @@ pub struct VardeWorld {
     program: Vec<Vec<String>>,
     output_pty: Option<(u16, u16)>,
     drafts: Drafts,
+    command_events: Vec<Event>,
     diff_contents: BTreeMap<String, String>,
     unresolvable: BTreeSet<String>,
     repo_before: Option<Vec<String>>,
@@ -5994,7 +5995,11 @@ fn no_buffer_shown(world: &mut VardeWorld) {
 
 #[then(expr = "the command line is open")]
 fn command_line_open(world: &mut VardeWorld) {
-    assert_eq!(world.drafts.command.as_deref(), Some(""));
+    assert_eq!(typed_command(world), Some(""));
+}
+
+fn typed_command(world: &VardeWorld) -> Option<&str> {
+    world.drafts.command.as_ref().map(|line| line.text.as_str())
 }
 
 #[then(expr = "the command line is not open")]
@@ -7870,6 +7875,86 @@ fn editor_scrolled_down(world: &mut VardeWorld) {
 #[then(expr = "the spine is empty")]
 fn spine_is_empty(world: &mut VardeWorld) {
     assert!(story::spine(&world.state).is_empty());
+}
+
+#[given(expr = "I open the command line")]
+#[when(expr = "I open the command line")]
+fn open_command_line(world: &mut VardeWorld) {
+    press_in_command_line(world, plain_key(':'));
+}
+
+#[given(expr = "I open the command line and type {string}")]
+#[when(expr = "I open the command line and type {string}")]
+fn open_command_line_and_type(world: &mut VardeWorld, text: String) {
+    press_in_command_line(world, plain_key(':'));
+    for c in text.chars() {
+        press_in_command_line(world, plain_key(c));
+    }
+}
+
+#[given(expr = "I pick the entry below in the command list")]
+#[when(expr = "I pick the entry below in the command list")]
+fn pick_the_entry_below(world: &mut VardeWorld) {
+    press_in_command_line(world, terminput::KeyEvent::new(terminput::KeyCode::Down));
+}
+
+#[given(expr = "I press Enter in the command line")]
+#[when(expr = "I press Enter in the command line")]
+fn enter_in_command_line(world: &mut VardeWorld) {
+    press_in_command_line(world, terminput::KeyEvent::new(terminput::KeyCode::Enter));
+}
+
+fn press_in_command_line(world: &mut VardeWorld, key: terminput::KeyEvent) {
+    let mut drafts = std::mem::take(&mut world.drafts);
+    world.command_events = keys::on_key_event(&world.state, &mut drafts, key, 0);
+    world.drafts = drafts;
+    for event in world.command_events.clone() {
+        world.send(event);
+    }
+}
+
+fn listed_commands(world: &VardeWorld) -> Vec<&'static str> {
+    keys::command_rows(&world.state, typed_command(world).unwrap_or_default())
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect()
+}
+
+#[then(expr = "the command list offers {string}")]
+fn command_list_offers(world: &mut VardeWorld, name: String) {
+    let listed = listed_commands(world);
+    assert!(
+        listed.contains(&name.as_str()),
+        "{name} is missing: {listed:?}"
+    );
+}
+
+#[then(expr = "the command list does not offer {string}")]
+fn command_list_does_not_offer(world: &mut VardeWorld, name: String) {
+    let listed = listed_commands(world);
+    assert!(
+        !listed.contains(&name.as_str()),
+        "{name} is listed: {listed:?}"
+    );
+}
+
+#[then(expr = "the command list offers only {string}")]
+fn command_list_offers_only(world: &mut VardeWorld, name: String) {
+    assert_eq!(listed_commands(world), vec![name.as_str()]);
+}
+
+#[then(expr = "the command line holds {string}")]
+fn command_line_holds(world: &mut VardeWorld, text: String) {
+    assert_eq!(typed_command(world), Some(text.as_str()));
+}
+
+#[then(expr = "the command line answered with no events")]
+fn command_line_answered_with_nothing(world: &mut VardeWorld) {
+    assert!(
+        world.command_events.is_empty(),
+        "{:?} ran",
+        world.command_events
+    );
 }
 
 #[given(expr = "I run {string} in the editor")]
@@ -13319,12 +13404,14 @@ fn every_transport_action_has_a_key(world: &mut VardeWorld) {
             "{line} and the {action} control part ways"
         );
     }
-    assert!(
-        keys::CHEATSHEET
-            .iter()
-            .any(|(keys, _, _)| keys.contains(":read") && keys.contains(":speed")),
-        "the transport's keys are not on the cheatsheet"
-    );
+    for word in ["read", "pause", "prev", "next", "stop", "speed"] {
+        assert!(
+            keys::COMMANDS
+                .iter()
+                .any(|(name, _, _, _)| name.split(' ').next() == Some(word)),
+            "the transport's {word} is not a listed Command"
+        );
+    }
 }
 
 fn guides_on(world: &VardeWorld, line: usize) -> Vec<varde::editor::Guide> {

@@ -9,13 +9,217 @@ use terminput::{
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Drafts {
     pub name: String,
-    pub command: Option<String>,
+    pub command: Option<CommandLine>,
     pub ai: String,
     pub filter: Option<String>,
     pub comment_kind: String,
 }
 
-pub const CHEATSHEET: [(&str, &str, &[View]); 48] = [
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct CommandLine {
+    pub text: String,
+    pub pick: Option<usize>,
+}
+
+pub const COMMANDS: [(&str, &str, &[View], &[Event]); 33] = [
+    (
+        "format",
+        "lay the file out",
+        &[View::Edit],
+        &[Event::FormatBuffer],
+    ),
+    (
+        "submit",
+        "send the review",
+        &[View::Review, View::Story],
+        &[Event::SubmitReview],
+    ),
+    (
+        "preview",
+        "read / edit markdown",
+        &[View::Edit],
+        &[Event::TogglePreview],
+    ),
+    (
+        "read",
+        "read the selection aloud",
+        &[View::Edit],
+        &[Event::StartReading],
+    ),
+    (
+        "pause",
+        "pause or resume the reading",
+        &[View::Edit],
+        &[Event::PlayPause],
+    ),
+    (
+        "next",
+        "the sentence after this one",
+        &[View::Edit],
+        &[Event::NextUtterance],
+    ),
+    (
+        "prev",
+        "the sentence before this one",
+        &[View::Edit],
+        &[Event::PreviousUtterance],
+    ),
+    (
+        "stop",
+        "stop reading and put the mark away",
+        &[View::Edit],
+        &[Event::StopReading],
+    ),
+    ("speed <rate>", "how fast it reads", &[View::Edit], &[]),
+    (
+        "inject",
+        "selection to the AI prompt",
+        &[View::Edit, View::Review, View::Story],
+        &[Event::InjectToAi],
+    ),
+    ("dim", "darker editor", &[View::Edit], &[Event::ToggleField]),
+    (
+        "minimap",
+        "mirror of the file",
+        &[View::Edit],
+        &[Event::ToggleMinimap],
+    ),
+    ("w", "write the file", &[View::Edit], &[Event::WriteBuffer]),
+    (
+        "q",
+        "close the file",
+        &[View::Edit],
+        &[Event::CloseBuffer { force: false }],
+    ),
+    (
+        "q!",
+        "close the file, losing the edits",
+        &[View::Edit],
+        &[Event::CloseBuffer { force: true }],
+    ),
+    (
+        "qa",
+        "close every file",
+        &[View::Edit],
+        &[Event::CloseAllBuffers { force: false }],
+    ),
+    (
+        "qa!",
+        "close every file, losing the edits",
+        &[View::Edit],
+        &[Event::CloseAllBuffers { force: true }],
+    ),
+    (
+        "wq",
+        "write the file and close it",
+        &[View::Edit],
+        &[Event::WriteBuffer, Event::CloseBuffer { force: false }],
+    ),
+    (
+        "e",
+        "read the file from disk again",
+        &[View::Edit],
+        &[Event::ReloadBuffer],
+    ),
+    (
+        "story",
+        "story this change",
+        &[View::Edit, View::Story],
+        &[Event::Story {
+            explicit: None,
+            force: false,
+        }],
+    ),
+    (
+        "story!",
+        "story this change again",
+        &[View::Edit, View::Story],
+        &[Event::Story {
+            explicit: None,
+            force: true,
+        }],
+    ),
+    (
+        "story <range>",
+        "story a range you name",
+        &[View::Edit, View::Story],
+        &[],
+    ),
+    (
+        "story?<url>",
+        "story a branch",
+        &[View::Edit, View::Story],
+        &[],
+    ),
+    (
+        "ai",
+        "start the AI session",
+        &[View::Edit, View::Review, View::Story],
+        &[Event::StartAi {
+            command: None,
+            force: false,
+        }],
+    ),
+    (
+        "ai!",
+        "start it again, replacing the session",
+        &[View::Edit, View::Review, View::Story],
+        &[Event::StartAi {
+            command: None,
+            force: true,
+        }],
+    ),
+    (
+        "ai <cli>",
+        "start the AI CLI you name",
+        &[View::Edit, View::Review, View::Story],
+        &[],
+    ),
+    (
+        "update",
+        "update Varde itself",
+        &[View::Edit, View::Review, View::Story],
+        &[Event::Rebuild],
+    ),
+    (
+        "tall",
+        "the AI pane down the full height",
+        &[View::Edit, View::Review, View::Story],
+        &[Event::ToggleTallAi],
+    ),
+    (
+        "split",
+        "another shell in the strip",
+        &[View::Edit, View::Review, View::Story],
+        &[Event::SplitTerminal],
+    ),
+    (
+        "help",
+        "the keys of this view",
+        &[View::Edit, View::Review, View::Story],
+        &[Event::ToggleCheatsheet],
+    ),
+    (
+        "toggle",
+        "fold the block at the cursor",
+        &[View::Edit],
+        &[Event::ToggleFold { all: false }],
+    ),
+    (
+        "toggle!",
+        "fold every block in the file",
+        &[View::Edit],
+        &[Event::ToggleFold { all: true }],
+    ),
+    (
+        "hotswap",
+        "replace the running code",
+        &[View::Edit],
+        &[Event::HotReplace],
+    ),
+];
+
+pub const CHEATSHEET: [(&str, &str, &[View]); 41] = [
     ("i a o O x", "edit", &[View::Edit]),
     ("w b e", "word", &[View::Edit]),
     ("gg G", "file ends", &[View::Edit]),
@@ -44,14 +248,17 @@ pub const CHEATSHEET: [(&str, &str, &[View]); 48] = [
         "palette",
         &[View::Edit, View::Review, View::Story],
     ),
-    (":format", "lay the file out", &[View::Edit]),
+    (
+        ":",
+        "command line",
+        &[View::Edit, View::Review, View::Story],
+    ),
     ("Enter Esc", "candidates", &[View::Edit]),
     ("Tab", "indent / next blank", &[View::Edit]),
     ("C-d D-d gm", "same word again", &[View::Edit]),
     ("j k V c", "select comment", &[View::Review]),
     ("h l 0", "slide sideways", &[View::Review, View::Story]),
     ("e", "edit the file", &[View::Review, View::Story]),
-    (":submit", "send the review", &[View::Review, View::Story]),
     ("n p", "step", &[View::Story]),
     ("j k", "scroll", &[View::Story]),
     ("d", "show the diff", &[View::Story]),
@@ -66,19 +273,6 @@ pub const CHEATSHEET: [(&str, &str, &[View]); 48] = [
         &[View::Edit, View::Review, View::Story],
     ),
     ("0 $", "line ends", &[View::Edit]),
-    (":preview", "read / edit markdown", &[View::Edit]),
-    (
-        ":read :pause :next :prev :stop :speed",
-        "read the selection aloud",
-        &[View::Edit],
-    ),
-    (
-        ":inject",
-        "selection to the AI prompt",
-        &[View::Edit, View::Review, View::Story],
-    ),
-    (":dim", "darker editor", &[View::Edit]),
-    (":minimap", "mirror of the file", &[View::Edit]),
     ("C-F5", "restart debugging", &[View::Review, View::Story]),
     (
         "C-f D-f",
@@ -86,12 +280,7 @@ pub const CHEATSHEET: [(&str, &str, &[View]); 48] = [
         &[View::Edit, View::Review, View::Story],
     ),
     ("D", "diverged from disk", &[View::Edit]),
-    (":w C-s D-s :q :qa", "write quit close all", &[View::Edit]),
-    (
-        ":story? :story",
-        "story a branch / this change",
-        &[View::Edit, View::Story],
-    ),
+    ("C-s D-s", "write", &[View::Edit]),
     (
         "C-space v",
         "tools",
@@ -1152,10 +1341,10 @@ fn collecting(state: &State, drafts: &mut Drafts, event: KeyEvent) -> Option<Vec
         return Some(finding(find, event));
     }
     if drafts.command.is_some() {
-        return Some(command_line(drafts, event));
+        return Some(command_line(state, drafts, event));
     }
     if typed(event) == Some(':') && claims_colon(state) {
-        drafts.command = Some(String::new());
+        drafts.command = Some(CommandLine::default());
         return Some(vec![]);
     }
     if state.focus == Pane::Ai && !state.ai_running {
@@ -1331,22 +1520,74 @@ fn list_pane_key(event: KeyEvent) -> Vec<Event> {
     }
 }
 
-fn command_line(drafts: &mut Drafts, event: KeyEvent) -> Vec<Event> {
+pub fn command_rows(state: &State, text: &str) -> Vec<(&'static str, &'static str)> {
+    let typed = text.to_lowercase();
+    let kept: Vec<(bool, &'static str, &'static str)> = COMMANDS
+        .iter()
+        .filter(|(_, _, views, _)| applies_to(views, state.view))
+        .filter_map(|(name, what, _, _)| {
+            let haystack = format!("{name} {what}");
+            crate::filter::score(text, &haystack)?;
+            Some((haystack.to_lowercase().contains(&typed), *name, *what))
+        })
+        .collect();
+    let literal = kept.iter().any(|(literal, _, _)| *literal);
+    kept.into_iter()
+        .filter(|(is_literal, _, _)| *is_literal || !literal)
+        .map(|(_, name, what)| (name, what))
+        .collect()
+}
+
+pub fn command_window(pick: Option<usize>, height: usize) -> usize {
+    match pick {
+        Some(at) if height > 0 && at >= height => at + 1 - height,
+        _ => 0,
+    }
+}
+
+fn fill(name: &str) -> &str {
+    name.split('<').next().unwrap_or(name)
+}
+
+fn command_line(state: &State, drafts: &mut Drafts, event: KeyEvent) -> Vec<Event> {
+    let Some(line) = drafts.command.as_mut() else {
+        return vec![];
+    };
     match event.code {
         KeyCode::Esc => {
             drafts.command = None;
             vec![]
         }
         KeyCode::Backspace => {
-            if let Some(draft) = drafts.command.as_mut() {
-                draft.pop();
+            line.text.pop();
+            line.pick = None;
+            vec![]
+        }
+        KeyCode::Down => {
+            if let Some(last) = command_rows(state, &line.text).len().checked_sub(1) {
+                line.pick = Some(line.pick.map_or(0, |at| at + 1).min(last));
             }
             vec![]
         }
-        KeyCode::Enter => command(drafts.command.take().unwrap_or_default().as_str()),
+        KeyCode::Up => {
+            line.pick = line.pick.and_then(|at| at.checked_sub(1));
+            vec![]
+        }
+        KeyCode::Enter => {
+            let rows = command_rows(state, &line.text);
+            match line.pick.and_then(|at| rows.get(at)) {
+                Some((name, _)) => {
+                    line.text = fill(name).to_string();
+                    line.pick = None;
+                    vec![]
+                }
+                None => command(&drafts.command.take().unwrap_or_default().text),
+            }
+        }
         _ => {
-            if let (Some(c), Some(draft)) = (typed(event), drafts.command.as_mut()) {
-                draft.push(c);
+            if let Some(c) = typed(event) {
+                line.text.push(c);
+                line.pick = None;
             }
             vec![]
         }
@@ -1354,58 +1595,22 @@ fn command_line(drafts: &mut Drafts, event: KeyEvent) -> Vec<Event> {
 }
 
 fn command(line: &str) -> Vec<Event> {
-    if let Some(events) = buffer_command(line) {
-        return events;
+    if let Some(does) = COMMANDS
+        .iter()
+        .find_map(|(name, _, _, does)| (*name == line && !does.is_empty()).then_some(does))
+    {
+        return does.to_vec();
     }
-    if let Some(events) = view_command(line) {
-        return events;
-    }
-    spawning_command(line)
-}
-
-fn buffer_command(line: &str) -> Option<Vec<Event>> {
-    Some(match line {
-        "w" => vec![Event::WriteBuffer],
-        "e" => vec![Event::ReloadBuffer],
-        "q" => vec![Event::CloseBuffer { force: false }],
-        "q!" => vec![Event::CloseBuffer { force: true }],
-        "wq" => vec![Event::WriteBuffer, Event::CloseBuffer { force: false }],
-        "qa" => vec![Event::CloseAllBuffers { force: false }],
-        "qa!" => vec![Event::CloseAllBuffers { force: true }],
-        _ => return None,
-    })
-}
-
-fn view_command(line: &str) -> Option<Vec<Event>> {
     if let Some(rest) = line.strip_prefix("speed ") {
         return rest
             .trim()
             .parse::<f32>()
             .ok()
             .filter(|speed| speed.is_finite() && *speed > 0.0)
-            .map(|speed| vec![Event::SetSpeed(speed)]);
+            .map(|speed| vec![Event::SetSpeed(speed)])
+            .unwrap_or_default();
     }
-    Some(match line {
-        "submit" => vec![Event::SubmitReview],
-        "update" => vec![Event::Rebuild],
-        "tall" => vec![Event::ToggleTallAi],
-        "split" => vec![Event::SplitTerminal],
-        "preview" => vec![Event::TogglePreview],
-        "format" => vec![Event::FormatBuffer],
-        "toggle" => vec![Event::ToggleFold { all: false }],
-        "toggle!" => vec![Event::ToggleFold { all: true }],
-        "read" => vec![Event::StartReading],
-        "pause" => vec![Event::PlayPause],
-        "next" => vec![Event::NextUtterance],
-        "prev" => vec![Event::PreviousUtterance],
-        "stop" => vec![Event::StopReading],
-        "help" => vec![Event::ToggleCheatsheet],
-        "dim" => vec![Event::ToggleField],
-        "minimap" => vec![Event::ToggleMinimap],
-        "hotswap" => vec![Event::HotReplace],
-        "inject" => vec![Event::InjectToAi],
-        _ => return None,
-    })
+    spawning_command(line)
 }
 
 fn spawning_command(line: &str) -> Vec<Event> {
@@ -1497,7 +1702,10 @@ fn filter_box(drafts: &mut Drafts, event: KeyEvent) -> Vec<Event> {
 
 #[cfg(test)]
 mod tests {
-    use super::{command, on_key_event, on_paste, Drafts, Pasted};
+    use super::{
+        command, command_rows, command_window, fill, on_key_event, on_paste, CommandLine, Drafts,
+        Pasted, COMMANDS,
+    };
     use crate::{
         story, DiffLine, Direction, Event, Find, FindIcon, FindKeys, Modal, Pane, Place,
         ReplaceField, Selection, State, Tap, View,
@@ -1528,7 +1736,7 @@ mod tests {
             .take(fits)
             .map(|(keys, _)| keys)
             .collect();
-        for keys in ["C-space Esc Esc", ":format"] {
+        for keys in ["C-space Esc Esc", ":"] {
             assert!(
                 shown.iter().any(|row| row.starts_with(keys)),
                 "{keys:?} is below the fold at 26 rows: {shown:?}"
@@ -1729,15 +1937,12 @@ mod tests {
         ] {
             assert_eq!(press(&claimed, alt_backspace), vec![Event::EditorBackspace]);
         }
-        let mut typing_a_command = Drafts {
-            command: Some(":wq".to_string()),
-            ..Drafts::default()
-        };
+        let mut typing_a_command = drafting(":wq");
         assert_eq!(
             on_key_event(&inserting, &mut typing_a_command, alt_backspace, 0),
             vec![]
         );
-        assert_eq!(typing_a_command.command.as_deref(), Some(":w"));
+        assert_eq!(typed_so_far(&typing_a_command), Some(":w"));
         for pane in [Pane::Terminal, Pane::Ai] {
             assert!(reached_the_child(&hosting(pane), alt_backspace));
         }
@@ -2141,11 +2346,7 @@ mod tests {
         ] {
             let mut drafts = Drafts::default();
             on_key_event(&focused(pane), &mut drafts, plain(':'), 0);
-            assert_eq!(
-                drafts.command.as_deref(),
-                Some(""),
-                "{pane:?} should open it"
-            );
+            assert_eq!(typed_so_far(&drafts), Some(""), "{pane:?} should open it");
         }
         let mut drafts = Drafts::default();
         let events = on_key_event(&focused(Pane::Terminal), &mut drafts, plain(':'), 0);
@@ -2168,7 +2369,7 @@ mod tests {
             ..inserting
         };
         on_key_event(&elsewhere, &mut drafts, plain(':'), 0);
-        assert_eq!(drafts.command.as_deref(), Some(""));
+        assert_eq!(typed_so_far(&drafts), Some(""));
     }
 
     #[test]
@@ -3053,13 +3254,10 @@ mod tests {
             ..hosting(Pane::Terminal)
         };
         assert_eq!(press(&showing, plain('r')), vec![Event::Key('r')]);
-        let mut drafts = Drafts {
-            command: Some(String::new()),
-            ..Drafts::default()
-        };
+        let mut drafts = drafting("");
         let events = on_key_event(&hosting(Pane::Terminal), &mut drafts, plain('q'), 0);
         assert!(events.is_empty(), "the draft is collecting, not the child");
-        assert_eq!(drafts.command.as_deref(), Some("q"));
+        assert_eq!(typed_so_far(&drafts), Some("q"));
     }
 
     #[test]
@@ -3160,7 +3358,7 @@ mod tests {
         .modifiers(modifiers)
     }
 
-    const UNLISTED: [(&str, &str, &[View]); 24] = [
+    const UNLISTED: [(&str, &str, &[View]); 23] = [
         (
             "Ctrl",
             "the router still answers a bare Ctrl press with a tap, but no \
@@ -3255,12 +3453,6 @@ mod tests {
             "C-q",
             "quits Varde, from wherever you are",
             &[View::Edit, View::Review, View::Story],
-        ),
-        (
-            ":",
-            "opens the command line in every view — only :update, which is \
-             listed, answers with nothing open",
-            &[View::Review, View::Story],
         ),
     ];
 
@@ -3609,6 +3801,20 @@ mod tests {
             [operator, second] => chord_answers(state, *operator, *second),
             _ => answers(state, sequence),
         }
+    }
+
+    fn drafting(text: &str) -> Drafts {
+        Drafts {
+            command: Some(CommandLine {
+                text: text.to_string(),
+                pick: None,
+            }),
+            ..Drafts::default()
+        }
+    }
+
+    fn typed_so_far(drafts: &Drafts) -> Option<&str> {
+        drafts.command.as_ref().map(|line| line.text.as_str())
     }
 
     fn views() -> [(View, State); 6] {
@@ -4373,6 +4579,185 @@ mod tests {
         crate::update(state, Event::EditorKey('x')).0
     }
 
+    fn filled(name: &str) -> String {
+        match fill(name) {
+            "speed " => "speed 1.5".to_string(),
+            "ai " => "ai claude".to_string(),
+            "story?" => "story?https://example.com/x".to_string(),
+            "story " => "story main..HEAD".to_string(),
+            whole => whole.to_string(),
+        }
+    }
+
+    #[test]
+    fn every_command_in_the_table_is_one_the_parser_answers() {
+        for (name, _, _, does) in COMMANDS {
+            assert_eq!(name.contains('<'), does.is_empty(), "{name}");
+            assert!(
+                !command(&filled(name)).is_empty(),
+                "{name} parses to nothing"
+            );
+            if !does.is_empty() {
+                assert_eq!(command(name), does.to_vec(), "{name}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_only_commands_the_parser_answers_outside_the_table_take_an_argument() {
+        let families: Vec<&str> = COMMANDS
+            .iter()
+            .filter(|(name, _, _, _)| name.contains('<'))
+            .map(|(name, _, _, _)| fill(name))
+            .collect();
+        assert_eq!(families, ["speed ", "story ", "story?", "ai "]);
+        for (name, _, _, _) in COMMANDS {
+            let bare = fill(name);
+            for probe in [format!("{bare} x"), format!("{bare}zz")] {
+                if command(&probe).is_empty() {
+                    continue;
+                }
+                let forceless = probe.replacen('!', "", 1);
+                assert!(
+                    families
+                        .iter()
+                        .any(|family| forceless.starts_with(family) || probe.starts_with(family)),
+                    "{probe:?} is answered but no COMMANDS row names it"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_command_is_narrowed_by_its_name_and_by_its_description() {
+        let edit = editing();
+        assert_eq!(
+            command_rows(&edit, "map"),
+            vec![("minimap", "mirror of the file")]
+        );
+        assert_eq!(
+            command_rows(&edit, "darker"),
+            vec![("dim", "darker editor")]
+        );
+        assert_eq!(
+            command_rows(&edit, "").len(),
+            COMMANDS
+                .iter()
+                .filter(|(_, _, views, _)| super::applies_to(views, View::Edit))
+                .count(),
+            "an empty line narrows nothing"
+        );
+    }
+
+    #[test]
+    fn text_held_whole_in_an_entry_hides_the_scattered_matches() {
+        let edit = editing();
+        let whole = command_rows(&edit, "stor");
+        assert!(
+            whole.iter().all(|(name, _)| name.starts_with("story")),
+            "a scattered match outranked a literal one: {whole:?}"
+        );
+        let scattered = command_rows(&edit, "sty");
+        assert!(
+            scattered.iter().any(|(name, _)| *name == "story"),
+            "scattered letters found nothing: {scattered:?}"
+        );
+        assert!(
+            scattered
+                .iter()
+                .all(|(name, what)| !format!("{name} {what}").contains("sty")),
+            "something holds the text whole, so nothing scattered belongs"
+        );
+    }
+
+    #[test]
+    fn the_list_fills_the_line_and_the_next_enter_runs_it() {
+        let state = focused(Pane::Editor);
+        let mut drafts = Drafts::default();
+        for c in [':', 'l', 'p'] {
+            on_key_event(&state, &mut drafts, plain(c), 0);
+        }
+        assert_eq!(
+            command_rows(&state, "lp"),
+            vec![("help", "the keys of this view")]
+        );
+        let down = KeyEvent::new(KeyCode::Down);
+        assert!(on_key_event(&state, &mut drafts, down, 0).is_empty());
+        assert_eq!(drafts.command.as_ref().and_then(|line| line.pick), Some(0));
+        let enter = KeyEvent::new(KeyCode::Enter);
+        assert!(
+            on_key_event(&state, &mut drafts, enter, 0).is_empty(),
+            "the pick ran the Command instead of filling the line"
+        );
+        assert_eq!(typed_so_far(&drafts), Some("help"));
+        assert_eq!(drafts.command.as_ref().and_then(|line| line.pick), None);
+        assert_eq!(
+            on_key_event(&state, &mut drafts, enter, 0),
+            vec![Event::ToggleCheatsheet]
+        );
+        assert!(drafts.command.is_none());
+    }
+
+    #[test]
+    fn up_off_the_first_entry_returns_to_the_typed_line() {
+        let state = focused(Pane::Editor);
+        let mut drafts = Drafts::default();
+        on_key_event(&state, &mut drafts, plain(':'), 0);
+        let up = KeyEvent::new(KeyCode::Up);
+        let down = KeyEvent::new(KeyCode::Down);
+        on_key_event(&state, &mut drafts, up, 0);
+        assert_eq!(
+            drafts.command.as_ref().and_then(|line| line.pick),
+            None,
+            "Up highlighted an entry nobody had reached"
+        );
+        for _ in 0..2 {
+            on_key_event(&state, &mut drafts, down, 0);
+        }
+        assert_eq!(drafts.command.as_ref().and_then(|line| line.pick), Some(1));
+        on_key_event(&state, &mut drafts, up, 0);
+        on_key_event(&state, &mut drafts, up, 0);
+        assert_eq!(drafts.command.as_ref().and_then(|line| line.pick), None);
+    }
+
+    #[test]
+    fn a_pick_cannot_point_past_the_list_the_typed_line_leaves() {
+        let state = focused(Pane::Editor);
+        let mut drafts = drafting("lp");
+        let down = KeyEvent::new(KeyCode::Down);
+        for _ in 0..4 {
+            on_key_event(&state, &mut drafts, down, 0);
+        }
+        assert_eq!(drafts.command.as_ref().and_then(|line| line.pick), Some(0));
+        on_key_event(&state, &mut drafts, plain('q'), 0);
+        assert_eq!(
+            drafts.command.as_ref().and_then(|line| line.pick),
+            None,
+            "typing kept a highlight from the list before it"
+        );
+        let mut nothing = drafting("zzzz");
+        assert!(command_rows(&state, "zzzz").is_empty());
+        on_key_event(&state, &mut nothing, down, 0);
+        assert_eq!(nothing.command.as_ref().and_then(|line| line.pick), None);
+    }
+
+    #[test]
+    fn a_pick_below_the_box_scrolls_the_list_onto_it() {
+        assert_eq!(command_window(None, 15), 0);
+        assert_eq!(command_window(Some(14), 15), 0);
+        assert_eq!(command_window(Some(15), 15), 1);
+        assert_eq!(command_window(Some(22), 15), 8);
+    }
+
+    #[test]
+    fn esc_closes_the_line_and_the_list_with_it() {
+        let state = focused(Pane::Editor);
+        let mut drafts = drafting("lp");
+        on_key_event(&state, &mut drafts, KeyEvent::new(KeyCode::Down), 0);
+        on_key_event(&state, &mut drafts, KeyEvent::new(KeyCode::Esc), 0);
+        assert!(drafts.command.is_none());
+    }
+
     #[test]
     fn hotswap_is_the_command_that_replaces_the_running_code() {
         assert_eq!(command("hotswap"), vec![Event::HotReplace]);
@@ -4386,12 +4771,6 @@ mod tests {
         assert_eq!(command("speed 0"), vec![]);
         assert_eq!(command("speed -3"), vec![]);
         assert_eq!(command("speed fast"), vec![]);
-    }
-
-    fn typed_command(token: &str) -> Vec<KeyEvent> {
-        let mut sequence: Vec<KeyEvent> = token.chars().map(plain).collect();
-        sequence.push(KeyEvent::new(KeyCode::Enter));
-        sequence
     }
 
     #[test]
@@ -4413,14 +4792,9 @@ mod tests {
                 if !super::applies_to(views, view) {
                     continue;
                 }
-                let claims = keys.split_whitespace().any(|token| {
-                    if token.starts_with(':') {
-                        let sequence = typed_command(token);
-                        states.iter().any(|s| answers(s, &sequence))
-                    } else {
-                        answered.iter().any(|label| names(token, label))
-                    }
-                });
+                let claims = keys
+                    .split_whitespace()
+                    .any(|token| answered.iter().any(|label| names(token, label)));
                 assert!(
                     claims,
                     "\"{keys}\" ({what}) is listed for {view:?} but nothing in it answers there"
