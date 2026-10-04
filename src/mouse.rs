@@ -405,8 +405,24 @@ fn in_pane(
 }
 
 fn hovered(state: &State, panes: &Layout, input: Input) -> Vec<Event> {
-    let at = match (jumping(input.modifiers), resting(state, panes, input)) {
-        (true, Pointed::Text(at)) => Some(at),
+    let hosted = match layout::pane_at(panes, input.column, input.row) {
+        Some(pane @ (Pane::Terminal | Pane::Ai))
+            if text_area(state, panes, pane).holds(input.column, input.row) =>
+        {
+            Some(pane)
+        }
+        _ => None,
+    };
+    let at = match (
+        jumping(input.modifiers),
+        resting(state, panes, input),
+        hosted,
+    ) {
+        (true, Pointed::Text(at), _) => Some((Pane::Editor, at)),
+        (true, _, Some(pane)) => Some((
+            pane,
+            place_in(state, panes, pane, (input.column, input.row)),
+        )),
         _ => None,
     };
     match at == state.link {
@@ -2127,10 +2143,10 @@ mod tests {
             hover(&state, KeyModifiers::SUPER),
             vec![
                 Event::PointerMoved(Pointed::Text(at)),
-                Event::HoverLink(Some(at))
+                Event::HoverLink(Some((Pane::Editor, at)))
             ]
         );
-        state.link = Some(at);
+        state.link = Some((Pane::Editor, at));
         assert_eq!(
             hover(&state, KeyModifiers::CTRL),
             vec![Event::PointerMoved(Pointed::Text(at))]
@@ -2141,6 +2157,49 @@ mod tests {
                 Event::PointerMoved(Pointed::Text(at)),
                 Event::HoverLink(None)
             ]
+        );
+    }
+
+    #[test]
+    fn a_held_modifier_points_at_text_in_the_split_it_hovers_and_no_other() {
+        let mut state = workspace();
+        state.terminals = vec![crate::Shell::Idle, crate::Shell::Idle];
+        let panes = panes(120, 26, 30, None, 0, 0, Shapes::default());
+        let hover = |column| {
+            on_mouse(
+                &state,
+                &panes,
+                &mut Pointer::default(),
+                Input {
+                    kind: Kind::Moved,
+                    column,
+                    row: panes.terminal.y + 2,
+                    modifiers: KeyModifiers::CTRL,
+                },
+            )
+            .events
+            .into_iter()
+            .filter(|event| matches!(event, Event::HoverLink(_)))
+            .collect::<Vec<_>>()
+        };
+        let active = crate::layout::split(panes.terminal, 2, 0);
+        assert_eq!(
+            hover(active.x + 4),
+            vec![Event::HoverLink(Some((
+                Pane::Terminal,
+                Place { line: 2, column: 4 }
+            )))]
+        );
+        assert_eq!(
+            hover(active.x),
+            vec![],
+            "the split's border is not its text"
+        );
+        let other = crate::layout::split(panes.terminal, 2, 1);
+        assert_eq!(
+            hover(other.x + 4),
+            vec![],
+            "another split's text is not in this grid"
         );
     }
 

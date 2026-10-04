@@ -201,7 +201,60 @@ Feature: The whole TUI is usable with the mouse
       """
     When I click on "cargo" in the terminal pane with the jump modifier held
     Then the browser opens nothing
+    And no file was opened in the editor
     And nothing reached the terminal program
+
+  Scenario: Clicking a file path in the terminal opens it at the line and column it names
+    Given "src/lib.rs" holds 50 numbered lines
+    And the terminal program asked for "SGR" mouse reporting
+    And the terminal shows:
+      """
+      error[E0425]: cannot find value `x` in this scope
+        --> src/lib.rs:42:7
+      """
+    When I click on "lib.rs" in the terminal pane with the jump modifier held
+    Then "/home/me/projects/varde/src/lib.rs" is open in the editor
+    And the cursor is at line 42 column 7
+    And the editor pane has focus
+    And the browser opens nothing
+    And nothing reached the terminal program
+
+  Scenario: A file the AI mentions opens at the line it names
+    Given "src/mouse.rs" holds 50 numbered lines
+    And the AI program asked for "SGR" mouse reporting
+    And the AI session shows:
+      """
+      The press is decided in src/mouse.rs:12.
+      """
+    When I click on "mouse.rs" in the AI pane with the jump modifier held
+    Then "/home/me/projects/varde/src/mouse.rs" is open in the editor
+    And the cursor is at line 12 column 1
+    And nothing reached the AI program
+
+  Scenario: Holding the jump modifier over a path in the terminal underlines it
+    Given the terminal shows:
+      """
+        --> src/lib.rs:42:7
+      """
+    When I hold the jump modifier over "lib.rs" in the terminal pane
+    Then the terminal pane underlines "src/lib.rs:42:7"
+
+  Scenario: Holding it over a link in the AI pane underlines the link
+    Given the AI session shows:
+      """
+      Read https://crates.io/crates/vt100.
+      """
+    When I hold the jump modifier over "crates.io" in the AI pane
+    Then the AI pane underlines "https://crates.io/crates/vt100"
+
+  Scenario: Pointing at a path without the modifier underlines nothing
+    Given the terminal shows:
+      """
+        --> src/lib.rs:42:7
+      """
+    And I hold the jump modifier over "lib.rs" in the terminal pane
+    When I point at "lib.rs" in the terminal pane
+    Then the terminal pane underlines nothing
 
   Scenario: Dragging a pane divider resizes the panes
     Given the divider between the file tree and the editor is at column 30

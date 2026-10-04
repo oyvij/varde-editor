@@ -561,6 +561,11 @@ takes the type and body (Q52) — this is how R8.1's line-range anchoring is dri
 and reaches the pane's program as no click at all. Only `http` and `https`: a URL is text the child
 printed, and `open` on anything else is a way for printed text to launch an application. One row of
 the grid at a time — a URL the terminal wrapped is not recognised.
+**R10.10** The same click on a **file path in a hosted pane opens it in the editor**, at the line and
+column a `:line:column` suffix names, or the line a `#L42` anchor does. A path is recognised by its shape — a `/` or an extension — and
+resolved against the workspace root unless it is absolute, since the core cannot see the child's working directory or the
+filesystem; a path that turns out not to exist is reported by the edge rather than opened empty.
+Holding the jump modifier over either kind of link underlines it.
 
 - ✅ Clicking a pane focuses it
 - ✅ A click on an unfocused pane also acts
@@ -573,6 +578,11 @@ the grid at a time — a URL the terminal wrapped is not recognised.
 - ✅ Clicks at a shell prompt are handled by Varde
 - ✅ Clicking a link in the terminal with the jump modifier opens it in the browser
 - ✅ Clicking plain text with the jump modifier opens nothing
+- ✅ Clicking a file path in the terminal opens it at the line and column it names
+- ✅ A file the AI mentions opens at the line it names
+- ✅ Holding the jump modifier over a path in the terminal underlines it
+- ✅ Holding it over a link in the AI pane underlines the link
+- ✅ Pointing at a path without the modifier underlines nothing
 - ✅ Dragging a pane divider resizes the panes
 - ✅ Pane sizes are remembered per project
 - ✅ Dragging the AI pane's edge resizes it

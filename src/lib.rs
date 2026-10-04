@@ -481,7 +481,7 @@ pub enum Event {
     },
     ClickText(Place),
     DoubleClickText(Place),
-    HoverLink(Option<Place>),
+    HoverLink(Option<(Pane, Place)>),
     HoverAction(Option<&'static str>),
     HoverMinimap(bool),
     AskDefinition,
@@ -1050,7 +1050,7 @@ pub struct State {
     pub selection: Option<Selection>,
     pub occurrences: Vec<Place>,
     pub revealing: Option<Place>,
-    pub link: Option<Place>,
+    pub link: Option<(Pane, Place)>,
     pub hovered_action: Option<&'static str>,
     pub transport_lit: Option<&'static str>,
     pub hovered_minimap: bool,
@@ -2829,10 +2829,23 @@ fn on_submit_review(state: &State, mut next: State, event: Event, wheeled: bool)
             | Pane::Variables
             | Pane::Cheatsheet => vec![],
         },
-        Event::ClickLink { row, column } => editor::link_at(&row, column)
-            .map(Effect::OpenUrl)
-            .into_iter()
-            .collect(),
+        Event::ClickLink { row, column } => match editor::link_at(&row, column) {
+            Some(editor::Link {
+                target: editor::Target::Url(url),
+                ..
+            }) => vec![Effect::OpenUrl(url)],
+            Some(editor::Link {
+                target: editor::Target::File { path, at },
+                ..
+            }) => {
+                next.focus = Pane::Editor;
+                vec![Effect::OpenAt {
+                    path: state.root.join(path),
+                    at,
+                }]
+            }
+            None => vec![],
+        },
 
         other => return Err((next, other)),
     };
@@ -7230,10 +7243,18 @@ pub fn spinner(tick: u64) -> char {
 }
 
 pub fn link(state: &State) -> Option<(usize, usize, usize)> {
-    let at = state.link?;
+    let (Pane::Editor, at) = state.link? else {
+        return None;
+    };
     let buffer = state.buffers.get(state.current_buffer.as_ref()?)?;
     let (from, to) = buffer.word_span(at.line, at.column)?;
     Some((at.line, from, to))
+}
+
+pub fn hosted_link(state: &State, pane: Pane, rows: &[String]) -> Option<(usize, usize, usize)> {
+    let (_, at) = state.link.filter(|(on, _)| *on == pane)?;
+    let link = editor::link_at(rows.get(at.line.checked_sub(1)?)?, at.column)?;
+    Some((at.line, link.from, link.to))
 }
 
 fn open_search_for(mut next: State, query: String) -> (State, Vec<Effect>) {

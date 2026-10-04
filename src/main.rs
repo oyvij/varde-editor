@@ -2610,14 +2610,20 @@ fn perform_files(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>) -
             }
             let _ = std::fs::write(path, contents);
         }
-        Effect::OpenAt { path, at } => {
-            queue.push_back(Event::BufferOpened {
-                contents: std::fs::read_to_string(&path).unwrap_or_default(),
+        Effect::OpenAt { path, at } => match std::fs::read_to_string(&path) {
+            Ok(contents) => queue.push_back(Event::BufferOpened {
+                contents,
                 path,
                 preview: false,
                 at: Some(at),
-            });
-        }
+            }),
+            Err(error) => {
+                edge.status = Status {
+                    text: format!("could not open {}: {error}", path.display()),
+                    tone: ui::Tone::Warning,
+                };
+            }
+        },
         Effect::ReadForReview(path) => {
             if let Ok(contents) = std::fs::read_to_string(&path) {
                 queue.push_back(Event::ReviewFileRead { path, contents });
