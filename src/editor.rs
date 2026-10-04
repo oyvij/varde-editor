@@ -471,7 +471,9 @@ impl Buffer {
     pub fn backspace(&mut self) {
         let (left, right) = self.either_side();
         let mut lines = self.lines();
-        if self.column > 1 {
+        let takes_the_line =
+            self.mode == Mode::Insert && self.line > 1 && lines[self.line - 1].trim().is_empty();
+        if self.column > 1 && !takes_the_line {
             self.remember(Step::Deleting);
             let line = &mut lines[self.line - 1];
             let at = byte_index(line, self.column - 2);
@@ -487,7 +489,9 @@ impl Buffer {
             let removed = lines.remove(self.line - 1);
             self.line -= 1;
             self.column = lines[self.line - 1].chars().count() + 1;
-            lines[self.line - 1].push_str(&removed);
+            if !takes_the_line {
+                lines[self.line - 1].push_str(&removed);
+            }
         } else {
             return;
         }
@@ -2357,6 +2361,49 @@ mod tests {
         buffer.key('l');
         buffer.backspace();
         assert_eq!(buffer.shown(), "x)y");
+    }
+
+    #[test]
+    fn backspace_on_a_whitespace_line_in_normal_mode_still_takes_one_character() {
+        let mut buffer = Buffer::open("one\n    ", false, 4);
+        buffer.key('j');
+        buffer.key('l');
+        buffer.backspace();
+        assert_eq!(buffer.shown(), "one\n   ");
+        assert_eq!((buffer.line, buffer.column), (2, 1));
+    }
+
+    #[test]
+    fn backspace_on_indentation_alone_carries_nothing_up() {
+        let mut buffer = Buffer::open("    one", false, 4);
+        buffer.key('$');
+        buffer.key('a');
+        buffer.key('\n');
+        buffer.backspace();
+        assert_eq!(buffer.shown(), "    one");
+        assert_eq!((buffer.line, buffer.column), (1, 8));
+    }
+
+    #[test]
+    fn the_indentation_ahead_of_the_cursor_is_dropped_rather_than_carried_up() {
+        let mut buffer = Buffer::open("one\n        ", false, 4);
+        buffer.key('j');
+        buffer.key('l');
+        buffer.key('l');
+        buffer.key('i');
+        buffer.backspace();
+        assert_eq!(buffer.shown(), "one");
+        assert_eq!((buffer.line, buffer.column), (1, 4));
+    }
+
+    #[test]
+    fn indentation_on_the_first_line_has_nowhere_to_jump() {
+        let mut buffer = Buffer::open("    \none", false, 4);
+        buffer.key('l');
+        buffer.key('i');
+        buffer.backspace();
+        assert_eq!(buffer.shown(), "   \none");
+        assert_eq!((buffer.line, buffer.column), (1, 1));
     }
 
     #[test]

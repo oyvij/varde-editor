@@ -670,7 +670,13 @@ insert mode types, Escape returns. First pass covers `hjkl`, `w`-less motions `0
 **`:w` still writes** — the flag was the warning (R5.3), not a lock.
 **R13.4** `:e` discards the draft and takes the disk version, clearing the flag.
 **R13.5** **Arrows move in every mode**, unlike `hjkl` which move only in normal mode.
-**R13.6** **Backspace** deletes backwards, joining with the line above at the start of a line.
+**R13.6** **Backspace** deletes backwards, joining with the line above at the start of a line. In
+insert mode a line holding **only whitespace is the start of a line**: the indentation R13.8 lays
+down is not something to walk back through one invisible space at a time, so one Backspace takes the
+line and lands the cursor at the end of the line above — whether that line above holds a word or
+nothing at all. The whitespace is dropped rather than carried up, where it would be a trailing run
+nobody can see. The rule is the buffer's, so the review comment box (F17) — the other multi-line
+buffer that opens in insert mode — follows it; a query box is one line and has nothing to jump to.
 **R13.7** A **half-typed command is shown** — `2d` while you are still deciding — and clears when it
 completes or is abandoned. The editor renders it on its bottom edge, with the cursor position.
 **R13.8** **The indent width is `editor.tab_width`** — F9's layered, project-scoped key, four spaces
