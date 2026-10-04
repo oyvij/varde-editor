@@ -116,7 +116,7 @@ table is the audit; keep it current, and add a row before writing a new feature'
 | F15 close & quit | `:q` `:q!` `:wq`, `:qa` `:qa!`, `Ctrl+Q`, palette `q` |
 | F16 selection & copy | drag to select; double-click a word; `Ctrl+C`/`Cmd+C` to copy, `Ctrl+V`/`Cmd+V` to paste |
 | F17 review flow | palette `r`, arrows, `Enter`, `e`, `V`+`c`, `:submit` |
-| F18 AI pane | the pane's own input box, palette `a`, `:ai <cli>`, palette `l` or `:tall` |
+| F18 AI pane | the pane's own input box, palette `a`, `:ai <cli>`, palette `l` or `:tall`, `:inject` or the pane's border icon |
 | F19 buffers | `gt` `gT`, palette `g`, clickable dots, tree marks |
 | F20 tree filter | `/` in the tree, `Enter` marks the best match in the tree and opens its folders |
 | F21 content search | `Ctrl+F`, palette `f`, `*` on a word, `gr` on a selection |
@@ -888,6 +888,28 @@ colon — so changing it would have meant leaving the pane first. The palette is
 reaches every pane (F6), and choosing the entry **leaves focus where it was**. The shape is
 **remembered in the project's `state.json`** beside the widths, and a width its edge was dragged to
 is the width in either shape.
+
+**R18.8** `:inject` puts **what you are looking at into the session's prompt without submitting
+it** — the selection from whichever pane holds one, because the terminal's error message is as worth
+asking about as the editor's line, and the cursor's line when nothing is selected. The Enter is
+left to you, so the question can be typed in front of the code. With no session running it starts
+one and the text waits for it (R18.5's machinery). Focus moves to the pane, since typing the
+question is the next thing you do.
+
+Not submitting is the promise, so an **embedded newline is an implicit Enter and is refused out
+loud** rather than risked: trailing newlines are cut, since a linewise selection carries one, and
+**lines are declined** — `Enter::Refused`, named for the promise — when the child never asked to be
+told a paste from typing, because bracketing is the only thing that stops a newline mid-text from
+being read as a submit. Same reasoning as a mouse coordinate the legacy encoding cannot name. A
+Pause snapshot (R23) still goes bare: it is `Enter::Withheld`, which asks only that *we* do not
+press Enter.
+
+The action also sits as an **icon on the AI pane's own border**, drawn in **both** of the pane's
+states — the start box as well as a running session — because the hit-test cannot be reachable on
+columns nothing is drawn on, and because `:inject` with nothing running starts a session, so the
+button must too. A click on the AI pane's **title row is the pane's**, never reported through to its
+child: without that, the icon would both inject and send a phantom click to a CLI that enabled
+mouse tracking.
 
 Submitting a review also starts a session if none is running (R8.6), but that cannot be the only
 way in. Found by being asked how to start Claude in the AI pane, and having no answer.

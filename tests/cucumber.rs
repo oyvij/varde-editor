@@ -5890,6 +5890,24 @@ fn ai_command_remembered(world: &mut VardeWorld, command: String) {
     );
 }
 
+#[then(expr = "the reviewer is told the lines cannot be injected")]
+fn told_cannot_inject_lines(world: &mut VardeWorld) {
+    assert!(world.notices.contains(&"cannot-inject-lines".to_string()));
+}
+
+#[then(expr = "the reviewer is told there is nothing to inject")]
+fn told_nothing_to_inject(world: &mut VardeWorld) {
+    assert!(world.notices.contains(&"nothing-to-inject".to_string()));
+}
+
+#[when(expr = "I click the inject action on the AI pane's border")]
+fn click_inject_action(world: &mut VardeWorld) {
+    let panes = world.panes();
+    let column = panes.ai.x + panes.ai.width - 3;
+    world.report(mouse::Kind::LeftDown, column, panes.ai.y);
+    world.report(mouse::Kind::LeftUp, column, panes.ai.y);
+}
+
 #[then(expr = "the reviewer is told the AI is already running")]
 fn told_ai_running(world: &mut VardeWorld) {
     assert!(world.notices.contains(&"ai-already-running".to_string()));

@@ -384,6 +384,9 @@ fn in_pane(
             pointer.grab = None;
             pointer.held = None;
             pointer.dragged = false;
+            if pane == Pane::Ai && input.row == panes.ai.y {
+                return Outcome::default();
+            }
             let at = place_in(state, panes, pane, (input.column, input.row));
             let hosted = matches!(pane, Pane::Terminal | Pane::Ai);
             match (tapped, hosted && jumping(input.modifiers)) {
@@ -524,6 +527,10 @@ fn pressed(
         (Pane::Tree, None) => match tree::visible_rows(state).get(row_index) {
             Some(row) => vec![Event::ClickRow(row.path.clone())],
             None => vec![Event::ClickPane(pane)],
+        },
+        (Pane::Ai, _) if input.row == panes.ai.y => match inject_at(panes, input.column) {
+            Some(action) => vec![Event::PaneAction(action)],
+            None => vec![Event::ClickPane(Pane::Ai)],
         },
         (Pane::Risk, _) => pressed_in_risk(state, panes, input),
         (Pane::Buffers, _) => pressed_in_buffers(state, panes, input),
@@ -1222,6 +1229,7 @@ fn action_under(state: &State, panes: &Layout, input: Input) -> Option<&'static 
     match layout::pane_at(panes, input.column, input.row)? {
         Pane::Tree => action_at(state, panes, input.column, input.row),
         Pane::Editor if input.row == panes.editor.y => transport_at(state, panes, input.column),
+        Pane::Ai if input.row == panes.ai.y => inject_at(panes, input.column),
         Pane::Risk if input.row == panes.corner.y => pane_action_at(state, panes, input.column),
         Pane::Risk if corner_row => {
             let index = list_row(panes.corner, input.row, state.risk_scroll);
@@ -1314,6 +1322,10 @@ fn breakpoint_chip_at(state: &State, panes: &Layout, column: u16) -> Option<&'st
 
 fn pane_action_at(state: &State, panes: &Layout, column: u16) -> Option<&'static str> {
     icon_at(&crate::risk::pane_actions(state), panes.corner, column)
+}
+
+fn inject_at(panes: &Layout, column: u16) -> Option<&'static str> {
+    icon_at(&[crate::INJECT], panes.ai, column)
 }
 
 pub fn gutter_range(
@@ -3092,6 +3104,32 @@ mod tests {
             events.extend(on_mouse(state, &panes, &mut pointer, input).events);
         }
         events
+    }
+
+    #[test]
+    fn the_ai_panes_border_icon_injects_and_reports_nothing_to_the_child() {
+        let ai = panes(120, 26, 30, None, 0, 0, Shapes::default()).ai;
+        let path = [
+            (Kind::LeftDown, ai.x + ai.width - 3, ai.y),
+            (Kind::LeftUp, ai.x + ai.width - 3, ai.y),
+        ];
+        assert_eq!(
+            gesture(&workspace(), &path),
+            vec![Event::PaneAction(crate::INJECT)]
+        );
+    }
+
+    #[test]
+    fn the_ai_panes_title_beside_its_icon_is_a_click_on_the_pane() {
+        let ai = panes(120, 26, 30, None, 0, 0, Shapes::default()).ai;
+        let path = [
+            (Kind::LeftDown, ai.x + 2, ai.y),
+            (Kind::LeftUp, ai.x + 2, ai.y),
+        ];
+        assert_eq!(
+            gesture(&workspace(), &path),
+            vec![Event::ClickPane(Pane::Ai)]
+        );
     }
 
     #[test]

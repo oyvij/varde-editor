@@ -15,7 +15,7 @@ pub struct Drafts {
     pub comment_kind: String,
 }
 
-pub const CHEATSHEET: [(&str, &str, &[View]); 47] = [
+pub const CHEATSHEET: [(&str, &str, &[View]); 48] = [
     ("i a o O x", "edit", &[View::Edit]),
     ("w b e", "word", &[View::Edit]),
     ("gg G", "file ends", &[View::Edit]),
@@ -71,6 +71,11 @@ pub const CHEATSHEET: [(&str, &str, &[View]); 47] = [
         ":read :pause :next :prev :stop :speed",
         "read the selection aloud",
         &[View::Edit],
+    ),
+    (
+        ":inject",
+        "selection to the AI prompt",
+        &[View::Edit, View::Review, View::Story],
     ),
     (":dim", "darker editor", &[View::Edit]),
     (":minimap", "mirror of the file", &[View::Edit]),
@@ -1398,6 +1403,7 @@ fn view_command(line: &str) -> Option<Vec<Event>> {
         "dim" => vec![Event::ToggleField],
         "minimap" => vec![Event::ToggleMinimap],
         "hotswap" => vec![Event::HotReplace],
+        "inject" => vec![Event::InjectToAi],
         _ => return None,
     })
 }
