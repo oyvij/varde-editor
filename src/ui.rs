@@ -45,7 +45,7 @@ pub struct Chrome<'a> {
     pub status: &'a str,
     pub tone: Tone,
     pub name_draft: &'a str,
-    pub command_draft: Option<&'a str>,
+    pub command: Option<&'a varde::keys::CommandLine>,
     pub ai_draft: &'a str,
     pub comment_kind: &'a str,
     pub filter_draft: Option<&'a str>,
@@ -112,7 +112,7 @@ pub fn draw(
 ) {
     let areas = areas(frame.area(), state);
     draw_list_pane(frame, state, rows, &areas, &chrome);
-    let typing = chrome.command_draft.map(|draft| format!(":{draft}█"));
+    let typing = chrome.command.map(|line| format!(":{}█", line.text));
     let finding = state
         .find
         .as_ref()
@@ -259,6 +259,13 @@ pub fn draw(
     breakpoint_reason(frame, state, &areas.panes);
     diagnostic_box(frame, state, &areas.panes);
     candidates(frame, state, &areas.panes);
+    command_list(
+        frame,
+        state,
+        &chrome,
+        areas.panes.editor,
+        frame.area().height,
+    );
     evaluator(frame, state, &areas.panes, chrome.code);
 
     if state.search.is_some() {
@@ -1628,7 +1635,7 @@ fn editor_widget(
         return story_widget(state, command, tokens, width);
     }
     if let (Some(diff), Some(file)) = (&state.diff, &state.diff_file) {
-        return diff_widget(state, diff, file, diff_sides.0, diff_sides.1);
+        return diff_widget(state, diff, file, diff_sides.0, diff_sides.1, command);
     }
     let Some((path, buffer)) = state
         .current_buffer
@@ -3230,6 +3237,47 @@ fn candidates(frame: &mut Frame, state: &State, panes: &layout::Layout) {
     over_buffer_line(frame, state, panes, list.placement(), lines);
 }
 
+fn command_list(frame: &mut Frame, state: &State, chrome: &Chrome, editor: Area, height: u16) {
+    let Some(line) = chrome.command else {
+        return;
+    };
+    let rows = keys::command_rows(state, &line.text);
+    let column = rows.iter().map(|(name, _)| name.len()).max().unwrap_or(0);
+    let widest = rows
+        .iter()
+        .map(|(_, what)| column + 2 + what.len())
+        .max()
+        .unwrap_or(0);
+    let spot = rect(layout::command_list(
+        editor,
+        rows.len(),
+        height,
+        widest as u16,
+    ));
+    if spot.height < 3 {
+        return;
+    }
+    let height = spot.height as usize - 2;
+    let lines: Vec<Line> = rows
+        .into_iter()
+        .enumerate()
+        .skip(keys::command_window(line.pick, height))
+        .take(height)
+        .map(|(at, (name, what))| {
+            let row = Line::from(format!(" {name:column$}  {what}"));
+            match Some(at) == line.pick {
+                true => row.style(Style::default().add_modifier(Modifier::REVERSED)),
+                false => row.style(Style::default().fg(Color::DarkGray)),
+            }
+        })
+        .collect();
+    frame.render_widget(Clear, spot);
+    frame.render_widget(
+        Paragraph::new(lines).block(Block::default().borders(Borders::ALL)),
+        spot,
+    );
+}
+
 fn over_buffer_line(
     frame: &mut Frame,
     state: &State,
@@ -3388,14 +3436,18 @@ fn diff_widget(
     file: &str,
     new_side: &[Vec<highlight::Token>],
     old_side: &[Vec<highlight::Token>],
+    command: Option<&str>,
 ) -> Paragraph<'static> {
     Paragraph::new(diff_rows(state, diff, file, new_side, old_side))
         .scroll((state.editor_scroll as u16, 0))
-        .block(pane_block(
-            format!("{file}  [diff — e to edit, V+c to comment]"),
-            state,
-            Pane::Editor,
-        ))
+        .block(
+            pane_block(
+                format!("{file}  [diff — e to edit, V+c to comment]"),
+                state,
+                Pane::Editor,
+            )
+            .title_bottom(command_line(state, command).left_aligned()),
+        )
 }
 
 fn comment_row(kind: &str, body: &str) -> Line<'static> {

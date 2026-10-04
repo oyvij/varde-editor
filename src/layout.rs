@@ -440,6 +440,25 @@ pub fn replace_box(editor: Area) -> Area {
     }
 }
 
+pub fn command_list(editor: Area, rows: usize, screen_height: u16, widest: u16) -> Area {
+    let line = editor.bottom().saturating_sub(1);
+    let below = screen_height.saturating_sub(editor.bottom());
+    let wanted = (rows as u16).saturating_add(2);
+    let (y, height) = match wanted <= below {
+        true => (editor.bottom(), wanted),
+        false => {
+            let height = wanted.min(line.saturating_sub(editor.y));
+            (line.saturating_sub(height), height)
+        }
+    };
+    Area {
+        x: editor.x,
+        y,
+        width: widest.saturating_add(5).min(editor.width),
+        height,
+    }
+}
+
 pub fn replace_toggles(spot: Area) -> Vec<(crate::FindIcon, &'static str, Area)> {
     let mut right = spot.right().saturating_sub(2);
     let mut toggles: Vec<_> = crate::FIND_ICONS
@@ -1222,6 +1241,42 @@ mod tests {
         };
         let spot = super::replace_box(narrow);
         assert_eq!((spot.x, spot.y, spot.width, spot.height), (31, 1, 18, 2));
+    }
+
+    #[test]
+    fn the_command_list_sits_under_the_command_line_when_the_screen_has_room() {
+        let editor = Area {
+            x: 30,
+            y: 0,
+            width: 54,
+            height: 18,
+        };
+        let spot = super::command_list(editor, 6, 26, 24);
+        assert_eq!((spot.x, spot.y, spot.width, spot.height), (30, 18, 29, 8));
+    }
+
+    #[test]
+    fn the_command_list_sits_above_the_command_line_when_the_screen_does_not() {
+        let editor = Area {
+            x: 30,
+            y: 0,
+            width: 54,
+            height: 18,
+        };
+        let spot = super::command_list(editor, 12, 18, 24);
+        assert_eq!((spot.x, spot.y, spot.width, spot.height), (30, 3, 29, 14));
+    }
+
+    #[test]
+    fn the_command_list_is_clamped_to_the_editor() {
+        let editor = Area {
+            x: 30,
+            y: 4,
+            width: 20,
+            height: 8,
+        };
+        let spot = super::command_list(editor, 30, 12, 40);
+        assert_eq!((spot.x, spot.y, spot.width, spot.height), (30, 4, 20, 7));
     }
 
     #[test]

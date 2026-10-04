@@ -47,8 +47,8 @@ fn on_ping(_state: &State, mut next: State, event: Event, wheeled: bool) -> Answ
     let declined = match on_ping(state, declined.0, declined.1, wheeled) {
         Ok(answer) => return Ok(answer), Err(declined) => declined, };
 
-// src/keys.rs:1332 — the way in: a command, a key, or a chord (+ a CHEATSHEET row for a key)
-        "ping" => vec![Event::Ping],
+// src/keys.rs — the way in: a COMMANDS row for a Command, a CHEATSHEET row for a key or a chord
+    ("ping", "say hello", &[View::Edit], &[Event::Ping]),
 
 // src/main.rs — only for a NEW Effect: an arm in perform_terminal/_session/_files/_jobs (main.rs:2208)
 // tests/cucumber.rs — the same arm in applied_to_* (cucumber.rs:949), the test copy of the runtime
@@ -116,8 +116,9 @@ another event (`lib.rs:3896` re-sends `ToggleFold`), and an `Effect` can come ba
    area: grep `Event::FormatBuffer`, which lands in `on_lsp`, `lib.rs:4750`. Or add a new `on_*`
    handler and link it into a `route_*` chain. Add a `State` field plus its `Default` only if the
    slice needs one.
-5. In `src/keys.rs`, add `"trim" => vec![Event::TrimBuffer]` next to `"format"` (`keys.rs:1338`).
-   A key binding also needs a `CHEATSHEET` row, or the cheatsheet test fails.
+5. In `src/keys.rs`, add a `COMMANDS` row next to `format`'s — its name, its one-line description,
+   the Views it belongs to, and the events it runs — and widen the array's length in its type. A key
+   binding takes a `CHEATSHEET` row instead, or the cheatsheet test fails.
 6. Prefer an existing `Effect`. If you add a new one, also add its arm to `src/main.rs` `perform_*`
    **and** to `tests/cucumber.rs` `applied_to_*`. The compiler won't remind you.
 7. If it's visible, add a `*_lines`/`*_widget` function in `src/ui.rs`. If it's clickable, add a
@@ -143,7 +144,8 @@ from the recipe before opening them.
   and `cucumber.rs applied_to_*`.
 - `next.foo` / `state.foo` lead from a `State` field to whoever writes it (only `update`, except
   facts the edge sets in `tell_core`) and to whoever reads it (`ui.rs`).
-- The `"cmd" =>` entries in `keys.rs` list every `:command`, and `CHEATSHEET` lists every key.
+- `COMMANDS` in `keys.rs` lists every `:command` — the parser reads it — and `CHEATSHEET` lists
+  every key.
 
 ## 8. Deviations
 

@@ -1578,7 +1578,7 @@ fn render(terminal: &mut Screen, state: &State, edge: &mut Edge) -> Result<()> {
                 status: &status,
                 tone,
                 name_draft: &edge.drafts.name,
-                command_draft: edge.drafts.command.as_deref(),
+                command: edge.drafts.command.as_ref(),
                 ai_draft: &edge.drafts.ai,
                 comment_kind: &edge.drafts.comment_kind,
                 filter_draft: edge.drafts.filter.as_deref(),

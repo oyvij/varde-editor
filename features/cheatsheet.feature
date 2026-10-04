@@ -80,6 +80,13 @@ Feature: The Cheatsheet
     Then the Cheatsheet is scrolled 1 rows down
     And no keys were sent to the AI pane
 
+  Scenario: Down scrolls it the way j does
+    Given the screen is 26 rows by 120 columns
+    And the Cheatsheet is shown
+    And the Cheatsheet pane has focus
+    When I press the key "Down"
+    Then the Cheatsheet is scrolled 1 rows down
+
   Scenario Outline: The arrows and the page keys scroll it too
     Given the screen is 26 rows by 120 columns
     And the Cheatsheet is shown
@@ -90,7 +97,7 @@ Feature: The Cheatsheet
 
     Examples:
       | key    | rows |
-      | Down   | 17   |
+      | Down   | 16   |
       | Up     | 15   |
       | k      | 15   |
       | PageUp | 0    |
