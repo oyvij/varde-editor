@@ -126,6 +126,24 @@ Feature: Configuration and state
     Then the effective setting "editor.tab_width" is "2"
     And the effective setting "editor.theme" is "nord"
 
+  Scenario: A project cannot set the AI command
+    Given the global config is:
+      """
+      [ai]
+      command = "nono run -- claude"
+      """
+    And the project config is:
+      """
+      [ai]
+      command = "other"
+
+      [editor]
+      tab_width = 2
+      """
+    When Varde starts in the project
+    Then the effective setting "ai.command" is "nono run -- claude"
+    And the effective setting "editor.tab_width" is "2"
+
   Scenario: Global settings apply when the project sets nothing
     Given the global config is:
       """

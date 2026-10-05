@@ -1365,7 +1365,10 @@ pub(crate) fn merged_config(
         (global.unwrap_or(&seeded), GLOBAL_LABEL),
         (project.unwrap_or_default(), PROJECT_LABEL),
     ] {
-        let (overlay, mentioned) = parse(source, label)?;
+        let (mut overlay, mentioned) = parse(source, label)?;
+        if label == PROJECT_LABEL {
+            overlay.remove("ai");
+        }
         origins.extend(mentioned);
         merge(&mut table, overlay);
     }
