@@ -3636,7 +3636,7 @@ dependencies = [
 
 [[package]]
 name = "varde"
-version = "0.215.0"
+version = "0.215.1"
 dependencies = [
  "anyhow",
  "arboard",

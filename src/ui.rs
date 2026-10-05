@@ -300,14 +300,10 @@ fn draw_ai_pane(
     caret_is_free: bool,
 ) {
     let Some(pane) = ai else {
-        frame.render_widget(start_ai_widget(state, chrome.ai_draft), areas.ai);
+        let (widget, cursor) = start_ai_widget(state, chrome.ai_draft, areas.ai);
+        frame.render_widget(widget, areas.ai);
         if state.focus == Pane::Ai && state.modal == Modal::None {
-            let inner = areas.ai.width.saturating_sub(2);
-            let width = inner.min(24);
-            frame.set_cursor_position((
-                areas.ai.x + 1 + (inner - width) / 2 + 1 + chrome.ai_draft.chars().count() as u16,
-                areas.ai.y + areas.ai.height / 2,
-            ));
+            frame.set_cursor_position(cursor);
         }
         return;
     };
@@ -3741,31 +3737,32 @@ fn terminal_widget(
     )
 }
 
-fn start_ai_widget(state: &State, draft: &str) -> Paragraph<'static> {
-    let mut lines = vec![Line::from(""); 2];
-    lines.push(Line::from(Span::styled(
-        "start an AI CLI",
-        Style::default().fg(Color::DarkGray),
-    )));
-    lines.push(Line::from(Span::styled(
-        format!("┌{}┐", "─".repeat(22)),
-        Style::default().fg(Color::Cyan),
-    )));
-    lines.push(Line::from(Span::styled(
-        format!("│ {:<20} │", format!("{draft}█")),
-        Style::default().fg(Color::Cyan),
-    )));
-    lines.push(Line::from(Span::styled(
-        format!("└{}┘", "─".repeat(22)),
-        Style::default().fg(Color::Cyan),
-    )));
-    lines.push(Line::from(Span::styled(
-        "Enter to start",
-        Style::default().fg(Color::DarkGray),
-    )));
-    Paragraph::new(lines).centered().block(
+fn start_ai_widget(state: &State, draft: &str, area: Rect) -> (Paragraph<'static>, (u16, u16)) {
+    let inner = area.width.saturating_sub(2);
+    let typed: Vec<char> = draft.chars().collect();
+    let room = usize::from(inner.saturating_sub(1));
+    let shown: String = typed[typed.len().saturating_sub(room)..].iter().collect();
+    let width = typed.len().min(room) as u16 + 1;
+    let cursor = (
+        area.x + 1 + (inner / 2).saturating_sub(width / 2) + width - 1,
+        area.y + 4,
+    );
+    let hint =
+        |text: &'static str| Line::from(Span::styled(text, Style::default().fg(Color::DarkGray)));
+    let lines = vec![
+        Line::from(""),
+        Line::from(""),
+        hint("start an AI CLI"),
+        Line::from(Span::styled(
+            format!("{shown}█"),
+            Style::default().fg(Color::Cyan),
+        )),
+        hint("Enter to start"),
+    ];
+    let widget = Paragraph::new(lines).centered().block(
         pane_block("ai", state, Pane::Ai).title(pane_actions_title(state, &[varde::INJECT], None)),
-    )
+    );
+    (widget, cursor)
 }
 
 fn icon_colour(kind: varde::tree::IconKind) -> Color {
@@ -4541,6 +4538,27 @@ mod tests {
             &varde::risk::pane_actions(state),
             super::risk_armed(state),
         )
+    }
+
+    #[test]
+    fn a_long_ai_command_stays_inside_the_pane_with_the_cursor_after_it() {
+        use ratatui::widgets::Widget;
+        let draft = "nono run --profile claude -- claude";
+        let area = ratatui::layout::Rect::new(0, 0, 30, 20);
+        let mut buffer = ratatui::buffer::Buffer::empty(area);
+        let (widget, (column, row)) = super::start_ai_widget(&State::default(), draft, area);
+        widget.render(area, &mut buffer);
+        let line: String = (1..29)
+            .map(|column| buffer[(column, row)].symbol().to_string())
+            .collect();
+        assert!(line.trim_end().ends_with("-- claude█"), "{line:?}");
+        assert_eq!(buffer[(column, row)].symbol(), "█", "{line:?}");
+        assert_eq!(buffer[(29, row)].symbol(), "│");
+        let drawn: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
+        assert!(
+            !drawn.contains('┌') && !drawn.contains('┐'),
+            "a box around the command"
+        );
     }
 
     #[test]
