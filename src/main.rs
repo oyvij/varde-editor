@@ -605,6 +605,7 @@ fn run(
             &[],
             &root,
             &BTreeMap::new(),
+            None,
             size.height / 3,
             size.width,
         )?],
@@ -2318,7 +2319,7 @@ fn perform_session(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>)
             let from = from.min(edge.shells.len() - 1);
             let cwd = edge.shells[from].cwd().unwrap_or_else(|| edge.root.clone());
             let (rows, cols) = edge.shells[from].screen().size();
-            match pty::Pane::spawn(&[], &cwd, &BTreeMap::new(), rows, cols) {
+            match pty::Pane::spawn(&[], &cwd, &BTreeMap::new(), None, rows, cols) {
                 Ok(pane) => edge.shells.insert(from + 1, pane),
                 Err(error) => {
                     edge.status = Status {
@@ -2328,12 +2329,19 @@ fn perform_session(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>)
                 }
             }
         }
-        Effect::SpawnAi { command } => {
+        Effect::SpawnAi { command, env } => {
             let size = edge.shells[0].screen().size();
             let argv = shlex::split(&command).filter(|argv| !argv.is_empty());
             let started = match &argv {
-                Some(argv) => pty::Pane::spawn(argv, &edge.root, &BTreeMap::new(), size.0, size.1)
-                    .map_err(|error| format!("could not start {command}: {error}")),
+                Some(argv) => pty::Pane::spawn(
+                    argv,
+                    &edge.root,
+                    &BTreeMap::new(),
+                    Some(&env),
+                    size.0,
+                    size.1,
+                )
+                .map_err(|error| format!("could not start {command}: {error}")),
                 None => Err(format!("{command:?} is not a command")),
             };
             match started {
@@ -2353,7 +2361,7 @@ fn perform_session(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>)
         Effect::RunProgram { argv, cwd, env } => {
             let cwd = cwd.unwrap_or_else(|| edge.root.clone());
             let size = edge.shells[0].screen().size();
-            match pty::Pane::spawn(&argv, &cwd, &env, size.0, size.1) {
+            match pty::Pane::spawn(&argv, &cwd, &env, None, size.0, size.1) {
                 Ok(pane) => edge.output = Some(pane),
                 Err(error) => {
                     edge.status = Status {

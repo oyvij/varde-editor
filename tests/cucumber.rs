@@ -44,6 +44,7 @@ pub struct VardeWorld {
     opened: Vec<PathBuf>,
     disk: BTreeMap<PathBuf, Vec<Entry>>,
     ai_spawned: Vec<String>,
+    ai_env: Vec<String>,
     ai_pane: bool,
     voice_child: bool,
     player_on_path: bool,
@@ -658,8 +659,9 @@ impl VardeWorld {
                 self.deleted.push(path.clone());
                 self.files.remove(&path);
             }
-            Effect::SpawnAi { command } => {
+            Effect::SpawnAi { command, env } => {
                 self.ai_spawned.push(command);
+                self.ai_env = env;
                 if self.ai_spawn_fails {
                     self.ai_is_gone();
                 } else {
@@ -1220,6 +1222,7 @@ fn config_edited(world: &mut VardeWorld, global: Option<startup::OnDisk>) {
     world.tell_core();
 }
 
+#[given("the global config is saved as:")]
 #[when("the global config is saved as:")]
 fn global_config_saved(world: &mut VardeWorld, step: &Step) {
     global_config(world, step);
@@ -3342,6 +3345,18 @@ fn no_ai_started(world: &mut VardeWorld) {
 #[then(expr = "an AI session was started with {string}")]
 fn ai_started_with(world: &mut VardeWorld, command: String) {
     assert_eq!(world.ai_spawned, vec![command]);
+}
+
+#[then("the AI was handed only the environment variables:")]
+fn ai_handed_only(world: &mut VardeWorld, step: &Step) {
+    let names: Vec<String> = step
+        .table()
+        .expect("table")
+        .rows
+        .iter()
+        .map(|row| row[0].clone())
+        .collect();
+    assert_eq!(world.ai_env, names);
 }
 
 #[then(expr = "the AI was started again with {string}")]

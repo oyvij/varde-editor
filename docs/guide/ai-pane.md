@@ -58,7 +58,11 @@ opens the palette only because it counted the pair. From the palette, `o` return
 `e` `r` `s` change view, and `q` quits. None of it needs a modifier, so you can leave this pane on a
 terminal where Option is not Alt.
 
-The CLI sees Varde's environment, not your host terminal's. `TERM` is `xterm-256color`, and Varde
+The CLI gets only the environment variables `ai.env` names, so a secret exported in the shell you
+started Varde from does not reach it. The default list is `HOME`, `PATH`, `USER`, `LOGNAME`,
+`SHELL`, `TMPDIR` and the locale. See [Configuration](configuration.md#ai).
+
+The CLI sees Varde's terminal identity, not your host terminal's. `TERM` is `xterm-256color`, and Varde
 removes the variables a terminal emulator exports about itself. A CLI that checks `TERM_PROGRAM` or
 `TMUX` gets an answer about Varde rather than about your machine. When a program asks by escape
 sequence, Varde answers as `VARDE(x.y.z)`, sends an explicit refusal for advanced modifier

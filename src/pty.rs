@@ -43,6 +43,7 @@ impl Pane {
         argv: &[String],
         cwd: &Path,
         env: &BTreeMap<String, String>,
+        kept: Option<&[String]>,
         rows: u16,
         cols: u16,
     ) -> Result<Self> {
@@ -64,6 +65,14 @@ impl Pane {
             None => CommandBuilder::new_default_prog(),
         };
         builder.cwd(cwd);
+        if let Some(kept) = kept {
+            builder.env_clear();
+            for name in kept {
+                if let Some(value) = std::env::var_os(name) {
+                    builder.env(name, value);
+                }
+            }
+        }
         for (name, value) in queries::CHILD_ENV {
             match value {
                 Some(value) => builder.env(name, value),
