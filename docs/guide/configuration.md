@@ -13,6 +13,8 @@ features the keys belong to, see [language-intelligence.md](language-intelligenc
 | `~/.varde/config.toml` | You, on this machine, for every project | Varde seeds it from the template when it is missing. Taking a row in Tools appends that row, and the speech install fills in a blank `speech.voice`. Nothing already in the file changes. |
 | `<project>/.varde/config.toml` | This project, for everyone who opens it | Varde, the first time it opens the folder and finds no file there. |
 
+`[ai]` is the exception: it is a per-user setting, read only from the global file.
+
 The effective configuration is a **deep merge** of three layers: the defaults built into the
 binary, then `~/.varde/config.toml`, then the project's own file. **Project overrides global, and
 global overrides built-in, key by key.** A project that sets `editor.tab_width = 2` inherits
@@ -83,7 +85,7 @@ binary and does not appear as TOML anywhere.
 
 | Key | Default | Type | Meaning |
 |---|---|---|---|
-| `command` | `"claude"` (code) | string | What `:ai` starts in the AI pane when the project has no history. Varde remembers the command you last used in this project (`:ai <command>`) in `state.json`, and that overrides this key. |
+| `command` | `"claude"` (code) | string | What `:ai` starts in the AI pane when the project has no history. It may carry arguments, such as `nono run --profile claude -- claude`. Varde reads it only from `~/.varde/config.toml`: a project file that sets `[ai]` is ignored. Varde remembers the command you last used in this project (`:ai <command>`) in `state.json`, and that overrides this key. |
 
 ### `[risk]`
 

@@ -2330,19 +2330,19 @@ fn perform_session(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>)
         }
         Effect::SpawnAi { command } => {
             let size = edge.shells[0].screen().size();
-            match pty::Pane::spawn(
-                std::slice::from_ref(&command),
-                &edge.root,
-                &BTreeMap::new(),
-                size.0,
-                size.1,
-            ) {
+            let argv = shlex::split(&command).filter(|argv| !argv.is_empty());
+            let started = match &argv {
+                Some(argv) => pty::Pane::spawn(argv, &edge.root, &BTreeMap::new(), size.0, size.1)
+                    .map_err(|error| format!("could not start {command}: {error}")),
+                None => Err(format!("{command:?} is not a command")),
+            };
+            match started {
                 Ok(pane) => {
                     edge.ai = Some(pane);
                 }
-                Err(error) => {
+                Err(text) => {
                     edge.status = Status {
-                        text: format!("could not start {command}: {error}"),
+                        text,
                         tone: ui::Tone::Warning,
                     };
                     edge.drafts.ai = command;
