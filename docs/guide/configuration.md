@@ -40,7 +40,8 @@ commented-out `[editor]` would set a top-level key nothing reads. Varde leaves a
 exists alone on every later start, even one it cannot read.
 
 The seeded file lists `view.double_tap_ms`, `editor.tab_width`, `editor.minimap`, `risk.threshold`,
-`risk.max_iterations` and the `[speech]` scalar keys. It leaves out the `[lsp.*]`, `[formatter.*]`
+`risk.max_iterations` and the `[speech]` scalar keys. The global file also lists `ai.env`. A
+project's file does not, because a project cannot set `[ai]`. It leaves out the `[lsp.*]`, `[formatter.*]`
 and `[facts.*]` tables, because those are rows you add per language, not numbers to tune. It also
 leaves out settings whose default exists only in code (`editor.theme`, `ai.command`), because there
 is no shipped text to keep them in step with.
@@ -86,6 +87,7 @@ binary and does not appear as TOML anywhere.
 | Key | Default | Type | Meaning |
 |---|---|---|---|
 | `command` | `"claude"` (code) | string | What `:ai` starts in the AI pane when the project has no history. It may carry arguments, such as `nono run --profile claude -- claude`. Varde reads it only from `~/.varde/config.toml`: a project file that sets `[ai]` is ignored. Varde remembers the command you last used in this project (`:ai <command>`) in `state.json`, and that overrides this key. |
+| `env` | `["HOME", "PATH", "USER", "LOGNAME", "SHELL", "TMPDIR", "LANG", "LC_ALL", "LC_CTYPE"]` | list of names | The only environment variables the AI CLI is given. Varde starts it with an empty environment and copies in each name on this list that is set where Varde was started. Everything else stays out, including secrets a `.envrc` or your shell profile exported, and anything Claude runs inherits the same short list. To pass a secret, such as `ANTHROPIC_API_KEY`, name it here. Setting the key replaces the whole list, so repeat the defaults you still want. `TERM` and `COLORTERM` are set by Varde and need no entry. `SHELL` is always set to your login shell, by the pty library. Leaving out `PATH` means the command must be an absolute path. Read only from `~/.varde/config.toml`. A change applies to the next AI session. |
 
 ### `[risk]`
 

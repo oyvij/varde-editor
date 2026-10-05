@@ -19,6 +19,9 @@ tab_width = 4
 # inside, and what it was left at beats this.
 minimap = true
 
+[ai]
+env = ["HOME", "PATH", "USER", "LOGNAME", "SHELL", "TMPDIR", "LANG", "LC_ALL", "LC_CTYPE"]
+
 [risk]
 threshold = 15
 max_iterations = 10
@@ -872,6 +875,13 @@ const TEMPLATE_SETTINGS: &str = r#"# Varde reads this file on every start. A pro
 # project is opened. `:minimap` is the same switch while you are in there.
 # minimap = true
 
+[ai]
+
+# The only environment variables the AI pane's CLI is handed. Everything else
+# Varde was started with stays out of it, secrets included: name a variable
+# here to pass it through. A project's config cannot add to this list.
+# env = ["HOME", "PATH", "USER", "LOGNAME", "SHELL", "TMPDIR", "LANG", "LC_ALL", "LC_CTYPE"]
+
 [risk]
 
 # The cyclomatic complexity a function may reach before Risk names it.
@@ -1195,7 +1205,15 @@ pub enum FactValue {
 }
 
 #[derive(Default, serde::Deserialize)]
+struct Ai {
+    #[serde(default)]
+    env: Vec<String>,
+}
+
+#[derive(Default, serde::Deserialize)]
 struct Layer {
+    #[serde(default)]
+    ai: Ai,
     #[serde(default)]
     lsp: BTreeMap<String, Server>,
     #[serde(default)]
@@ -1564,6 +1582,7 @@ fn configure(state: &mut State, config: &Config) {
         launches: config.launches(),
         runs: config.runs(),
         speech: speech(config, &state.os),
+        ai_env: config.layer().ai.env,
         ..std::mem::take(state)
     };
 }
@@ -1723,11 +1742,13 @@ fn parse(source: &str, label: &str) -> Result<(Table, Origins), ConfigError> {
         line: at(&error),
         fault: ConfigFault::NotToml,
     })?;
-    let layer = toml::from_str::<SourceLayer>(source).map_err(|error| ConfigError {
+    let wrong_type = |error: toml::de::Error| ConfigError {
         file: label.to_string(),
         line: at(&error),
         fault: ConfigFault::WrongType(error.message().to_string()),
-    })?;
+    };
+    toml::from_str::<Layer>(source).map_err(wrong_type)?;
+    let layer = toml::from_str::<SourceLayer>(source).map_err(wrong_type)?;
     let origins = layer
         .lsp
         .iter()
@@ -2559,7 +2580,11 @@ mod tests {
         );
 
         let uncommented = uncommented(SEEDED_CONFIG);
-        let defaults = fresh().0;
+        let mut defaults = fresh().0;
+        assert!(
+            defaults.remove("ai").is_some() && !uncommented.contains_key("ai"),
+            "a project's config names [ai], which a project cannot set"
+        );
         assert!(
             !uncommented.is_empty()
                 && uncommented

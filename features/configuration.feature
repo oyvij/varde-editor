@@ -144,6 +144,75 @@ Feature: Configuration and state
     Then the effective setting "ai.command" is "nono run -- claude"
     And the effective setting "editor.tab_width" is "2"
 
+  Scenario: The AI is handed only a short list of environment variables by default
+    Given the global config is empty
+    And Varde started in the project
+    When I start the AI with "claude"
+    Then the AI was handed only the environment variables:
+      | HOME     |
+      | PATH     |
+      | USER     |
+      | LOGNAME  |
+      | SHELL    |
+      | TMPDIR   |
+      | LANG     |
+      | LC_ALL   |
+      | LC_CTYPE |
+
+  Scenario: The global config names the environment variables the AI is handed
+    Given the global config is:
+      """
+      [ai]
+      env = ["HOME", "PATH", "ANTHROPIC_API_KEY"]
+      """
+    And Varde started in the project
+    When I start the AI with "claude"
+    Then the AI was handed only the environment variables:
+      | HOME              |
+      | PATH              |
+      | ANTHROPIC_API_KEY |
+
+  Scenario: A project cannot hand the AI more of the environment
+    Given the global config is:
+      """
+      [ai]
+      env = ["HOME", "PATH"]
+      """
+    And the project config is:
+      """
+      [ai]
+      env = ["HOME", "PATH", "AWS_SECRET_ACCESS_KEY"]
+      """
+    And Varde started in the project
+    When I start the AI with "claude"
+    Then the AI was handed only the environment variables:
+      | HOME |
+      | PATH |
+
+  Scenario: An AI environment that is not a list of names stops Varde from starting
+    Given the global config is:
+      """
+      [ai]
+      env = "HOME"
+      """
+    When Varde starts in the project
+    Then Varde refuses to start
+    And the error names the file "~/.varde/config.toml"
+    And the error names line 2
+    And the fault is "wrong-type"
+
+  Scenario: A changed AI environment applies to the next AI session
+    Given the global config is empty
+    And Varde started in the project
+    And the global config is saved as:
+      """
+      [ai]
+      env = ["PATH"]
+      """
+    When I start the AI with "claude"
+    Then the AI was handed only the environment variables:
+      | PATH |
+
   Scenario: Global settings apply when the project sets nothing
     Given the global config is:
       """

@@ -755,6 +755,7 @@ pub enum Effect {
     DeleteDir(PathBuf),
     SpawnAi {
         command: String,
+        env: Vec<String>,
     },
     Notify(&'static str),
     NotifyAbout {
@@ -1004,6 +1005,7 @@ pub struct State {
     pub retention_limit: usize,
     pub ai_running: bool,
     pub ai_command: String,
+    pub ai_env: Vec<String>,
     pub editor_theme: String,
     pub editor_field: bool,
     pub minimap: bool,
@@ -1227,6 +1229,7 @@ impl Default for State {
             retention_limit: 50,
             ai_running: false,
             ai_command: "claude".to_string(),
+            ai_env: vec![],
             editor_theme: "dark".to_string(),
             editor_field: true,
             minimap: true,
@@ -5151,6 +5154,7 @@ fn on_ai_spoke(state: &State, mut next: State, event: Event, wheeled: bool) -> A
             next.ai_spoken = false;
             effects.push(Effect::SpawnAi {
                 command: next.ai_command.clone(),
+                env: next.ai_env.clone(),
             });
             effects.push(Effect::SaveState(state_json(&next)));
             effects
@@ -6652,6 +6656,7 @@ pub(crate) fn queue_for_ai(next: &mut State, enter: Enter, prompt: String) -> Ve
     if !next.ai_running {
         effects.push(Effect::SpawnAi {
             command: next.ai_command.clone(),
+            env: next.ai_env.clone(),
         });
         next.ai_spoken = false;
     }
