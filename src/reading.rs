@@ -260,6 +260,7 @@ pub fn transport(state: &State) -> Vec<crate::Chip> {
         name,
         glyph: glyph.to_string(),
         keys,
+        word: "",
         hue,
         tone: match state.transport_lit == Some(action) {
             true => Tone::Lit,

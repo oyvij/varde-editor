@@ -61,16 +61,24 @@ pub fn narrow(next: &mut State, text: String) -> Vec<Effect> {
         return vec![];
     }
     if opening {
-        next.index = Index {
-            walk: walk + 1,
-            walking: true,
-            ..Index::default()
-        };
-        return vec![Effect::IndexProject { walk: walk + 1 }];
+        return reindex(next);
     }
     next.index.ranked = Arc::new(ranked(&next.filter, &next.index.files));
     next.index.pick = None;
     vec![]
+}
+
+pub fn reindex(next: &mut State) -> Vec<Effect> {
+    let walk = next.index.walk + 1;
+    next.index = Index {
+        walk,
+        walking: true,
+        ..Index::default()
+    };
+    vec![Effect::IndexProject {
+        walk,
+        root: next.shown_root().to_path_buf(),
+    }]
 }
 
 pub fn indexed(next: &mut State, walk: u64, files: Vec<String>, done: bool) {
@@ -162,6 +170,7 @@ pub fn step(state: &State, next: &mut State, direction: Direction) {
 mod tests {
     use super::Index;
     use crate::{update, Effect, Event, State};
+    use std::path::PathBuf;
     use std::sync::Arc;
 
     fn filtered(needle: &str) -> State {
@@ -191,7 +200,13 @@ mod tests {
     #[test]
     fn opening_the_filter_asks_for_one_walk_and_waits_on_nothing() {
         let (opened, effects) = update(&State::default(), Event::Filter("m".to_string()));
-        assert_eq!(effects, vec![Effect::IndexProject { walk: 1 }]);
+        assert_eq!(
+            effects,
+            vec![Effect::IndexProject {
+                walk: 1,
+                root: PathBuf::new()
+            }]
+        );
         assert!(opened.index.walking);
         assert_eq!(super::view_state(&opened), "walking", "not yet no-matches");
         let (typed, effects) = update(&opened, Event::Filter("ma".to_string()));

@@ -35,7 +35,7 @@ use varde::{
     tmp_dir, tree, update, varde_dir, Direction, Effect, Event, Modal, Pane, ReplaceFailed, State,
 };
 
-const HINT: &str = " Ctrl+Space or Esc Esc commands (e/r view · f find · a AI · t terminal · w write · s submit · q quit) · ^F search · / filter · gt/gT buffers · :q close · :qa quit · Alt+hjkl focus · Enter open · → row actions · n/N/d shortcuts";
+const HINT: &str = " Ctrl+Space or Esc Esc commands (e/r view · f find · a AI · t terminal · w knowledge · s submit · q quit) · ^F search · / filter · gt/gT buffers · :q close · :qa quit · Alt+hjkl focus · Enter open · → row actions · n/N/d shortcuts";
 
 #[derive(ClapParser)]
 #[command(
@@ -89,6 +89,13 @@ fn main() -> Result<()> {
         project_config: config_layer(
             &varde_dir(&root, sidecar.as_deref()).join(startup::CONFIG_FILE),
         ),
+        shipped: varde::skills::SHIPPED
+            .iter()
+            .filter_map(|(file, _)| {
+                let path = varde_home.join(file);
+                read(&path).map(|text| (path, text))
+            })
+            .collect(),
         state_json: read(&varde_dir(&root, sidecar.as_deref()).join(STATE_FILE)),
         risk_json: read(&varde_dir(&root, sidecar.as_deref()).join(varde::risk::FILE)),
         head: head_commit(&root),
@@ -506,6 +513,7 @@ struct Edge {
     formatted: Sender<(String, PathBuf, u64, format::Answer)>,
     released: Sender<Option<String>>,
     replaced: Sender<Result<(), ReplaceFailed>>,
+    listed: Sender<(String, Vec<String>)>,
     exe: Option<PathBuf>,
     relaunch: bool,
     servers: BTreeMap<String, rpc::Server>,
@@ -596,6 +604,7 @@ fn run(
     let (formatted_tx, formatted_rx) = channel();
     let (released_tx, released_rx) = channel();
     let (replaced_tx, replaced_rx) = channel();
+    let (listed_tx, listed_rx) = channel();
     let (highlit_tx, highlit_rx) = channel();
     let (blamed_tx, blamed_rx) = channel();
     let (polled_tx, polled_rx) = channel();
@@ -661,6 +670,7 @@ fn run(
         formatted: formatted_tx,
         released: released_tx,
         replaced: replaced_tx,
+        listed: listed_tx,
         exe,
         relaunch: false,
         probe: None,
@@ -673,7 +683,7 @@ fn run(
 
     let (watch_tx, watch_rx) = channel();
     let mut watcher = notify::recommended_watcher(watch_tx)?;
-    let mut watched: BTreeSet<PathBuf> = BTreeSet::new();
+    let mut watched: BTreeSet<(PathBuf, varde::Watch)> = BTreeSet::new();
 
     state.system_clipboard = edge.clipboard.is_some();
     state.branch = head_branch(&root);
@@ -688,8 +698,8 @@ fn run(
         perform(effect, state.split(), &mut edge, &mut queue);
     }
     queue.push_back(Event::Expand {
-        entries: entries(&root),
-        path: root.clone(),
+        entries: entries(state.shown_root()),
+        path: state.shown_root().to_path_buf(),
     });
 
     let started = Instant::now();
@@ -721,6 +731,7 @@ fn run(
             &formatted_rx,
             &released_rx,
             &replaced_rx,
+            &listed_rx,
             &mut queue,
         );
         dirty |= queue.len() != before;
@@ -728,7 +739,7 @@ fn run(
 
         queue_tick(&state, &mut last_tick, &mut queue);
         dirty |= queue_held_drag(&state, &mut edge, &mut last_drag, &mut queue);
-        dirty |= queue_search(&state, &root, &mut edge, &mut queue);
+        dirty |= queue_search(&state, &mut edge, &mut queue);
         dirty |= queue_index(&state, &mut edge, &mut queue);
         dirty |= queue_due_windows(&mut edge, &mut queue);
         dirty |= drain_panes(&state, &mut edge, &mut queue);
@@ -808,7 +819,7 @@ fn queue_held_drag(
     queue.len() != before
 }
 
-fn queue_search(state: &State, root: &Path, edge: &mut Edge, queue: &mut VecDeque<Event>) -> bool {
+fn queue_search(state: &State, edge: &mut Edge, queue: &mut VecDeque<Event>) -> bool {
     let wanted = varde::search::running(state);
     if edge
         .pending_search
@@ -826,11 +837,10 @@ fn queue_search(state: &State, root: &Path, edge: &mut Edge, queue: &mut VecDequ
     }
     if let Some((request, _)) = edge.pending_search.take_if(|(_, at)| Instant::now() >= *at) {
         let (hits, found) = channel();
-        let root = root.to_path_buf();
         let wanted = Arc::new(());
         let still = Arc::downgrade(&wanted);
         edge.searching = Some((request.generation, found, wanted));
-        std::thread::spawn(move || search_project(&root, &request, &hits, &still));
+        std::thread::spawn(move || search_project(&request, &hits, &still));
     }
     let Some((generation, found, _)) = edge.searching.as_ref() else {
         return false;
@@ -950,8 +960,12 @@ fn collect_job_events(
     formatted: &Receiver<(String, PathBuf, u64, format::Answer)>,
     released: &Receiver<Option<String>>,
     replaced: &Receiver<Result<(), ReplaceFailed>>,
+    listed: &Receiver<(String, Vec<String>)>,
     queue: &mut VecDeque<Event>,
 ) {
+    while let Ok((note, files)) = listed.try_recv() {
+        queue.push_back(Event::NotesListed { note, files });
+    }
     while let Ok(body) = released.try_recv() {
         queue.push_back(Event::ReleaseAnswered(body));
     }
@@ -1242,7 +1256,7 @@ fn refresh_git(
         edge.polling = None;
         let fresh_authorship = authorship(
             answer.workdir.as_deref(),
-            state.buffers.keys(),
+            varde::asked_of_git(state),
             answer.head.as_deref(),
             &mut edge.authored,
             &mut edge.blaming,
@@ -1271,14 +1285,14 @@ fn refresh_git(
         state.contents.values().map(Vec::len).sum::<usize>(),
     );
     due |= shape != *last_shape
-        || state.buffers.keys().any(|path| !edge.asked.contains(path))
+        || varde::asked_of_git(state).any(|path| !edge.asked.contains(path))
         || last_git.elapsed() > Duration::from_secs(2);
     if !due || edge.polling.is_some() {
         return dirty;
     }
     *last_git = Instant::now();
     *last_shape = shape;
-    edge.asked = state.buffers.keys().cloned().collect();
+    edge.asked = varde::asked_of_git(state).cloned().collect();
     let repo = state.repo_root().to_path_buf();
     let range = match story::inventory(&state.story_set) {
         story::Inventory::Committed { base, head } => Some((base.to_string(), head.to_string())),
@@ -2601,6 +2615,9 @@ fn perform_files(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>) -
             let entries = entries(&path);
             queue.push_back(Event::Expand { path, entries });
         }
+        Effect::OpenVault(path) => {
+            queue.push_back(Event::VaultOpened(path.is_dir().then(|| entries(&path))));
+        }
         Effect::ReadClipboard => {
             if let Some(text) = edge
                 .clipboard
@@ -2669,9 +2686,14 @@ fn perform_jobs(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>) {
             edge.searching = None;
             edge.pending_search = Some((request, Instant::now() + Duration::from_millis(150)));
         }
-        Effect::IndexProject { walk } => {
+        Effect::ListNotes { note, root } => {
+            let answer = edge.listed.clone();
+            std::thread::spawn(move || {
+                let _ = answer.send((note, walking(&root).collect()));
+            });
+        }
+        Effect::IndexProject { walk, root } => {
             let (files, walked) = channel();
-            let root = edge.root.clone();
             edge.indexing = Some((walk, walked));
             std::thread::spawn(move || {
                 for name in walking(&root) {
@@ -2712,6 +2734,7 @@ fn perform_jobs(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>) {
             queue.push_back(Event::StoryResolved(outcome));
         }
         Effect::ReadBranches => queue.push_back(Event::Branches(read_branches(&edge.root))),
+        Effect::ListSkills(folder) => queue.push_back(Event::SkillsListed(list_skills(&folder))),
         Effect::ReadGuestBranches {
             sentinel,
             repo,
@@ -3297,6 +3320,25 @@ fn project(base: &Path) -> ignore::WalkBuilder {
     walker
 }
 
+fn list_skills(folder: &Path) -> Vec<varde::skills::Skill> {
+    let mut skills: Vec<varde::skills::Skill> = std::fs::read_dir(folder)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|entry| entry.path().is_dir())
+        .filter_map(|entry| {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            match std::fs::read_to_string(entry.path().join(varde::skills::FILE)) {
+                Ok(text) => Some(varde::skills::read(&name, &text)),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+                Err(_) => Some(varde::skills::read(&name, "")),
+            }
+        })
+        .collect();
+    skills.sort_by(|a, b| a.folder.cmp(&b.folder));
+    skills
+}
+
 fn walking(root: &Path) -> impl Iterator<Item = String> + '_ {
     project(root)
         .build()
@@ -3407,12 +3449,12 @@ fn space(analysed: &rust_code_analysis::FuncSpace) -> Space {
 }
 
 fn search_project(
-    root: &Path,
     request: &varde::search::Request,
     hits: &Sender<Vec<varde::search::Hit>>,
     wanted: &std::sync::Weak<()>,
 ) {
     use grep_searcher::{BinaryDetection, SearcherBuilder};
+    let root = &request.root;
     if hits
         .send(varde::search::scan(&request.query, &request.buffers))
         .is_err()
@@ -3728,6 +3770,26 @@ const NOTICES: &[(&str, &str, ui::Tone)] = &[
         ui::Tone::Warning,
     ),
     (
+        "knowledge-disabled",
+        "The knowledge base is off — set [knowledge] enabled = true in ~/.varde/config.toml",
+        ui::Tone::Warning,
+    ),
+    (
+        "no-such-vault",
+        "The Vault folder in [knowledge] vault does not exist — Varde creates only the default one",
+        ui::Tone::Warning,
+    ),
+    (
+        "empty-vault",
+        "The Vault is empty — pick Update Knowledge from Skills to write the first Notes",
+        ui::Tone::Notice,
+    ),
+    (
+        "vault-is-read-only",
+        "Notes are read-only here — only a Skill writes the Vault",
+        ui::Tone::Warning,
+    ),
+    (
         "buffer-diverged",
         "Changed on disk under your unsaved edits — D to resolve",
         ui::Tone::Warning,
@@ -3872,17 +3934,21 @@ fn notice_text(notice: &str) -> (&str, ui::Tone) {
 fn sync_watches(
     state: &State,
     watcher: &mut notify::RecommendedWatcher,
-    watched: &mut BTreeSet<PathBuf>,
+    watched: &mut BTreeSet<(PathBuf, varde::Watch)>,
 ) {
     let wanted = varde::watched_folders(state);
-    for path in wanted.difference(watched).cloned().collect::<Vec<_>>() {
-        if watcher.watch(&path, RecursiveMode::NonRecursive).is_ok() {
-            watched.insert(path);
-        }
+    for held in watched.difference(&wanted).cloned().collect::<Vec<_>>() {
+        let _ = watcher.unwatch(&held.0);
+        watched.remove(&held);
     }
-    for path in watched.difference(&wanted).cloned().collect::<Vec<_>>() {
-        let _ = watcher.unwatch(&path);
-        watched.remove(&path);
+    for (path, watch) in wanted.difference(watched).cloned().collect::<Vec<_>>() {
+        let mode = match watch {
+            varde::Watch::Folder => RecursiveMode::NonRecursive,
+            varde::Watch::Tree => RecursiveMode::Recursive,
+        };
+        if watcher.watch(&path, mode).is_ok() {
+            watched.insert((path, watch));
+        }
     }
 }
 
@@ -3902,7 +3968,9 @@ fn collect_watch_events(
             // Not Access: inotify reports opens, and reloading the config opens it, looping forever
             edited |= !matches!(kind, notify::EventKind::Access(_))
                 && (path == global || path == project);
-            if path.parent() == Some(state.varde_home.as_path()) && !path.starts_with(&state.root) {
+            if path.parent() == Some(state.varde_home.as_path())
+                && !path.starts_with(state.shown_root())
+            {
                 continue;
             }
             watched_path(&kind, path, state, &git_dir, &stories_dir, queue);

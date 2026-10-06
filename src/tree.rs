@@ -31,8 +31,8 @@ pub struct Row {
 
 pub fn visible_rows(state: &State) -> Vec<Row> {
     match state.view {
-        View::Edit if !state.filter.is_empty() => filtered(state),
-        View::Edit => rows(state),
+        View::Edit | View::Knowledge if !state.filter.is_empty() => filtered(state),
+        View::Edit | View::Knowledge => rows(state),
         View::Review => changed_files(state),
         View::Story => match state.story_listing {
             story::Listing::Files => changed_files(state),
@@ -56,13 +56,13 @@ fn changed_files(state: &State) -> Vec<Row> {
 pub fn highlighted(state: &State) -> Option<PathBuf> {
     match state.filter.is_empty() {
         true => state.tree_selection.clone(),
-        false => filter::chosen(state).map(|path| state.root.join(path)),
+        false => filter::chosen(state).map(|path| state.shown_root().join(path)),
     }
 }
 
 pub fn filter_rows(view: View) -> usize {
     match view {
-        View::Edit => 2,
+        View::Edit | View::Knowledge => 2,
         View::Review | View::Story => 0,
     }
 }
@@ -72,7 +72,7 @@ fn filtered(state: &State) -> Vec<Row> {
     let mut seen: HashSet<PathBuf> = HashSet::new();
     for path in filter::matches(state) {
         let parts: Vec<&str> = path.split('/').collect();
-        let mut walk = state.root.clone();
+        let mut walk = state.shown_root().to_path_buf();
         for (index, part) in parts.iter().enumerate() {
             walk = walk.join(part);
             if !seen.insert(walk.clone()) {
@@ -91,7 +91,7 @@ fn filtered(state: &State) -> Vec<Row> {
 
 pub fn rows(state: &State) -> Vec<Row> {
     let mut out = Vec::new();
-    push_folder(state, &state.root, &mut out);
+    push_folder(state, state.shown_root(), &mut out);
     out
 }
 
@@ -117,7 +117,7 @@ fn push_folder(state: &State, folder: &Path, out: &mut Vec<Row>) {
 }
 
 pub fn row_actions(state: &State, path: &Path) -> Vec<&'static str> {
-    if state.tree_selection.as_deref() != Some(path) {
+    if state.tree_selection.as_deref() != Some(path) || state.view == View::Knowledge {
         return Vec::new();
     }
     match visible_rows(state).into_iter().find(|row| row.path == path) {

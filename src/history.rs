@@ -33,7 +33,7 @@ pub fn stale(state: &State, visit: &Visit) -> bool {
     let Some(buffer) = state
         .buffers
         .iter()
-        .find(|(path, _)| crate::relative(state, path) == visit.file)
+        .find(|(path, _)| crate::relative(state.shown_root(), path) == visit.file)
         .map(|(_, buffer)| buffer)
     else {
         return false;
@@ -81,11 +81,11 @@ pub fn jumped(state: &State, event: &Event) -> Jump {
         }
         Event::BufferOpened { .. } if state.restoring > 0 => Jump::No,
         Event::BufferOpened { path, at, .. } => Jump::ToFile {
-            file: crate::relative(state, path),
+            file: crate::relative(state.shown_root(), path),
             at: *at,
         },
         Event::ShowBuffer(path) => Jump::ToFile {
-            file: crate::relative(state, path),
+            file: crate::relative(state.shown_root(), path),
             at: None,
         },
         Event::StepMatch(_) => Jump::InFile,
@@ -199,7 +199,7 @@ fn go_to(state: &State, mut next: State, target: usize) -> (State, Vec<Effect>) 
         return (next, vec![Effect::Notify("no-place-here")]);
     };
     next.history_selection = target;
-    let path = state.root.join(&visit.file);
+    let path = state.shown_root().join(&visit.file);
     let at = Place {
         line: visit.line,
         column: visit.column,
@@ -225,7 +225,7 @@ fn here(state: &State, at: Option<Place>) -> Option<Visit> {
         })
     };
     Some(Visit {
-        file: crate::relative(state, path),
+        file: crate::relative(state.shown_root(), path),
         line: at.line,
         column: at.column,
         text: line_of(buffer, at.line).unwrap_or_default(),

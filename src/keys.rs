@@ -21,7 +21,7 @@ pub struct CommandLine {
     pub pick: Option<usize>,
 }
 
-pub const COMMANDS: [(&str, &str, &[View], &[Event]); 33] = [
+pub const COMMANDS: [(&str, &str, &[View], &[Event]); 35] = [
     (
         "format",
         "lay the file out",
@@ -74,7 +74,7 @@ pub const COMMANDS: [(&str, &str, &[View], &[Event]); 33] = [
     (
         "inject",
         "selection to the AI prompt",
-        &[View::Edit, View::Review, View::Story],
+        &[View::Edit, View::Review, View::Story, View::Knowledge],
         &[Event::InjectToAi],
     ),
     ("dim", "darker editor", &[View::Edit], &[Event::ToggleField]),
@@ -154,7 +154,7 @@ pub const COMMANDS: [(&str, &str, &[View], &[Event]); 33] = [
     (
         "ai",
         "start the AI session",
-        &[View::Edit, View::Review, View::Story],
+        &[View::Edit, View::Review, View::Story, View::Knowledge],
         &[Event::StartAi {
             command: None,
             force: false,
@@ -163,7 +163,7 @@ pub const COMMANDS: [(&str, &str, &[View], &[Event]); 33] = [
     (
         "ai!",
         "start it again, replacing the session",
-        &[View::Edit, View::Review, View::Story],
+        &[View::Edit, View::Review, View::Story, View::Knowledge],
         &[Event::StartAi {
             command: None,
             force: true,
@@ -172,31 +172,43 @@ pub const COMMANDS: [(&str, &str, &[View], &[Event]); 33] = [
     (
         "ai <cli>",
         "start the AI CLI you name",
-        &[View::Edit, View::Review, View::Story],
+        &[View::Edit, View::Review, View::Story, View::Knowledge],
         &[],
+    ),
+    (
+        "knowledge",
+        "the Vault in the tree, and back",
+        &[View::Edit, View::Review, View::Story, View::Knowledge],
+        &[Event::ToggleKnowledge],
+    ),
+    (
+        "skills",
+        "hand a Skill to the AI",
+        &[View::Edit, View::Review, View::Story, View::Knowledge],
+        &[Event::OpenSkills],
     ),
     (
         "update",
         "update Varde itself",
-        &[View::Edit, View::Review, View::Story],
+        &[View::Edit, View::Review, View::Story, View::Knowledge],
         &[Event::Rebuild],
     ),
     (
         "tall",
         "the AI pane down the full height",
-        &[View::Edit, View::Review, View::Story],
+        &[View::Edit, View::Review, View::Story, View::Knowledge],
         &[Event::ToggleTallAi],
     ),
     (
         "split",
         "another shell in the strip",
-        &[View::Edit, View::Review, View::Story],
+        &[View::Edit, View::Review, View::Story, View::Knowledge],
         &[Event::SplitTerminal],
     ),
     (
         "help",
         "the keys of this view",
-        &[View::Edit, View::Review, View::Story],
+        &[View::Edit, View::Review, View::Story, View::Knowledge],
         &[Event::ToggleCheatsheet],
     ),
     (
@@ -219,43 +231,64 @@ pub const COMMANDS: [(&str, &str, &[View], &[Event]); 33] = [
     ),
 ];
 
-pub const CHEATSHEET: [(&str, &str, &[View]); 41] = [
+pub const CHEATSHEET: [(&str, &str, &[View]); 44] = [
     ("i a o O x", "edit", &[View::Edit]),
-    ("w b e", "word", &[View::Edit]),
-    ("gg G", "file ends", &[View::Edit]),
-    ("S-arr W B", "extend", &[View::Edit]),
+    ("w b e", "word", &[View::Edit, View::Knowledge]),
+    ("gg G", "file ends", &[View::Edit, View::Knowledge]),
+    ("S-arr W B", "extend", &[View::Edit, View::Knowledge]),
     ("dd dG db yy p", "cut yank put", &[View::Edit]),
-    ("V", "select lines", &[View::Edit]),
+    ("yy", "yank", &[View::Knowledge]),
+    ("V", "select lines", &[View::Edit, View::Knowledge]),
     (
         "C-c D-c C-v D-v",
         "copy / paste",
-        &[View::Edit, View::Review, View::Story],
+        &[View::Edit, View::Review, View::Story, View::Knowledge],
     ),
-    ("/ n N Tab", "find / its icons", &[View::Edit]),
-    ("gt gT", "buffer", &[View::Edit]),
-    ("C-p C-n gp gn", "jump back / forward", &[View::Edit]),
+    (
+        "/ n N Tab",
+        "find / its icons",
+        &[View::Edit, View::Knowledge],
+    ),
+    ("gt gT", "buffer", &[View::Edit, View::Knowledge]),
+    (
+        "C-p C-n gp gn",
+        "jump back / forward",
+        &[View::Edit, View::Knowledge],
+    ),
     (
         "C-p C-n",
         "jump back / forward",
         &[View::Review, View::Story],
     ),
-    ("* gr", "project", &[View::Edit]),
+    ("* gr", "project", &[View::Edit, View::Knowledge]),
     ("u U C-z C-S-z", "undo / redo", &[View::Edit]),
-    ("K K", "what is this / read it", &[View::Edit]),
-    ("gd", "definition", &[View::Edit]),
+    (
+        "K K",
+        "what is this / read it",
+        &[View::Edit, View::Knowledge],
+    ),
+    (
+        "gd",
+        "definition / follow link",
+        &[View::Edit, View::Knowledge],
+    ),
     (
         "C-space Esc Esc",
         "palette",
-        &[View::Edit, View::Review, View::Story],
+        &[View::Edit, View::Review, View::Story, View::Knowledge],
     ),
     (
         ":",
         "command line",
-        &[View::Edit, View::Review, View::Story],
+        &[View::Edit, View::Review, View::Story, View::Knowledge],
     ),
     ("Enter Esc", "candidates", &[View::Edit]),
     ("Tab", "indent / next blank", &[View::Edit]),
-    ("C-d D-d gm", "same word again", &[View::Edit]),
+    (
+        "C-d D-d gm",
+        "same word again",
+        &[View::Edit, View::Knowledge],
+    ),
     ("j k V c", "select comment", &[View::Review]),
     ("h l 0", "slide sideways", &[View::Review, View::Story]),
     ("e", "edit the file", &[View::Review, View::Story]),
@@ -270,32 +303,46 @@ pub const CHEATSHEET: [(&str, &str, &[View]); 41] = [
     (
         "M-h M-j M-k M-l",
         "focus",
-        &[View::Edit, View::Review, View::Story],
+        &[View::Edit, View::Review, View::Story, View::Knowledge],
     ),
-    ("0 $", "line ends", &[View::Edit]),
-    ("C-F5", "restart debugging", &[View::Review, View::Story]),
+    ("0 $", "line ends", &[View::Edit, View::Knowledge]),
+    (
+        "C-F5",
+        "restart debugging",
+        &[View::Review, View::Story, View::Knowledge],
+    ),
     (
         "C-f D-f",
         "project",
-        &[View::Edit, View::Review, View::Story],
+        &[View::Edit, View::Review, View::Story, View::Knowledge],
     ),
-    ("D", "diverged from disk", &[View::Edit]),
+    ("D", "diverged from disk", &[View::Edit, View::Knowledge]),
     ("C-s D-s", "write", &[View::Edit]),
     (
         "C-space v",
         "tools",
-        &[View::Edit, View::Review, View::Story],
+        &[View::Edit, View::Review, View::Story, View::Knowledge],
+    ),
+    (
+        "C-space j",
+        "skills",
+        &[View::Edit, View::Review, View::Story, View::Knowledge],
+    ),
+    (
+        "C-space w",
+        "knowledge",
+        &[View::Edit, View::Review, View::Story, View::Knowledge],
     ),
     ("cc ci cb", "accept conflict side", &[View::Edit]),
     (
         "e w i h j k Enter",
         "diagnostic list: severity, row, go",
-        &[View::Edit, View::Review, View::Story],
+        &[View::Edit, View::Review, View::Story, View::Knowledge],
     ),
     (
         "j k Enter",
         "conflict list: row, go",
-        &[View::Edit, View::Review, View::Story],
+        &[View::Edit, View::Review, View::Story, View::Knowledge],
     ),
 ];
 
@@ -385,6 +432,8 @@ pub const TOOL_LIST_KEYS: [(&str, &str); 3] =
     [("i", "install"), ("r", "re-check"), ("Esc", "close")];
 
 pub const BRANCH_LIST_KEYS: [(&str, &str); 2] = [("Enter", "story this branch"), ("Esc", "close")];
+
+pub const SKILL_LIST_KEYS: [(&str, &str); 2] = [("Enter", "hand to the AI"), ("Esc", "close")];
 
 pub const LAUNCH_LIST_KEYS: [(&str, &str); 3] =
     [("Enter", "start"), ("c", "create"), ("Esc", "close")];
@@ -591,6 +640,13 @@ fn modal_key(state: &State, drafts: &mut Drafts, event: KeyEvent) -> Vec<Event> 
             },
         },
         Modal::Launches { .. } | Modal::NewLaunch(_) => launch_key(state, event),
+        Modal::Skills { .. } => match event.code {
+            KeyCode::Esc => vec![Event::Cancel],
+            KeyCode::Up => vec![Event::MoveSkillRow(Direction::Up)],
+            KeyCode::Down => vec![Event::MoveSkillRow(Direction::Down)],
+            KeyCode::Enter => vec![Event::PickSkill],
+            _ => vec![],
+        },
         Modal::Branches { filter, .. } => match event.code {
             KeyCode::Esc => vec![Event::Cancel],
             KeyCode::Up => vec![Event::MoveBranchRow(Direction::Up)],
@@ -613,9 +669,11 @@ fn modal_key(state: &State, drafts: &mut Drafts, event: KeyEvent) -> Vec<Event> 
             }
         }
         Modal::Comment => comment_picker(drafts, event),
-        Modal::NameBox { .. } | Modal::SetValue | Modal::NewWatch | Modal::ExceptionClass => {
-            name_box(drafts, event)
-        }
+        Modal::NameBox { .. }
+        | Modal::SetValue
+        | Modal::NewWatch
+        | Modal::ExceptionClass
+        | Modal::SkillQuestion { .. } => name_box(drafts, event),
         Modal::Breakpoint { field, draft, .. } => breakpoint_box(*field, draft, event),
         Modal::Candidates(_) => candidate_list(state, drafts, event),
         Modal::Stops { .. } => match event.code {
@@ -676,6 +734,8 @@ fn answered(modal: &Modal, event: KeyEvent) -> Vec<Event> {
         | Modal::Launches { .. }
         | Modal::NewLaunch(_)
         | Modal::Branches { .. }
+        | Modal::Skills { .. }
+        | Modal::SkillQuestion { .. }
         | Modal::Comment
         | Modal::Candidates(_)
         | Modal::Stops { .. } => {
@@ -3365,13 +3425,13 @@ mod tests {
              terminal reports one: that needs the keyboard flag whose cost is \
              every character a layout composes, which `main.rs` no longer pays. \
              Listing a gesture nobody can perform teaches the wrong key",
-            &[View::Edit, View::Review, View::Story],
+            &[View::Edit, View::Review, View::Story, View::Knowledge],
         ),
         (
             "l",
             "cursor motion — the one thing nobody needs reminding of. Over a \
              Preview it is the same motion, run over the rendered row",
-            &[View::Edit],
+            &[View::Edit, View::Knowledge],
         ),
         (
             "arr",
@@ -3380,54 +3440,62 @@ mod tests {
              With a candidate list up they move the choice instead, which is \
              the same gesture the tree and the Risk list answer and the one \
              thing every list everywhere already teaches",
-            &[View::Edit, View::Review, View::Story],
+            &[View::Edit, View::Review, View::Story, View::Knowledge],
         ),
-        ("Home", "an alias of 0, which is listed", &[View::Edit]),
-        ("End", "an alias of $, which is listed", &[View::Edit]),
+        (
+            "Home",
+            "an alias of 0, which is listed",
+            &[View::Edit, View::Knowledge],
+        ),
+        (
+            "End",
+            "an alias of $, which is listed",
+            &[View::Edit, View::Knowledge],
+        ),
         (
             "S-M-arr",
             "the arrow alias of W and B, which are listed",
-            &[View::Edit],
+            &[View::Edit, View::Knowledge],
         ),
         (
             "M-b",
             "what the terminal sends for Option+Left on macOS, so it is the \
              word motion b, which is listed",
-            &[View::Edit, View::Story],
+            &[View::Edit, View::Story, View::Knowledge],
         ),
         (
             "M-f",
             "what the terminal sends for Option+Right on macOS, so it is the \
              word motion w, which is listed",
-            &[View::Edit, View::Story],
+            &[View::Edit, View::Story, View::Knowledge],
         ),
         (
             "M-arr",
             "the arrow alias of the word motions b and w, which are listed — \
              and, like the plain arrows, a motion rather than a key, so it \
              moves while inserting and through a walked Site too",
-            &[View::Edit, View::Story],
+            &[View::Edit, View::Story, View::Knowledge],
         ),
         (
             "C-M-arr",
             "Ctrl+Option on the left and right arrows, so it is the jump back \
              and forward that C-p, C-n and gp/gn spell, which are listed. An \
              alias rather than a route of its own, for the reason M-arr is one",
-            &[View::Edit, View::Review, View::Story],
+            &[View::Edit, View::Review, View::Story, View::Knowledge],
         ),
         (
             "1",
             "a count is a rule about other keys, not a key of its own",
-            &[View::Edit],
+            &[View::Edit, View::Knowledge],
         ),
-        ("2", "a count", &[View::Edit]),
-        ("3", "a count", &[View::Edit]),
-        ("4", "a count", &[View::Edit]),
-        ("5", "a count", &[View::Edit]),
-        ("6", "a count", &[View::Edit]),
-        ("7", "a count", &[View::Edit]),
-        ("8", "a count", &[View::Edit]),
-        ("9", "a count", &[View::Edit]),
+        ("2", "a count", &[View::Edit, View::Knowledge]),
+        ("3", "a count", &[View::Edit, View::Knowledge]),
+        ("4", "a count", &[View::Edit, View::Knowledge]),
+        ("5", "a count", &[View::Edit, View::Knowledge]),
+        ("6", "a count", &[View::Edit, View::Knowledge]),
+        ("7", "a count", &[View::Edit, View::Knowledge]),
+        ("8", "a count", &[View::Edit, View::Knowledge]),
+        ("9", "a count", &[View::Edit, View::Knowledge]),
         (
             "Bksp",
             "deletes backwards — an insert-mode key, and the box is hidden there",
@@ -3452,7 +3520,7 @@ mod tests {
         (
             "C-q",
             "quits Varde, from wherever you are",
-            &[View::Edit, View::Review, View::Story],
+            &[View::Edit, View::Review, View::Story, View::Knowledge],
         ),
     ];
 
@@ -3768,7 +3836,7 @@ mod tests {
                         crate::Effect::NotifyAbout {
                             slug: "no-such-motion",
                             ..
-                        }
+                        } | crate::Effect::Notify("vault-is-read-only")
                     )
                 });
             }
@@ -3817,8 +3885,44 @@ mod tests {
         drafts.command.as_ref().map(|line| line.text.as_str())
     }
 
-    fn views() -> [(View, State); 6] {
+    fn knowing() -> State {
+        let workspace = State {
+            root: std::path::PathBuf::from("/w"),
+            varde_home: std::path::PathBuf::from("/h/.varde"),
+            vault: Some(std::path::PathBuf::from("/h/.varde/knowledge")),
+            ..State::default()
+        };
+        let asked = crate::update(&workspace, Event::ToggleKnowledge).0;
+        let note = crate::tree::Entry {
+            name: "one.md".to_string(),
+            is_dir: false,
+        };
+        let entered = crate::update(&asked, Event::VaultOpened(Some(vec![note]))).0;
+        let opened = ["two.md", "one.md"].iter().fold(entered, |state, name| {
+            crate::update(
+                &state,
+                Event::BufferOpened {
+                    path: std::path::Path::new("/h/.varde/knowledge").join(name),
+                    contents: "one two three\nfour five six\nseven eight nine\n".to_string(),
+                    preview: false,
+                    at: None,
+                },
+            )
+            .0
+        });
+        let mut state = State {
+            focus: Pane::Editor,
+            ..crate::update(&opened, Event::TogglePreview).0
+        };
+        for direction in [Direction::Down, Direction::Right, Direction::Right] {
+            state = crate::update(&state, Event::EditorArrow(direction)).0;
+        }
+        state
+    }
+
+    fn views() -> [(View, State); 7] {
         [
+            (View::Knowledge, knowing()),
             (View::Edit, editing()),
             (View::Edit, offering_candidates()),
             (View::Edit, filling_in_a_snippet(&editing())),
@@ -4390,6 +4494,52 @@ mod tests {
                 "{key:?} is not what it always is"
             );
         }
+    }
+
+    #[test]
+    fn the_skills_modal_answers_exactly_the_keys_its_box_names() {
+        let listing = State {
+            modal: crate::Modal::Skills {
+                skills: vec![
+                    crate::skills::read("one", "---\nname: one\ndescription: d\n---\n"),
+                    crate::skills::read("two", "---\nname: two\ndescription: d\n---\n"),
+                ],
+                row: 0,
+            },
+            ..editing()
+        };
+        for (key, word) in super::SKILL_LIST_KEYS {
+            let event = every_key()
+                .into_iter()
+                .find(|event| label(*event) == key)
+                .unwrap_or_else(|| panic!("no key spells {key}"));
+            assert!(
+                answers(&listing, &[event]),
+                "the box offers {key} for {word} and the modal does nothing with it"
+            );
+        }
+        let closed = State {
+            modal: crate::Modal::None,
+            ..listing.clone()
+        };
+        let mut unnamed: Vec<String> = every_key()
+            .into_iter()
+            .filter(|event| {
+                !on_key_event(&listing, &mut Drafts::default(), *event, 0).is_empty()
+                    && !answers(&closed, &[*event])
+            })
+            .map(label)
+            .filter(|label| {
+                !super::SKILL_LIST_KEYS.iter().any(|(key, _)| key == label)
+                    && !label.contains("arr")
+            })
+            .collect();
+        unnamed.sort();
+        unnamed.dedup();
+        assert!(
+            unnamed.is_empty(),
+            "the Skills modal answers keys its box does not name: {unnamed:?}"
+        );
     }
 
     #[test]

@@ -31,6 +31,7 @@ pub const CAP: usize = 500;
 pub struct Request {
     pub generation: u64,
     pub query: String,
+    pub root: PathBuf,
     pub under: Option<PathBuf>,
     pub only: Option<Vec<String>>,
     pub buffers: Vec<(String, String)>,
@@ -54,6 +55,7 @@ pub fn ask(next: &mut State) -> Vec<Effect> {
     next.searches_asked += 1;
     let generation = next.searches_asked;
     let buffers = buffers(next);
+    let root = next.shown_root().to_path_buf();
     let Some(search) = next.search.as_mut() else {
         return Vec::new();
     };
@@ -72,6 +74,7 @@ pub fn ask(next: &mut State) -> Vec<Effect> {
         generation,
         only: narrows.then(|| files(previous)),
         query,
+        root,
         under: search.scope.clone(),
         buffers,
     })]
@@ -96,7 +99,7 @@ fn buffers(state: &State) -> Vec<(String, String)> {
         .buffers
         .iter()
         .filter_map(|(path, buffer)| {
-            let relative = path.strip_prefix(&state.root).ok()?;
+            let relative = path.strip_prefix(state.shown_root()).ok()?;
             scope
                 .is_none_or(|scope| relative.starts_with(scope))
                 .then(|| {
@@ -494,6 +497,7 @@ mod tests {
         let request = Request {
             generation: 1,
             query: "x".to_string(),
+            root: PathBuf::from("/w"),
             under: Some(PathBuf::from("src")),
             only: Some(vec!["src/a.rs".to_string(), "docs/a.md".to_string()]),
             buffers: Vec::new(),
