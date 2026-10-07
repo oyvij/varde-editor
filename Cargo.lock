@@ -3636,7 +3636,7 @@ dependencies = [
 
 [[package]]
 name = "varde"
-version = "0.215.1"
+version = "0.216.0"
 dependencies = [
  "anyhow",
  "arboard",
@@ -3684,6 +3684,7 @@ dependencies = [
  "unicode-width",
  "vt100",
  "which",
+ "yaml-rust",
 ]
 
 [[package]]

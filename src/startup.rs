@@ -1003,6 +1003,7 @@ pub struct Startup {
     pub path_status: PathStatus,
     pub global_config: Option<String>,
     pub project_config: Option<String>,
+    pub shipped: BTreeMap<PathBuf, String>,
     pub state_json: Option<String>,
     pub risk_json: Option<String>,
     pub head: Option<String>,
@@ -1211,9 +1212,18 @@ struct Ai {
 }
 
 #[derive(Default, serde::Deserialize)]
+struct Knowledge {
+    #[serde(default)]
+    enabled: bool,
+    vault: Option<String>,
+}
+
+#[derive(Default, serde::Deserialize)]
 struct Layer {
     #[serde(default)]
     ai: Ai,
+    #[serde(default)]
+    knowledge: Knowledge,
     #[serde(default)]
     lsp: BTreeMap<String, Server>,
     #[serde(default)]
@@ -1337,6 +1347,15 @@ pub fn start(input: &Startup) -> Result<(State, Config, Vec<Effect>), StartupErr
             contents: template(),
         });
     }
+    for (file, text) in crate::skills::SHIPPED {
+        let path = input.varde_home.join(file);
+        if input.shipped.get(&path).map(String::as_str) != Some(text) {
+            effects.push(Effect::WriteFile {
+                path,
+                contents: text.to_string(),
+            });
+        }
+    }
     let buffers = saved_buffers(&input.root, input.state_json.as_deref());
     state.restoring = buffers.len();
     effects.extend(buffers.into_iter().map(Effect::OpenBuffer));
@@ -1386,6 +1405,7 @@ pub(crate) fn merged_config(
         let (mut overlay, mentioned) = parse(source, label)?;
         if label == PROJECT_LABEL {
             overlay.remove("ai");
+            overlay.remove("knowledge");
         }
         origins.extend(mentioned);
         merge(&mut table, overlay);
@@ -1583,8 +1603,25 @@ fn configure(state: &mut State, config: &Config) {
         runs: config.runs(),
         speech: speech(config, &state.os),
         ai_env: config.layer().ai.env,
+        vault: vault(config, &state.varde_home),
         ..std::mem::take(state)
     };
+}
+
+pub(crate) fn default_vault(varde_home: &Path) -> PathBuf {
+    varde_home.join("knowledge")
+}
+
+fn vault(config: &Config, varde_home: &Path) -> Option<PathBuf> {
+    let knowledge = config.layer().knowledge;
+    let home = varde_home.parent().unwrap_or(varde_home);
+    knowledge.enabled.then(|| match knowledge.vault {
+        None => default_vault(varde_home),
+        Some(vault) => match Path::new(&vault).strip_prefix("~") {
+            Ok(rest) => home.join(rest),
+            Err(_) => PathBuf::from(vault),
+        },
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2564,7 +2601,7 @@ mod tests {
         assert!(
             !effects
                 .iter()
-                .any(|effect| matches!(effect, Effect::WriteFile { .. })),
+                .any(|effect| matches!(effect, Effect::WriteFile { path, .. } if path.ends_with(super::CONFIG_FILE))),
             "starting wrote over a config file that is already there: {effects:?}"
         );
     }

@@ -1541,6 +1541,7 @@ fn plain_rows(text: &str, measure: usize) -> Vec<preview::Row> {
                         text: piece.into_owned(),
                         emphasis: preview::Emphasis::default(),
                         token: None,
+                        note: None,
                     }],
                     refused: None,
                 })
@@ -1572,6 +1573,7 @@ fn cut_short(line: usize) -> preview::Row {
             text: "\u{2026}".to_string(),
             emphasis: preview::Emphasis::default(),
             token: None,
+            note: None,
         }],
         refused: None,
     }

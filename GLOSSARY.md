@@ -892,3 +892,39 @@ _Avoid_: expression (a Snippet can be many statements), code fragment
 **Evaluator output**:
 The box beneath the Snippet: what the program printed while the Snippet ran, then its value.
 _Avoid_: result pane, console
+
+### Keeping knowledge
+
+**Vault**:
+The one folder of markdown the user keeps knowledge in, shared by every workspace and openable as an
+Obsidian vault. It holds nothing that names this machine, so it can be handed to someone else whole.
+_Avoid_: knowledge base (that is the feature), wiki, notes folder, second brain
+
+**Note**:
+One markdown file in the Vault.
+_Avoid_: page, document, entry, article
+
+**Topic**:
+A folder at the root of the Vault, grouping the Notes that belong together.
+_Avoid_: root folder, area, category, project
+
+**Kind**:
+A folder inside a Topic naming what sort of Note it holds and so how it is written — a how-to reads
+differently from reference documentation. The same knowledge may be written once per Kind it fits.
+_Avoid_: type, subfolder, category
+
+**Skill**:
+A `SKILL.md` in `~/.varde/ai/skills/` that Varde hands to the AI session when the user picks it,
+written so any AI CLI can follow it.
+_Avoid_: prompt, command, action, recipe
+
+**Source map**:
+The file outside the Vault naming where code lives on this machine, by a name the Vault's Notes may
+use. It is the only way a Skill travels from the Vault to source.
+_Avoid_: repo list, index, workspace list
+
+**Knowledge view**:
+The View that points the tree, Filter, Find and editor at the Vault, leaving the terminal, the AI
+pane and everything else on the workspace. Notes are read there and never edited: only a Skill
+writes the Vault. Toggling it off returns to the workspace as it was left.
+_Avoid_: vault reader, knowledge mode, knowledge pane

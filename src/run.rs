@@ -136,6 +136,7 @@ pub fn chips(state: &State) -> Vec<Chip> {
             name: "run",
             glyph: "\u{25b6}".to_string(),
             keys: "r",
+            word: "",
             hue: Hue::Go,
             tone: Tone::Plain,
         },
@@ -144,6 +145,7 @@ pub fn chips(state: &State) -> Vec<Chip> {
             name: "debug",
             glyph: "\u{25ce}".to_string(),
             keys: "d",
+            word: "",
             hue: Hue::Step,
             tone: match debuggable {
                 true => Tone::Plain,

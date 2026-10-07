@@ -187,7 +187,7 @@ pub fn row_text(state: &State, path: &std::path::Path, conflict: Option<&Conflic
             conflict.start, conflict.current, conflict.incoming
         ),
         None => {
-            let name = crate::debug::printable(&crate::relative(state, path));
+            let name = crate::debug::printable(&crate::relative(&state.root, path));
             match conflicts_in(state, path) {
                 Some([]) => format!("{name} ✓"),
                 _ => name,

@@ -171,7 +171,7 @@ impl Scope {
 pub fn on_screen(view: View) -> Scope {
     match view {
         View::Review => Scope::Review,
-        View::Edit | View::Story => Scope::Workspace,
+        View::Edit | View::Story | View::Knowledge => Scope::Workspace,
     }
 }
 

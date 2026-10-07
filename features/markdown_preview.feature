@@ -615,3 +615,81 @@ Feature: Markdown preview
     Then the editor is showing preview
     And the cursor is on row 1 column 1
     And the editor view starts at column 1
+
+  Rule: A wikilink opens the Note it names
+
+    `[[Name]]` resolves the way Obsidian resolves it, against whatever the tree is showing — the
+    workspace in Edit view, the Vault in the Knowledge view: a file named `Name.md` anywhere below
+    the root, and `[[Folder/Name]]` when two share a name. It works in the Preview and in source.
+
+    Background:
+      Given the workspace holds:
+        | docs/Setup.md        |
+        | docs/guide/Panes.md  |
+        | notes/Panes.md       |
+
+    Scenario: A wikilink opens the file of that name
+      Given "README.md" is open in the editor holding:
+        """
+        See [[Setup]] first.
+        """
+      When I follow the link "Setup"
+      Then "docs/Setup.md" is open in the editor
+
+    Scenario: A wikilink is followed from source too
+      Given "README.md" is open in the editor holding:
+        """
+        See [[Setup]] first.
+        """
+      And I run ":preview" in the editor
+      When I follow the link "Setup"
+      Then "docs/Setup.md" is open in the editor
+
+    Scenario: A path-qualified wikilink picks one of two Notes sharing a name
+      Given "README.md" is open in the editor holding:
+        """
+        See [[notes/Panes]].
+        """
+      When I follow the link "notes/Panes"
+      Then "notes/Panes.md" is open in the editor
+
+    Scenario: An ambiguous wikilink is refused rather than guessed
+      Given "README.md" is open in the editor holding:
+        """
+        See [[Panes]].
+        """
+      When I follow the link "Panes"
+      Then "README.md" is open in the editor
+      And the reviewer is told "ambiguous-link"
+
+    Scenario: A wikilink with an alias opens its target
+      Given "README.md" is open in the editor holding:
+        """
+        See [[Setup|the setup notes]].
+        """
+      When I follow the link "the setup notes"
+      Then "docs/Setup.md" is open in the editor
+
+    Scenario: A wikilink to nothing creates nothing
+      Given "README.md" is open in the editor holding:
+        """
+        See [[Nowhere]].
+        """
+      When I follow the link "Nowhere"
+      Then "README.md" is open in the editor
+      And no file was created
+      And the reviewer is told "no-such-note"
+
+    Scenario: In the Knowledge view a wikilink resolves in the Vault
+      Given the knowledge base is enabled with the default Vault
+      And the Vault holds:
+        | Acme/customers/Acme.md |
+        | Acme/how-to/Renew.md   |
+      And I toggle the Knowledge view
+      And I open "Acme/customers/Acme.md" from the tree holding:
+        """
+        Renewals: [[Renew]].
+        """
+      When I follow the link "Renew"
+      Then "Acme/how-to/Renew.md" is open in the editor
+      And the view is "knowledge"

@@ -10,6 +10,7 @@ use varde::lsp::{self, About, Ask, Candidate, Candidates, Gone};
 use varde::mouse::Encoding;
 use varde::review::{self, GitFile, GitStatus};
 use varde::risk::{self, Figures, Function, Kind, Metrics, Scope, Space};
+use varde::skills;
 use varde::startup::{
     self, Config, Formatter, PathStatus, Server, Startup, StartupError, Unanswerable,
 };
@@ -78,6 +79,9 @@ pub struct VardeWorld {
     indexable: Vec<String>,
     holding_searches: bool,
     held_search: Option<varde::search::Request>,
+    searched_in: Vec<PathBuf>,
+    repository: BTreeMap<PathBuf, String>,
+    asked_git: Vec<PathBuf>,
     diffs_read: Vec<PathBuf>,
     screen: Vec<String>,
     ai_screen: Vec<String>,
@@ -361,6 +365,10 @@ impl VardeWorld {
 
     fn pane_lines(&self, pane: Pane) -> Vec<String> {
         match pane {
+            Pane::Editor if varde::previewing(&self.state) => varde::preview_rows(&self.state)
+                .iter()
+                .map(varde::preview::Row::text)
+                .collect(),
             Pane::Editor => self
                 .state
                 .current_buffer
@@ -423,6 +431,15 @@ impl VardeWorld {
         self.state.voice_running = self.voice_child;
         self.state.player_installed = self.player_on_path;
         self.state.voice_installed = self.voice_on_disk && !self.state.speech.voice.is_empty();
+        let asked: Vec<PathBuf> = varde::asked_of_git(&self.state)
+            .filter(|path| self.repository.contains_key(*path))
+            .cloned()
+            .collect();
+        for path in asked {
+            let committed = self.repository[&path].clone();
+            self.state.committed.insert(path.clone(), Some(committed));
+            self.asked_git.push(path);
+        }
         if let Some(path) = self.state.current_buffer.clone() {
             let committed = self.state.committed.get(&path).and_then(Option::as_deref);
             if let Some(buffer) = self.state.buffers.get(&path) {
@@ -627,7 +644,11 @@ impl VardeWorld {
                 let (state, effects) = update(
                     &self.state,
                     Event::BufferOpened {
-                        contents: "contents".to_string(),
+                        contents: self
+                            .files
+                            .get(&path)
+                            .cloned()
+                            .unwrap_or_else(|| "contents".to_string()),
                         path,
                         preview: false,
                         at: None,
@@ -641,7 +662,11 @@ impl VardeWorld {
                 let (state, effects) = update(
                     &self.state,
                     Event::BufferOpened {
-                        contents: "contents".to_string(),
+                        contents: self
+                            .files
+                            .get(&path)
+                            .cloned()
+                            .unwrap_or_else(|| "contents".to_string()),
                         path,
                         preview: true,
                         at: None,
@@ -804,6 +829,29 @@ impl VardeWorld {
         None
     }
 
+    fn walked(&self, root: &Path) -> Vec<String> {
+        if root == self.state.root {
+            return self.indexable.clone();
+        }
+        let mut files = Vec::new();
+        let mut folders = vec![root.to_path_buf()];
+        while let Some(folder) = folders.pop() {
+            for entry in self.disk.get(&folder).into_iter().flatten() {
+                let path = folder.join(&entry.name);
+                match entry.is_dir {
+                    true => folders.push(path),
+                    false => files.push(
+                        path.strip_prefix(root)
+                            .expect("below the root")
+                            .to_string_lossy()
+                            .into_owned(),
+                    ),
+                }
+            }
+        }
+        files
+    }
+
     fn search_finishes(&mut self, request: varde::search::Request) {
         let disk: Vec<(String, String)> = self
             .project
@@ -845,8 +893,14 @@ impl VardeWorld {
                     self.apply(effects);
                 }
             }
-            Effect::IndexProject { walk } => {
-                let files = self.indexable.clone();
+            Effect::ListNotes { note, root } => {
+                let files = self.walked(&root);
+                let (state, effects) = update(&self.state, Event::NotesListed { note, files });
+                self.state = state;
+                self.apply(effects);
+            }
+            Effect::IndexProject { walk, root } => {
+                let files = self.walked(&root);
                 let (state, effects) = update(
                     &self.state,
                     Event::Indexed {
@@ -858,10 +912,13 @@ impl VardeWorld {
                 self.state = state;
                 self.apply(effects);
             }
-            Effect::RunSearch(request) => match self.holding_searches {
-                true => self.held_search = Some(request),
-                false => self.search_finishes(request),
-            },
+            Effect::RunSearch(request) => {
+                self.searched_in.push(request.root.clone());
+                match self.holding_searches {
+                    true => self.held_search = Some(request),
+                    false => self.search_finishes(request),
+                }
+            }
             Effect::OpenAt { path, at } => {
                 self.opened.push(path.clone());
                 let (state, effects) = update(
@@ -942,6 +999,10 @@ impl VardeWorld {
                 base,
             }),
             Effect::ReadFolder(path) => self.folders_to_read.push(path),
+            Effect::OpenVault(path) => {
+                let entries = self.disk.get(&path).cloned();
+                self.send_now(Event::VaultOpened(entries));
+            }
             Effect::Snapshot { iteration } => {
                 self.snapshots.insert(iteration, self.tree());
             }
@@ -988,6 +1049,21 @@ impl VardeWorld {
             } => {
                 self.wrote.push(path.clone());
                 self.files.insert(path, format!("the change in {spelling}"));
+            }
+            Effect::ListSkills(folder) => {
+                let skills = self
+                    .files
+                    .iter()
+                    .filter(|(path, _)| {
+                        path.file_name() == Some(skills::FILE.as_ref())
+                            && path.parent().and_then(Path::parent) == Some(folder.as_path())
+                    })
+                    .map(|(path, text)| {
+                        let name = path.parent().and_then(Path::file_name).expect("a folder");
+                        skills::read(&name.to_string_lossy(), text)
+                    })
+                    .collect();
+                self.send_now(Event::SkillsListed(skills));
             }
             Effect::ReadBranches => {
                 let branching = match &self.state.repo {
@@ -1157,6 +1233,389 @@ fn parse_action(name: &str) -> Action {
     }
 }
 
+#[given(expr = "the home folder is {string}")]
+fn home_folder(world: &mut VardeWorld, home: String) {
+    world.startup.varde_home = Path::new(&home).join(varde::VARDE_DIR);
+    world.state.varde_home = world.startup.varde_home.clone();
+}
+
+#[given(expr = "the knowledge base is enabled with the default Vault")]
+fn knowledge_enabled_with_default_vault(world: &mut VardeWorld) {
+    world.startup.global_config = Some("[knowledge]\nenabled = true".to_string());
+    config_edited(world, None);
+    hold_shipped(world);
+}
+
+fn hold_shipped(world: &mut VardeWorld) {
+    for (file, text) in skills::SHIPPED {
+        let path = world.state.varde_home.join(file);
+        world.files.insert(path, text.to_string());
+    }
+}
+
+fn shipped_paths(world: &VardeWorld) -> Vec<PathBuf> {
+    skills::SHIPPED
+        .iter()
+        .map(|(file, _)| world.startup.varde_home.join(file))
+        .collect()
+}
+
+#[given(expr = "every shipped Skill on disk holds its shipped text")]
+fn every_shipped_skill_current(world: &mut VardeWorld) {
+    hold_shipped(world);
+}
+
+#[given(expr = "{string} holds {string}")]
+fn file_holds_text(world: &mut VardeWorld, path: String, text: String) {
+    world.files.insert(PathBuf::from(path), text);
+}
+
+#[then(expr = "{string} holds the shipped text")]
+fn holds_the_shipped_text(world: &mut VardeWorld, path: String) {
+    let path = PathBuf::from(path);
+    let (_, text) = skills::SHIPPED
+        .iter()
+        .find(|(file, _)| world.startup.varde_home.join(file) == path)
+        .expect("a shipped file");
+    assert!(world.wrote.contains(&path), "written: {:?}", world.wrote);
+    assert_eq!(world.files.get(&path).map(String::as_str), Some(*text));
+}
+
+#[then(expr = "no shipped Skill was written")]
+fn no_shipped_skill_written(world: &mut VardeWorld) {
+    let shipped = shipped_paths(world);
+    let wrote: Vec<&PathBuf> = world
+        .wrote
+        .iter()
+        .filter(|path| shipped.contains(path))
+        .collect();
+    assert!(wrote.is_empty(), "written: {wrote:?}");
+}
+
+#[then(expr = "the Skill folder {string} is unchanged")]
+fn skill_folder_unchanged(world: &mut VardeWorld, folder: String) {
+    let folder = world.startup.varde_home.join(skills::FOLDER).join(folder);
+    let wrote: Vec<&PathBuf> = world
+        .wrote
+        .iter()
+        .filter(|path| path.starts_with(&folder))
+        .collect();
+    assert!(wrote.is_empty(), "written: {wrote:?}");
+    assert!(world.files.contains_key(&folder.join(skills::FILE)));
+}
+
+fn hold_skill(world: &mut VardeWorld, folder: &str, text: &str) {
+    let path = world
+        .state
+        .varde_home
+        .join(skills::FOLDER)
+        .join(folder)
+        .join(skills::FILE);
+    world.files.insert(path, text.to_string());
+}
+
+#[given(expr = "the Skill folder {string} holds:")]
+fn skill_folder_holds(world: &mut VardeWorld, folder: String, step: &Step) {
+    hold_skill(world, &folder, step.docstring().expect("docstring"));
+}
+
+fn listed_skills(world: &VardeWorld) -> Vec<skills::Skill> {
+    match &world.state.modal {
+        Modal::Skills { skills, .. } => skills.clone(),
+        other => panic!("expected the Skills modal, got {other:?}"),
+    }
+}
+
+#[then(expr = "the Skills modal lists {string}")]
+fn skills_modal_lists(world: &mut VardeWorld, name: String) {
+    let skills = listed_skills(world);
+    assert!(
+        skills
+            .iter()
+            .any(|skill| skill.read.as_ref().is_ok_and(|front| front.name == name)),
+        "{name:?} is not in {skills:?}"
+    );
+}
+
+#[then(expr = "the Skills modal does not list {string}")]
+fn skills_modal_does_not_list(world: &mut VardeWorld, name: String) {
+    let skills = listed_skills(world);
+    assert!(
+        !skills.iter().any(|skill| skill.folder == name
+            || skill.read.as_ref().is_ok_and(|front| front.name == name)),
+        "{name:?} is in {skills:?}"
+    );
+}
+
+#[then(expr = "the Skills modal row {string} is dimmed as {string}")]
+fn skills_modal_row_dimmed(world: &mut VardeWorld, folder: String, reason: String) {
+    let skills = listed_skills(world);
+    let skill = skills
+        .iter()
+        .find(|skill| skill.folder == folder)
+        .unwrap_or_else(|| panic!("no row {folder:?} in {skills:?}"));
+    assert_eq!(skill.read, Err(reason.as_str()));
+}
+
+#[given(expr = "I pick the Skill {string}")]
+#[when(expr = "I pick the Skill {string}")]
+fn pick_skill(world: &mut VardeWorld, name: String) {
+    let wanted = listed_skills(world)
+        .iter()
+        .position(|skill| match &skill.read {
+            Ok(front) => front.name == name,
+            Err(_) => skill.folder == name,
+        })
+        .unwrap_or_else(|| panic!("no row for {name:?}"));
+    for _ in 0..wanted {
+        press_key(world, terminput::KeyCode::Down);
+    }
+    press_key(world, terminput::KeyCode::Enter);
+}
+
+#[then(expr = "the knowledge base is {string}")]
+fn knowledge_base_should_be(world: &mut VardeWorld, expected: String) {
+    started(world);
+    let actual = match world.state.vault {
+        Some(_) => "enabled",
+        None => "disabled",
+    };
+    assert_eq!(actual, expected);
+}
+
+#[then(expr = "the Vault is {string}")]
+fn vault_should_be(world: &mut VardeWorld, path: String) {
+    started(world);
+    assert_eq!(world.state.vault, Some(PathBuf::from(path)));
+}
+
+#[given(expr = "the knowledge base is enabled with the Vault {string}")]
+fn vault_configured(world: &mut VardeWorld, vault: String) {
+    world.startup.global_config = Some(format!("[knowledge]\nenabled = true\nvault = {vault:?}"));
+    config_edited(world, None);
+}
+
+#[given("the knowledge base is \"disabled\"")]
+fn knowledge_disabled(world: &mut VardeWorld) {
+    world.state.vault = None;
+}
+
+fn vault(world: &VardeWorld) -> PathBuf {
+    world
+        .state
+        .vault
+        .clone()
+        .expect("the knowledge base is enabled")
+}
+
+#[given("the Vault holds:")]
+fn vault_holds(world: &mut VardeWorld, step: &Step) {
+    let vault = vault(world);
+    world.disk.entry(vault.clone()).or_default();
+    for row in &step.table().expect("table").rows {
+        let parts: Vec<&str> = row[0].split('/').collect();
+        let mut folder = vault.clone();
+        for (index, part) in parts.iter().enumerate() {
+            let entry = Entry {
+                name: part.to_string(),
+                is_dir: index + 1 < parts.len(),
+            };
+            put_on_disk(world, folder.clone(), entry);
+            folder = folder.join(part);
+        }
+        let title = folder.file_stem().expect("a Note").to_string_lossy();
+        let note = format!("# {title}\n");
+        world.files.insert(folder, note);
+    }
+}
+
+#[given(expr = "the Vault is a git repository with uncommitted changes to {string}")]
+fn vault_under_git(world: &mut VardeWorld, note: String) {
+    let note = vault(world).join(note);
+    world
+        .repository
+        .insert(note, "committed before the change".to_string());
+}
+
+#[then("no Change bar is drawn")]
+fn no_change_bar(world: &mut VardeWorld) {
+    assert_eq!(varde::changed_lines(&world.state), Vec::<usize>::new());
+}
+
+#[then("no git command was run in the Vault")]
+fn no_git_in_vault(world: &mut VardeWorld) {
+    let vault = vault(world);
+    assert!(
+        !world.asked_git.iter().any(|path| path.starts_with(&vault)),
+        "git ran on {:?}",
+        world.asked_git
+    );
+}
+
+#[when(expr = "the file {string} appears in the Vault")]
+fn appears_in_vault(world: &mut VardeWorld, note: String) {
+    let watched = varde::watched_folders(&world.state);
+    let seen = |path: &Path| {
+        watched.iter().any(|(at, watch)| match watch {
+            varde::Watch::Folder => path.parent() == Some(at.as_path()),
+            varde::Watch::Tree => path.starts_with(at) && path != at,
+        })
+    };
+    let parts: Vec<&str> = note.split('/').collect();
+    let mut folder = vault(world);
+    let mut appeared = Vec::new();
+    for (index, part) in parts.iter().enumerate() {
+        let path = folder.join(part);
+        let is_dir = index + 1 < parts.len();
+        let new = !world
+            .disk
+            .get(&folder)
+            .is_some_and(|entries| entries.iter().any(|entry| entry.name == *part));
+        put_on_disk(
+            world,
+            folder.clone(),
+            Entry {
+                name: part.to_string(),
+                is_dir,
+            },
+        );
+        if new && seen(&path) {
+            let kind = match is_dir {
+                true => tree::Kind::Folder,
+                false => tree::Kind::File,
+            };
+            appeared.push((path.clone(), kind));
+        }
+        folder = path;
+    }
+    world.send(Event::FilesAppeared(appeared));
+}
+
+#[given("the Vault is empty")]
+fn vault_is_empty(world: &mut VardeWorld) {
+    world.disk.insert(vault(world), Vec::new());
+}
+
+#[given(expr = "the folder {string} does not exist")]
+fn folder_missing(world: &mut VardeWorld, path: String) {
+    world.disk.remove(Path::new(&path));
+}
+
+#[then(expr = "the folder {string} was created")]
+fn folder_created(world: &mut VardeWorld, path: String) {
+    assert!(
+        world.dirs.contains(Path::new(&path)),
+        "made: {:?}",
+        world.dirs
+    );
+}
+
+#[then("no folder was created")]
+fn no_folder_created(world: &mut VardeWorld) {
+    assert!(world.dirs.is_empty(), "made: {:?}", world.dirs);
+}
+
+#[given("I toggle the Knowledge view")]
+#[when("I toggle the Knowledge view")]
+fn toggle_knowledge(world: &mut VardeWorld) {
+    world.send(Event::ToggleKnowledge);
+}
+
+#[then(expr = "the tree's root is {string}")]
+fn tree_root_is(world: &mut VardeWorld, root: String) {
+    assert_eq!(world.state.shown_root(), Path::new(&root));
+}
+
+fn shown_row(world: &VardeWorld, path: &str) -> Option<tree::Row> {
+    let wanted = world.state.shown_root().join(path);
+    tree::visible_rows(&world.state)
+        .into_iter()
+        .find(|row| row.path == wanted)
+}
+
+#[then(expr = "the tree shows {string}")]
+fn the_tree_shows(world: &mut VardeWorld, path: String) {
+    assert!(
+        shown_row(world, &path).is_some(),
+        "missing {path}: {:?}",
+        tree::visible_rows(&world.state)
+    );
+}
+
+#[then(expr = "the tree does not show {string}")]
+fn the_tree_does_not_show(world: &mut VardeWorld, path: String) {
+    assert!(shown_row(world, &path).is_none(), "showing {path}");
+}
+
+#[then("the tree shows nothing")]
+fn the_tree_shows_nothing(world: &mut VardeWorld) {
+    assert_eq!(tree::visible_rows(&world.state), Vec::new());
+}
+
+#[given(expr = "I open {string} from the tree")]
+#[when(expr = "I open {string} from the tree")]
+fn open_from_tree(world: &mut VardeWorld, path: String) {
+    world.state.focus = Pane::Tree;
+    let root = world.state.shown_root().to_path_buf();
+    let mut at = root.clone();
+    for part in path.split('/') {
+        at = at.join(part);
+        if !world.state.expanded.contains(&at) {
+            world.state.tree_selection = Some(at.clone());
+            world.send(Event::Activate);
+        }
+    }
+}
+
+#[given(expr = "I open {string} from the tree holding:")]
+fn open_from_tree_holding(world: &mut VardeWorld, path: String, step: &Step) {
+    let note = world.state.shown_root().join(&path);
+    let text = step.docstring().expect("docstring").trim_matches('\n');
+    world.files.insert(note, text.to_string());
+    open_from_tree(world, path);
+    world.opened.clear();
+}
+
+#[then(expr = "the editor shows {string} in the Preview")]
+fn editor_shows_in_preview(world: &mut VardeWorld, path: String) {
+    let expected = world.state.shown_root().join(path);
+    assert_eq!(world.state.current_buffer, Some(expected));
+    assert!(varde::previewing(&world.state), "not previewing");
+}
+
+#[then("the editor is not in insert mode")]
+fn not_inserting(world: &mut VardeWorld) {
+    assert_ne!(current_buffer(world).mode, varde::editor::Mode::Insert);
+}
+
+#[when("I open the Replace box")]
+fn open_replace_box(world: &mut VardeWorld) {
+    press_in_editor(world, "/".to_string());
+    click_find_icon(world, "replace".to_string());
+}
+
+#[when(expr = "I select {string} in the tree")]
+fn select_in_tree(world: &mut VardeWorld, path: String) {
+    let path = world.state.shown_root().join(path);
+    world.send(Event::ClickRow(path));
+}
+
+#[then("the tree row offers no actions")]
+fn tree_row_offers_nothing(world: &mut VardeWorld) {
+    let selection = world.state.tree_selection.clone().expect("a selection");
+    assert!(tree::row_actions(&world.state, &selection).is_empty());
+}
+
+#[then("nothing was written to disk")]
+fn nothing_written_to_disk(world: &mut VardeWorld) {
+    assert!(world.wrote.is_empty(), "wrote: {:?}", world.wrote);
+}
+
+#[then(expr = "the palette entry {string} is dimmed")]
+fn palette_entry_dimmed(world: &mut VardeWorld, entry: String) {
+    assert!(varde::palette_dimmed(&world.state, palette_key(&entry)));
+}
+
 #[given(expr = "the workspace root is {string}")]
 fn workspace_root(world: &mut VardeWorld, root: String) {
     world.state.root = PathBuf::from(&root);
@@ -1197,11 +1656,13 @@ fn state_records_view(world: &mut VardeWorld, path: String, view: String) {
 }
 
 #[given("the global config is:")]
+#[given("the global config holds:")]
 fn global_config(world: &mut VardeWorld, step: &Step) {
     world.startup.global_config = Some(step.docstring().expect("docstring").trim().to_string());
 }
 
 #[given("the project config is:")]
+#[given("the project config holds:")]
 fn project_config(world: &mut VardeWorld, step: &Step) {
     world.startup.project_config = Some(step.docstring().expect("docstring").trim().to_string());
 }
@@ -1636,15 +2097,24 @@ fn told_nothing_to_update(world: &mut VardeWorld) {
 
 #[then(expr = "no file was written")]
 fn nothing_written(world: &mut VardeWorld) {
+    let mut wrote = world.wrote.clone();
+    let shipped = shipped_paths(world);
+    for effect in &world.startup_effects {
+        if let Effect::WriteFile { path, .. } = effect {
+            if let Some(at) = shipped
+                .contains(path)
+                .then(|| wrote.iter().position(|written| written == path))
+                .flatten()
+            {
+                wrote.remove(at);
+            }
+        }
+    }
     let seeds = [
         world.startup.root.join(".varde/config.toml"),
         world.startup.varde_home.join(startup::CONFIG_FILE),
     ];
-    let wrote: Vec<&PathBuf> = world
-        .wrote
-        .iter()
-        .filter(|path| !seeds.contains(path))
-        .collect();
+    wrote.retain(|path| !seeds.contains(path));
     assert!(wrote.is_empty(), "written: {wrote:?}");
 }
 
@@ -1655,8 +2125,14 @@ fn varde_starts(world: &mut VardeWorld) {
     if world.startup.os.is_empty() {
         world.startup.os = "macos".to_string();
     }
-    world.startup.varde_home = Path::new(HOME).join(varde::VARDE_DIR);
+    if world.startup.varde_home.as_os_str().is_empty() {
+        world.startup.varde_home = Path::new(HOME).join(varde::VARDE_DIR);
+    }
     world.startup.repo = world.state.repo.clone();
+    world.startup.shipped = shipped_paths(world)
+        .into_iter()
+        .filter_map(|path| world.files.get(&path).map(|text| (path, text.clone())))
+        .collect();
     match startup::start(&world.startup) {
         Ok((state, config, effects)) => {
             world.state = state;
@@ -1773,7 +2249,8 @@ fn no_language_server_started(world: &mut VardeWorld) {
                     | Effect::RenderView(_)
             ) && !matches!(effect, Effect::DeleteDir(path) if is_scratch(world, path))
                 && !matches!(effect, Effect::WriteFile { contents, .. }
-                    if *contents == startup::SEEDED_CONFIG || *contents == startup::template())
+                    if *contents == startup::SEEDED_CONFIG || *contents == startup::template()
+                        || skills::SHIPPED.iter().any(|(_, text)| contents == text))
         })
         .collect();
     assert!(
@@ -1839,8 +2316,11 @@ fn folder_exists(world: &mut VardeWorld, path: String) {
 }
 
 #[given(expr = "{string} does not exist")]
-fn path_missing(world: &mut VardeWorld, _path: String) {
-    world.startup.path_status = PathStatus::Missing;
+fn path_missing(world: &mut VardeWorld, path: String) {
+    match Path::new(&path).starts_with(Path::new(HOME).join(varde::VARDE_DIR)) {
+        true => world.files.retain(|file, _| !file.starts_with(&path)),
+        false => world.startup.path_status = PathStatus::Missing,
+    }
 }
 
 #[given(expr = "{string} is a file")]
@@ -2287,7 +2767,7 @@ fn open_clean(world: &mut VardeWorld, path: String) {
         .files
         .get(&abs(world, &path))
         .cloned()
-        .unwrap_or_else(|| "on disk".to_string());
+        .unwrap_or_else(|| "on disk\non disk\non disk\n".to_string());
     open_buffer(world, &path, &contents);
 }
 
@@ -2382,7 +2862,7 @@ fn is_followed(world: &mut VardeWorld, path: String) {
     let parent = absolute.parent().expect("a parent").to_path_buf();
     let watched = varde::watched_folders(&world.state);
     assert!(
-        watched.contains(&parent),
+        watched.contains(&(parent.clone(), varde::Watch::Folder)),
         "{parent:?} is watched by nobody, so {path} cannot follow its file; watching {watched:?}"
     );
 }
@@ -2739,7 +3219,73 @@ fn change_terminal_input(world: &mut VardeWorld, text: String) {
 
 #[then(expr = "{string} is open in the editor")]
 fn is_open(world: &mut VardeWorld, path: String) {
-    assert_eq!(world.opened, vec![PathBuf::from(path)]);
+    let expected = world.state.shown_root().join(path);
+    assert!(
+        world.opened.iter().all(|opened| *opened == expected),
+        "opened: {:?}",
+        world.opened
+    );
+    assert_eq!(world.state.current_buffer, Some(expected));
+}
+
+#[given("the workspace holds:")]
+fn workspace_holds(world: &mut VardeWorld, step: &Step) {
+    world.indexable = step
+        .table()
+        .expect("table")
+        .rows
+        .iter()
+        .map(|row| row[0].clone())
+        .collect();
+}
+
+#[when(expr = "I follow the link {string}")]
+fn follow_link(world: &mut VardeWorld, text: String) {
+    let rows: Vec<String> = match varde::previewing(&world.state) {
+        true => varde::preview_rows(&world.state)
+            .iter()
+            .map(varde::preview::Row::text)
+            .collect(),
+        false => current_buffer(world)
+            .shown()
+            .lines()
+            .map(str::to_string)
+            .collect(),
+    };
+    let at = rows
+        .iter()
+        .enumerate()
+        .find_map(|(index, row)| {
+            let word = |at: Option<char>| at.is_none_or(|it| !it.is_alphanumeric());
+            row.match_indices(&text)
+                .find(|(byte, _)| {
+                    word(row[..*byte].chars().last())
+                        && word(row[byte + text.len()..].chars().next())
+                })
+                .map(|(byte, _)| Place {
+                    line: index + 1,
+                    column: row[..byte].chars().count() + 1,
+                })
+        })
+        .unwrap_or_else(|| panic!("{text:?} is not on screen: {rows:?}"));
+    world.send(Event::ClickText(at));
+    world.send(Event::EditorKey('g'));
+    world.send(Event::EditorKey('d'));
+}
+
+#[then("no file was created")]
+fn no_file_created(world: &mut VardeWorld) {
+    assert!(world.wrote.is_empty(), "wrote: {:?}", world.wrote);
+    assert!(world.dirs.is_empty(), "made: {:?}", world.dirs);
+}
+
+#[then(expr = "the reviewer is told {string}")]
+fn reviewer_told(world: &mut VardeWorld, notice: String) {
+    assert!(
+        world.notices.contains(&notice),
+        "notices: {:?}",
+        world.notices
+    );
 }
 
 #[then(expr = "no file was opened in the editor")]
@@ -3243,6 +3789,7 @@ fn prompt_contains(world: &mut VardeWorld, needle: String) {
 }
 
 #[then(expr = "the prompt was submitted to the AI")]
+#[then(expr = "the prompt was submitted")]
 fn prompt_submitted(world: &mut VardeWorld) {
     let sent = ai_sends(world);
     let [prompt] = sent.as_slice() else {
@@ -4567,7 +5114,7 @@ fn breakpoint_list_rows(world: &mut VardeWorld, step: &Step) {
         .into_iter()
         .map(|breakpoint| {
             (
-                varde::relative(&world.state, &breakpoint.file),
+                varde::relative(&world.state.root, &breakpoint.file),
                 breakpoint.line,
             )
         })
@@ -4610,7 +5157,7 @@ fn click_chip(world: &mut VardeWorld, chip: String) {
         true => (world.panes().corner, varde::debug::transport(&world.state)),
         false => (
             varde::transport_area(&world.state, world.panes().strip()),
-            varde::debug::strip_transport(&world.state),
+            varde::strip_chips(&world.state),
         ),
     };
     let at = chips
@@ -4828,6 +5375,12 @@ fn give_tree_pane_focus(world: &mut VardeWorld) {
 #[given(expr = "I type {string}")]
 #[when(expr = "I type {string}")]
 fn type_text(world: &mut VardeWorld, text: String) {
+    if matches!(world.state.modal, Modal::SkillQuestion { .. }) {
+        for key in text.chars() {
+            press_key(world, terminput::KeyCode::Char(key));
+        }
+        return;
+    }
     if world.state.focus == Pane::Evaluator {
         for key in text.chars() {
             world.send(Event::EditorKey(key));
@@ -5585,25 +6138,9 @@ fn drag_preview_row(world: &mut VardeWorld, text: String) {
     world.drag(Pane::Editor, (index + 1, column), (index + 1, last));
 }
 
-fn word_at(world: &mut VardeWorld, text: &str) -> (usize, usize) {
-    let lines: Vec<String> = match varde::previewing(&world.state) {
-        true => preview_rows(world)
-            .iter()
-            .map(varde::preview::Row::text)
-            .collect(),
-        false => world.pane_lines(Pane::Editor),
-    };
-    let index = lines
-        .iter()
-        .position(|line| line.contains(text))
-        .unwrap_or_else(|| panic!("{text:?} is not in the editor"));
-    let at = lines[index].find(text).expect("the column");
-    (index + 1, lines[index][..at].chars().count() + 1)
-}
-
 #[when(expr = "I double-click on {string} in the editor")]
 fn double_click_word(world: &mut VardeWorld, text: String) {
-    let at = word_at(world, &text);
+    let at = world.place_of(Pane::Editor, &text);
     world.click_twice(Pane::Editor, at, 0);
 }
 
@@ -5614,7 +6151,7 @@ fn double_click_at(world: &mut VardeWorld, line: usize, column: usize) {
 
 #[when(expr = "I click twice on {string} in the editor {int}ms apart")]
 fn click_twice_apart(world: &mut VardeWorld, text: String, apart: u64) {
-    let at = word_at(world, &text);
+    let at = world.place_of(Pane::Editor, &text);
     world.click_twice(Pane::Editor, at, apart);
 }
 
@@ -5916,12 +6453,188 @@ fn told_nothing_to_inject(world: &mut VardeWorld) {
     assert!(world.notices.contains(&"nothing-to-inject".to_string()));
 }
 
-#[when(expr = "I click the inject action on the AI pane's border")]
-fn click_inject_action(world: &mut VardeWorld) {
-    let panes = world.panes();
-    let column = panes.ai.x + panes.ai.width - 3;
-    world.report(mouse::Kind::LeftDown, column, panes.ai.y);
-    world.report(mouse::Kind::LeftUp, column, panes.ai.y);
+#[when(expr = "I click the AI Inject action on the {word} pane's border")]
+fn click_ai_inject_action(world: &mut VardeWorld, pane: String) {
+    let (area, chips, title) = match pane.as_str() {
+        "editor" => (
+            world.panes().editor,
+            varde::editor_chips(&world.state),
+            layout::EDITOR_TITLE,
+        ),
+        "terminal" => (
+            varde::transport_area(&world.state, world.panes().strip()),
+            varde::strip_chips(&world.state),
+            layout::CORNER_TITLE,
+        ),
+        other => panic!("no AI Inject on the {other} pane"),
+    };
+    let at = chips
+        .iter()
+        .position(|chip| chip.action == varde::INJECT)
+        .expect("an AI Inject Chip");
+    let labels = layout::chip_labels(&chips, area.width, title);
+    let column = (area.x..area.right())
+        .find(|&column| layout::strip_at(area, &labels, column) == Some(at))
+        .expect("the Chip on screen");
+    world.report(mouse::Kind::LeftDown, column, area.y);
+    world.report(mouse::Kind::LeftUp, column, area.y);
+}
+
+#[when(expr = "I click the Skills action on the AI pane's border")]
+fn click_skills_action(world: &mut VardeWorld) {
+    let area = world.panes().ai;
+    let chips = varde::ai_chips();
+    let at = chips
+        .iter()
+        .position(|chip| chip.action == varde::SKILLS)
+        .expect("a Skills Chip");
+    let labels = layout::chip_labels(&chips, area.width, layout::AI_TITLE);
+    let column = (area.x..area.right())
+        .find(|&column| layout::strip_at(area, &labels, column) == Some(at))
+        .expect("the Chip on screen");
+    world.report(mouse::Kind::LeftDown, column, area.y);
+    world.report(mouse::Kind::LeftUp, column, area.y);
+}
+
+fn ai_border_offers(action: &str) -> bool {
+    varde::ai_chips().iter().any(|chip| chip.action == action)
+}
+
+#[then(expr = "the AI pane's border offers {string}")]
+fn ai_border_should_offer(_world: &mut VardeWorld, action: String) {
+    assert!(ai_border_offers(&action));
+}
+
+#[then(expr = "the AI pane's border does not offer {string}")]
+fn ai_border_should_not_offer(_world: &mut VardeWorld, action: String) {
+    assert!(!ai_border_offers(&action));
+}
+
+fn told_the_ai(world: &VardeWorld, needle: &str) {
+    let sent = ai_sends(world);
+    let [prompt] = sent.as_slice() else {
+        panic!("expected one send, got {sent:?}")
+    };
+    assert!(prompt.contains(needle), "{needle:?} is not in {prompt:?}");
+}
+
+#[then(expr = "the AI was told to follow {string}")]
+fn ai_told_to_follow(world: &mut VardeWorld, skill: String) {
+    told_the_ai(world, &skill);
+}
+
+#[then(expr = "the AI was told the question {string}")]
+fn ai_told_the_question(world: &mut VardeWorld, question: String) {
+    told_the_ai(world, &question);
+}
+
+#[when("I press Enter")]
+fn press_enter(world: &mut VardeWorld) {
+    press_key(world, terminput::KeyCode::Enter);
+}
+
+#[when("I press Escape")]
+fn press_escape(world: &mut VardeWorld) {
+    press_key(world, terminput::KeyCode::Esc);
+}
+
+#[then(expr = "the AI was told the workspace is {string}")]
+fn ai_told_the_workspace(world: &mut VardeWorld, root: String) {
+    told_the_ai(world, &root);
+}
+
+fn the_vault(world: &VardeWorld) -> String {
+    world
+        .state
+        .vault
+        .as_ref()
+        .expect("the knowledge base is enabled")
+        .display()
+        .to_string()
+}
+
+fn the_source_map(world: &VardeWorld) -> String {
+    world
+        .state
+        .varde_home
+        .join(skills::SOURCE_MAP)
+        .display()
+        .to_string()
+}
+
+fn not_told_the_ai(world: &VardeWorld, needle: &str) {
+    let sent = ai_sends(world);
+    let [prompt] = sent.as_slice() else {
+        panic!("expected one send, got {sent:?}")
+    };
+    assert!(!prompt.contains(needle), "{needle:?} is in {prompt:?}");
+}
+
+#[then(expr = "the AI was told the Vault is {string}")]
+fn ai_told_the_vault(world: &mut VardeWorld, vault: String) {
+    told_the_ai(world, &vault);
+}
+
+#[then(expr = "the AI was told the Source map is {string}")]
+fn ai_told_the_source_map(world: &mut VardeWorld, source_map: String) {
+    told_the_ai(world, &source_map);
+}
+
+#[then(expr = "the AI was not told about the Vault")]
+fn ai_not_told_the_vault(world: &mut VardeWorld) {
+    not_told_the_ai(world, &the_vault(world));
+}
+
+#[then(expr = "the AI was not told about the Source map")]
+fn ai_not_told_the_source_map(world: &mut VardeWorld) {
+    not_told_the_ai(world, &the_source_map(world));
+}
+
+#[then(expr = "the AI session's environment does not name the Vault")]
+fn ai_environment_does_not_name_the_vault(world: &mut VardeWorld) {
+    assert!(!world.ai_spawned.is_empty(), "no AI session was started");
+    let vault = the_vault(world);
+    let names = world.ai_env.iter().map(String::as_str);
+    let values = varde::queries::CHILD_ENV
+        .iter()
+        .flat_map(|(name, value)| [Some(*name), *value])
+        .flatten();
+    for word in names.chain(values) {
+        let upper = word.to_uppercase();
+        assert!(
+            !word.contains(&vault) && !upper.contains("VAULT") && !upper.contains("KNOWLEDGE"),
+            "{word:?} names the Vault"
+        );
+    }
+}
+
+#[then(expr = "no modal is open")]
+fn no_modal_open(world: &mut VardeWorld) {
+    assert_eq!(world.state.modal, Modal::None);
+    assert!(
+        !world
+            .state
+            .find
+            .as_ref()
+            .is_some_and(|find| matches!(find.keys, varde::FindKeys::Replace(_))),
+        "the Replace box is open"
+    );
+}
+
+#[given(expr = "the AI pane is hidden")]
+fn ai_pane_hidden(world: &mut VardeWorld) {
+    world.state.ai_slot = layout::Slot::Cheatsheet;
+}
+
+#[then(expr = "the AI pane is shown")]
+fn ai_pane_shown(world: &mut VardeWorld) {
+    assert_eq!(world.state.ai_slot, layout::Slot::Ai);
+}
+
+#[when(expr = "I tap the palette entry {string}")]
+fn tap_palette_entry(world: &mut VardeWorld, entry: String) {
+    world.state.modal = Modal::Palette;
+    press_key(world, terminput::KeyCode::Char(palette_key(&entry)));
 }
 
 #[then(expr = "the reviewer is told the AI is already running")]
@@ -6113,6 +6826,7 @@ fn project_gains(world: &mut VardeWorld, path: String) {
 }
 
 #[given(expr = "I filter by {string}")]
+#[when(expr = "I filter the tree for {string}")]
 #[when(expr = "I filter by {string}")]
 fn filter_by(world: &mut VardeWorld, text: String) {
     world.send(Event::Filter(text));
@@ -6265,6 +6979,17 @@ fn search_is_open(world: &mut VardeWorld) {
 #[then(expr = "the search is not open")]
 fn search_is_closed(world: &mut VardeWorld) {
     assert!(world.state.search.is_none());
+}
+
+#[when(expr = "I search the project for {string}")]
+fn search_project_for(world: &mut VardeWorld, query: String) {
+    world.send(Event::OpenSearch);
+    world.send(Event::SearchQuery(query));
+}
+
+#[then(expr = "the search ran in {string}")]
+fn search_ran_in(world: &mut VardeWorld, root: String) {
+    assert_eq!(world.searched_in.last(), Some(&PathBuf::from(root)));
 }
 
 #[given(expr = "I search for {string}")]
@@ -7861,12 +8586,23 @@ fn overlay_sections_are(world: &mut VardeWorld, step: &Step) {
     assert_eq!(actual, expected);
 }
 
+#[given(expr = "the view is {string}")]
+fn view_was(world: &mut VardeWorld, name: String) {
+    let mut entry = name.chars();
+    let entry: String = entry
+        .next()
+        .map(|first| first.to_uppercase().chain(entry).collect())
+        .unwrap_or_default();
+    tap_palette_entry(world, entry);
+}
+
 #[then(expr = "the view is {string}")]
 fn the_view_is(world: &mut VardeWorld, name: String) {
     let expected = match name.as_str() {
         "edit" => View::Edit,
         "review" => View::Review,
         "story" => View::Story,
+        "knowledge" => View::Knowledge,
         other => panic!("unknown view {other:?}"),
     };
     assert_eq!(world.state.view, expected);
@@ -8176,10 +8912,12 @@ fn prompt_names_the_set_in_the_sidecar(world: &mut VardeWorld) {
 
 #[then(expr = "the story context file was written into the Sidecar")]
 fn context_written_into_the_sidecar(world: &mut VardeWorld) {
+    let shipped = shipped_paths(world);
     let written: Vec<&PathBuf> = world
         .wrote
         .iter()
         .filter(|path| path.extension().is_some_and(|extension| extension == "md"))
+        .filter(|path| !shipped.contains(path))
         .collect();
     let [context] = written.as_slice() else {
         panic!("wrote: {:?}", world.wrote);
@@ -8394,6 +9132,8 @@ fn modal_is(world: &mut VardeWorld, expected: String) {
         Modal::Launches { .. } => "launches",
         Modal::NewLaunch(_) => "new-launch",
         Modal::Branches { .. } => "branches",
+        Modal::Skills { .. } => "skills",
+        Modal::SkillQuestion { .. } => "skill-question",
         Modal::Comment => "comment",
         Modal::NameBox { .. } => "name-box",
         Modal::StepDetail => "step-detail",
@@ -16725,7 +17465,7 @@ fn diagnostic_list_rows(world: &mut VardeWorld, step: &Step) {
         .into_iter()
         .map(|(path, diagnostic)| {
             (
-                varde::relative(&world.state, path),
+                varde::relative(&world.state.root, path),
                 diagnostic.map(|diagnostic| (diagnostic.line, diagnostic.column)),
             )
         })
@@ -16981,7 +17721,7 @@ fn conflict_list_rows(world: &mut VardeWorld, step: &Step) {
         .into_iter()
         .map(|(path, conflict)| {
             (
-                varde::relative(&world.state, &path),
+                varde::relative(&world.state.root, &path),
                 conflict.map(|conflict| conflict.start),
             )
         })

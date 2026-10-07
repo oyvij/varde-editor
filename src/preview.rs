@@ -1,6 +1,7 @@
 use crate::highlight;
 use pulldown_cmark::{
-    Alignment, BlockQuoteKind, CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd,
+    Alignment, BlockQuoteKind, CodeBlockKind, Event, HeadingLevel, LinkType, Options, Parser, Tag,
+    TagEnd,
 };
 use std::collections::HashMap;
 use std::path::Path;
@@ -46,6 +47,7 @@ pub struct Piece {
     pub text: String,
     pub emphasis: Emphasis,
     pub token: Option<highlight::Kind>,
+    pub note: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -270,10 +272,10 @@ const FLAGS: [(Options, bool, &str); 15] = [
     ),
     (
         Options::ENABLE_WIKILINKS,
-        false,
-        "ticket 13's decision, and it is to leave this off for good: `[[page]]` \
-         is not standard markdown and following one is out of scope, so the \
-         brackets are the honest rendering",
+        true,
+        "#152: a `[[Note]]` is followed now (R51.12), so the Preview shows the \
+         name or its alias the way Obsidian does and each piece of it carries \
+         the Note it names, rather than brackets that lead nowhere",
     ),
 ];
 
@@ -341,6 +343,7 @@ struct Build {
     table: Option<TableBuild>,
     footnotes: HashMap<String, usize>,
     footnote_defs: Vec<Option<usize>>,
+    note: Option<String>,
 }
 
 impl Build {
@@ -349,6 +352,14 @@ impl Build {
     }
 
     fn start(&mut self, tag: &Tag, line: usize) {
+        if let Tag::Link {
+            link_type: LinkType::WikiLink { .. },
+            dest_url,
+            ..
+        } = tag
+        {
+            self.note = Some(dest_url.to_string());
+        }
         self.open_emphasis(tag);
         self.open_depth(tag);
         self.open_frame(tag, line);
@@ -516,7 +527,12 @@ impl Build {
         push_frame(&mut self.stack, kind, line, TagEnd::Paragraph, self.columns);
         if let Some(n) = self.footnote_defs.last_mut().and_then(Option::take) {
             let frame = self.stack.last_mut().expect("just pushed above");
-            push_piece(&mut frame.segments, &format!("[{n}] "), Emphasis::default());
+            push_piece(
+                &mut frame.segments,
+                &format!("[{n}] "),
+                Emphasis::default(),
+                None,
+            );
         }
     }
 
@@ -535,6 +551,10 @@ impl Build {
                 }
             }
             TagEnd::Table => self.close_table(),
+            TagEnd::Link => {
+                self.note = None;
+                self.close_frame(end);
+            }
             _ => self.close_frame(end),
         }
     }
@@ -594,7 +614,7 @@ impl Build {
     fn push_text(&mut self, text: &str) {
         if let Some(frame) = self.stack.last_mut() {
             let style = *frame.emphasis.last().unwrap();
-            push_piece(&mut frame.segments, text, style);
+            push_piece(&mut frame.segments, text, style, self.note.clone());
         }
     }
 
@@ -602,7 +622,7 @@ impl Build {
         if let Some(frame) = self.stack.last_mut() {
             let mut style = *frame.emphasis.last().unwrap();
             style.code = true;
-            push_piece(&mut frame.segments, text, style);
+            push_piece(&mut frame.segments, text, style, None);
         }
     }
 
@@ -624,7 +644,7 @@ impl Build {
         if let Some(frame) = self.stack.last_mut() {
             let n = footnote_number(label, &mut self.footnotes);
             let style = *frame.emphasis.last().unwrap();
-            push_piece(&mut frame.segments, &format!("[{n}]"), style);
+            push_piece(&mut frame.segments, &format!("[{n}]"), style, None);
         }
     }
 
@@ -654,6 +674,7 @@ pub fn rows(text: &str, columns: usize) -> Vec<Row> {
         table: None,
         footnotes: HashMap::new(),
         footnote_defs: Vec::new(),
+        note: None,
     };
 
     for (event, range) in Parser::new_ext(text, options()).into_offset_iter() {
@@ -748,13 +769,13 @@ fn push_emphasis_on_top(stack: &mut [Frame], set: impl FnOnce(&mut Emphasis)) {
     }
 }
 
-fn push_piece(segments: &mut [Vec<Piece>], text: &str, emphasis: Emphasis) {
+fn push_piece(segments: &mut [Vec<Piece>], text: &str, emphasis: Emphasis, note: Option<String>) {
     if text.is_empty() {
         return;
     }
     let current = segments.last_mut().expect("a block always has a segment");
     if let Some(last) = current.last_mut() {
-        if last.emphasis == emphasis {
+        if last.emphasis == emphasis && last.note == note {
             last.text.push_str(text);
             return;
         }
@@ -763,6 +784,7 @@ fn push_piece(segments: &mut [Vec<Piece>], text: &str, emphasis: Emphasis) {
         text: text.to_string(),
         emphasis,
         token: None,
+        note,
     });
 }
 
@@ -784,6 +806,7 @@ fn code_rows(kind: RowKind, line: usize, language: &str, segments: &[Vec<Piece>]
                     text: token.text,
                     emphasis: Emphasis::default(),
                     token: Some(token.kind),
+                    note: None,
                 })
                 .collect(),
             refused: None,
@@ -809,6 +832,7 @@ fn diagram_rows(line: usize, columns: usize, segments: &[Vec<Piece>]) -> Vec<Row
                     text: text.to_string(),
                     emphasis: Emphasis::default(),
                     token: None,
+                    note: None,
                 }],
                 refused: None,
             })
@@ -831,6 +855,7 @@ fn diagram_fallback(line: usize, source: &str, reason: DiagramRefusal) -> Vec<Ro
             text: token.text,
             emphasis: Emphasis::default(),
             token: Some(token.kind),
+            note: None,
         })
         .collect();
     vec![Row {
@@ -891,6 +916,7 @@ pub(crate) fn wrapped(pieces: &[Piece], options: textwrap::Options<'_>) -> Vec<V
                         text: piece.text[from - piece_start..to - piece_start].to_string(),
                         emphasis: piece.emphasis,
                         token: piece.token,
+                        note: piece.note.clone(),
                     })
                 })
                 .collect(),
@@ -1041,12 +1067,63 @@ fn plain_spaces(count: usize) -> Piece {
         text: " ".repeat(count),
         emphasis: Emphasis::default(),
         token: None,
+        note: None,
     }
 }
 
 fn footnote_number(label: &str, seen: &mut HashMap<String, usize>) -> usize {
     let next = seen.len() + 1;
     *seen.entry(label.to_string()).or_insert(next)
+}
+
+pub fn note_at(text: &str, line: usize, column: usize) -> Option<String> {
+    let start = *line_starts(text).get(line.checked_sub(1)?)?;
+    let offset = start
+        + text[start..]
+            .chars()
+            .take(column.checked_sub(1)?)
+            .map(char::len_utf8)
+            .sum::<usize>();
+    Parser::new_ext(text, options())
+        .into_offset_iter()
+        .find_map(|(event, range)| match event {
+            Event::Start(Tag::Link {
+                link_type: LinkType::WikiLink { .. },
+                dest_url,
+                ..
+            }) if range.contains(&offset) => Some(dest_url.to_string()),
+            _ => None,
+        })
+}
+
+pub fn note_on(row: &Row, column: usize) -> Option<String> {
+    let mut left = column.checked_sub(1)?;
+    row.pieces.iter().find_map(|piece| {
+        let width = piece.text.chars().count();
+        if left < width {
+            return Some(piece.note.clone());
+        }
+        left -= width;
+        None
+    })?
+}
+
+pub fn resolve(note: &str, files: &[String]) -> Result<String, &'static str> {
+    let name = note.split(['#', '^']).next().unwrap_or(note).trim();
+    let file = match name.ends_with(".md") {
+        true => name.to_string(),
+        false => format!("{name}.md"),
+    };
+    let below = format!("/{file}");
+    let found: Vec<&String> = files
+        .iter()
+        .filter(|path| **path == file || path.ends_with(&below))
+        .collect();
+    match found.as_slice() {
+        [one] => Ok(one.to_string()),
+        [] => Err("no-such-note"),
+        _ => Err("ambiguous-link"),
+    }
 }
 
 fn line_starts(text: &str) -> Vec<usize> {
@@ -1061,6 +1138,63 @@ fn line_of(starts: &[usize], offset: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_wikilink_shows_its_alias_and_carries_the_note_it_names() {
+        let rows = rows("See [[Setup|the setup notes]] first.\n", 80);
+        assert_eq!(texts(&rows), vec!["See the setup notes first.".to_string()]);
+        assert_eq!(note_on(&rows[0], 5).as_deref(), Some("Setup"));
+        assert_eq!(note_on(&rows[0], 19).as_deref(), Some("Setup"));
+        assert_eq!(note_on(&rows[0], 4), None, "the space before it");
+        assert_eq!(note_on(&rows[0], 20), None, "the space after it");
+        assert_eq!(note_on(&rows[0], 99), None, "past the end of the row");
+    }
+
+    #[test]
+    fn a_wikilink_in_source_is_found_under_any_character_of_it() {
+        let text = "# Title\nSee [[notes/Panes]] and [[Setup|setup]].\n";
+        assert_eq!(note_at(text, 2, 5).as_deref(), Some("notes/Panes"));
+        assert_eq!(note_at(text, 2, 19).as_deref(), Some("notes/Panes"));
+        assert_eq!(note_at(text, 2, 20), None);
+        assert_eq!(note_at(text, 2, 29).as_deref(), Some("Setup"));
+        assert_eq!(note_at(text, 2, 4), None);
+        assert_eq!(note_at(text, 2, 23), None);
+        assert_eq!(note_at(text, 1, 3), None);
+        assert_eq!(note_at(text, 9, 1), None);
+    }
+
+    #[test]
+    fn a_wikilink_inside_a_code_fence_is_not_a_link() {
+        assert_eq!(note_at("```\n[[Setup]]\n```\n", 2, 3), None);
+    }
+
+    #[test]
+    fn a_wikilink_resolves_by_name_by_path_and_refuses_to_guess() {
+        let files: Vec<String> = [
+            "docs/Setup.md",
+            "docs/guide/Panes.md",
+            "notes/Panes.md",
+            "Setup.rs",
+        ]
+        .map(String::from)
+        .to_vec();
+        assert_eq!(resolve("Setup", &files), Ok("docs/Setup.md".to_string()));
+        assert_eq!(resolve("Setup.md", &files), Ok("docs/Setup.md".to_string()));
+        assert_eq!(
+            resolve("Setup#Install", &files),
+            Ok("docs/Setup.md".to_string())
+        );
+        assert_eq!(
+            resolve("notes/Panes", &files),
+            Ok("notes/Panes.md".to_string())
+        );
+        assert_eq!(
+            resolve("guide/Panes", &files),
+            Ok("docs/guide/Panes.md".to_string())
+        );
+        assert_eq!(resolve("Panes", &files), Err("ambiguous-link"));
+        assert_eq!(resolve("tes/Panes", &files), Err("no-such-note"));
+        assert_eq!(resolve("Nowhere", &files), Err("no-such-note"));
+    }
     use super::*;
 
     fn kinds(rows: &[Row]) -> Vec<RowKind> {
@@ -1253,7 +1387,7 @@ mod tests {
     }
 
     #[test]
-    fn strikethrough_tasklists_gfm_tables_yaml_and_toml_metadata_footnotes_definition_lists_and_heading_attributes_are_the_only_flags_on(
+    fn strikethrough_tasklists_gfm_tables_yaml_and_toml_metadata_footnotes_definition_lists_heading_attributes_and_wikilinks_are_the_only_flags_on(
     ) {
         assert_eq!(
             options(),
@@ -1266,6 +1400,7 @@ mod tests {
                 | Options::ENABLE_FOOTNOTES
                 | Options::ENABLE_DEFINITION_LIST
                 | Options::ENABLE_HEADING_ATTRIBUTES
+                | Options::ENABLE_WIKILINKS
         );
     }
 
@@ -2188,12 +2323,5 @@ mod tests {
         let rows = rows("log ~2~ n is fine\n", 80);
         let text = texts(&rows).join(" ");
         assert!(text.contains("log 2 n is fine"), "{text}");
-    }
-
-    #[test]
-    fn a_wikilink_stays_its_own_brackets_rather_than_becoming_a_link() {
-        let rows = rows("See [[Setup]] for more.\n", 80);
-        let text = texts(&rows).join(" ");
-        assert!(text.contains("[[Setup]]"), "{text}");
     }
 }

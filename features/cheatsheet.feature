@@ -97,7 +97,7 @@ Feature: The Cheatsheet
 
     Examples:
       | key    | rows |
-      | Down   | 16   |
+      | Down   | 17   |
       | Up     | 15   |
       | k      | 15   |
       | PageUp | 0    |

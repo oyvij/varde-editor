@@ -3460,6 +3460,97 @@ until Varde exits, and no scenario depends on the answer.
 **Q65** Should `c` in Stepping mode leave Stepping mode on, given that a continue usually ends a
 burst? It is on for now (R44.4), for one rule with no exceptions.
 
+## F51 — Keeping knowledge — **DEFINED**
+
+Scenarios live in `features/knowledge.feature`, with the wikilink rule in
+`features/markdown_preview.feature` and the moved AI Inject Chip in `features/ai_pane.feature`.
+`CONTEXT.md`'s "Keeping knowledge" section is the vocabulary: Vault, Note, Topic, Kind, Skill,
+Source map, Knowledge view. Three decisions were hard enough to reverse that they became ADRs:
+`0025-the-vault-is-told-never-found.md`, `0026-a-shipped-skill-belongs-to-varde.md` and
+`0027-an-ai-facing-chip-carries-a-word.md`. It is one feature, specified whole, to be split into
+tickets vertically afterwards.
+
+**R51.1** `[knowledge] enabled` (default `false`) and `vault` (default `~/.varde/knowledge`, `~`
+expanded) are read from the **global** config only; the project layer drops `[knowledge]` the way it
+drops `[ai]`. Both are Settings in ADR 0018's sense, so the template is unchanged: the dimmed
+palette entry's notice names the key.
+**R51.2** A missing **default** Vault is created on first use. A missing **configured** Vault is
+refused out loud and never created — a typo must not leave a stray folder.
+**R51.3** A **Skill** is a folder under `~/.varde/ai/skills/` holding an Agent Skills `SKILL.md`.
+The Skills modal lists every one, by the frontmatter's `name` and `description`; a folder without
+readable frontmatter is listed dimmed with its reason, never silently skipped. It is opened by
+`:skills`, palette `j`, and the `◆ Skills` Chip on the AI pane's top border.
+**R51.4** Picking a Skill **pastes one line and submits it**: the path of its `SKILL.md` and the
+workspace root — never the Skill's text, and nothing Varde reads back (ADR 0006). The prompt goes
+through the same queue every prompt does: a session is started if none runs, and the line waits
+until it is ready.
+**R51.5** A Skill whose frontmatter carries `metadata: { varde-vault: true }` is also told the
+Vault's and the Source map's paths, and is hidden while the knowledge base is disabled. No other
+Skill, no environment variable and no other prompt names the Vault (ADR 0025).
+**R51.6** A Skill whose frontmatter carries `metadata: { varde-asks: "<label>" }` opens a one-line
+question box before it is handed over; the answer goes in the pasted line. An empty answer or
+Escape hands nothing over.
+**R51.7** Varde ships two Skills and one agent: `update-knowledge`, `search-knowledge` and
+`agents/knowledge-searcher.md`. Both Skills opt into the Vault; `search-knowledge` asks what to look
+for. The agent is never picked by the user — the Skills tell the session to run it as a sub-agent
+where the harness has them, and to follow it inline where it does not.
+**R51.8** The binary carries the shipped files and **writes each on start wherever disk differs**.
+A hand edit to a shipped file is lost on the next start, and its first line says so — for a
+`SKILL.md`, the first line inside its frontmatter, since the file must open with `---`. A folder
+Varde did not ship is never touched (ADR 0026).
+**R51.9** The **Knowledge view** is a fourth View (palette `w`, `:knowledge`). It points the tree,
+Filter, Find and editor at the Vault; the terminal, the AI pane, git and language servers stay with
+the workspace. Toggling off returns to the View it was entered from, with the workspace's tree,
+buffers, cursor and scroll as they were. It is not remembered across a restart. The file watcher
+follows the Vault while it is shown, so a Note a Skill writes appears live.
+**R51.10** In the Knowledge view Notes **open in the Preview and are never edited**: insert mode,
+every editing key, Replace, saving and the tree's file actions are refused with
+`vault-is-read-only`, and the tree's edit Chips are not drawn. Moving, selecting, yanking, Find,
+Filter, the Preview toggle, a Reading, AI Inject and Skills all work (ADR 0025).
+**R51.11** Varde runs **no git** in the Vault and draws no Change bars on a Note. A Vault under git
+is the user's own; the session may push it if the user asks it to.
+**R51.12** **`[[wikilinks]]` are followed everywhere**, not only in the Knowledge view: resolved
+Obsidian's way against the root the tree shows — `Name.md` anywhere below it, `[[Folder/Name]]` to
+disambiguate, `[[Name|alias]]` opening `Name`. An ambiguous name is refused with `ambiguous-link`
+rather than resolved by order; a name matching nothing is `no-such-note` and creates nothing.
+**R51.13** `▶ AI Inject` moves to the top borders of the **Editor and Terminal** — the panes it
+injects from — with its word; the AI pane carries `◆ Skills` instead. Both glyphs are geometric
+(ADR 0027). `:inject` is unchanged.
+
+**What the shipped Skills say** is prose, not a scenario: Varde never reads what a session writes.
+It is written generically — the Vault's shape is the user's, grown from their content, not this
+spec's examples — and covers:
+
+- `update-knowledge` reads the Vault, the session and the workspace; proposes the **key takeaways**
+  as a short bullet list (the Notes written may be fuller); then a bullet list of Notes to **add,
+  merge into or update**, including Notes the new knowledge invalidates; then asks. The user's
+  changes revise all three; acceptance writes.
+- It places Notes in a **Topic** and a **Kind**, deriving both from the existing Vault, and says
+  plainly when either would be **new**; on an empty Vault it proposes from the first write. The user
+  names every folder in the end. The same knowledge may be written once per Kind it fits, in that
+  Kind's style.
+- Every Note carries frontmatter — `kind`, `topic`, `audience: product | engineering`, `source`,
+  `updated`, `supersedes`. Product and engineering knowledge are separate Notes, linked. A Note the
+  new knowledge contradicts is rewritten in place with a History heading, not left stale.
+- Its last writes are a **link pass** over the Vault, adding `[[wikilinks]]` between related Notes,
+  and an index Note and an Obsidian `.base` per Topic.
+- **Nothing names this machine**: a scripted check refuses home paths, the user name, the host name
+  and absolute paths before anything is written. Code is named by the Source map's name for it;
+  remote URLs and repository names are allowed. It offers to add the workspace to the Source map.
+- Last, it asks whether to **sweep** the Source map: compare engineering Notes with the code they
+  describe and propose updates where they have diverged.
+- With nothing in the session worth capturing it asks what to do with the knowledge base instead.
+- `search-knowledge` hands the user's question to `knowledge-searcher`, which may follow the Source
+  map into code, and reports back citing Note names rather than pasting Notes whole.
+
+**Q66** ✅ **Resolved: `gd`.** Following a link is the gesture that already goes to a definition:
+the jump-modifier click asks for it, and `gd` is that click's modifier-free key. With the cursor
+on a `[[wikilink]]` in a markdown buffer, in the Preview or in source, both follow the link instead
+of asking a language server; anywhere else they ask as before. No new key to learn, and the
+cheatsheet lists it as `gd` "definition / follow link".
+**Q67** Should the Skills modal give each row a letter, the way the palette does, or is Enter on a
+selected row enough? Refinement; no scenario turns on it.
+
 ## Spec status
 
 Every feature is defined in Gherkin — **1707 scenario headings across 65 feature files** — and no
@@ -3490,6 +3581,10 @@ consequence of `0004-hosted-panes-are-transparent.md`, which forbids reading wha
 **F41–F50 (debugging a running program) are specified and not implemented.** The spec is issue #45, and its
 implementation tickets are sub-issues of it. The two ADRs are
 `0021-a-debug-adapter-is-a-hosted-child-reached-three-ways.md` and `0022-every-action-has-a-chip.md`.
+
+**F51 (keeping knowledge) is implemented**, as GitHub spec #150 split vertically into tickets
+#151–#161. The three ADRs are `0025-the-vault-is-told-never-found.md`,
+`0026-a-shipped-skill-belongs-to-varde.md` and `0027-an-ai-facing-chip-carries-a-word.md`.
 
 **F31 (language intelligence) is specified and not implemented.** The spec is
 `.scratch/richer-editor/spec.md` and the twelve tickets under it — half one is F14's colour, half two
