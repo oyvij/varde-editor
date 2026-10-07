@@ -1347,14 +1347,27 @@ pub fn start(input: &Startup) -> Result<(State, Config, Vec<Effect>), StartupErr
             contents: template(),
         });
     }
-    for (file, text) in crate::skills::SHIPPED {
-        let path = input.varde_home.join(file);
-        if input.shipped.get(&path).map(String::as_str) != Some(text) {
-            effects.push(Effect::WriteFile {
-                path,
-                contents: text.to_string(),
-            });
-        }
+    let stale = crate::skills::SHIPPED.iter().any(|(file, text)| {
+        input
+            .shipped
+            .get(&input.varde_home.join(file))
+            .map(String::as_str)
+            != Some(*text)
+    });
+    if stale {
+        effects.extend(
+            crate::skills::OWNED
+                .iter()
+                .map(|folder| Effect::DeleteDir(input.varde_home.join(folder))),
+        );
+        effects.extend(
+            crate::skills::SHIPPED
+                .iter()
+                .map(|(file, text)| Effect::WriteFile {
+                    path: input.varde_home.join(file),
+                    contents: text.to_string(),
+                }),
+        );
     }
     let buffers = saved_buffers(&input.root, input.state_json.as_deref());
     state.restoring = buffers.len();

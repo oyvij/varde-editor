@@ -4159,33 +4159,62 @@ fn skill_lines(
     selected: usize,
     height: u16,
 ) -> Vec<Line<'static>> {
-    let mut lines: Vec<Line> = skills
-        .iter()
-        .enumerate()
-        .map(|(index, skill)| {
-            let cursor = match index == selected {
-                true => '>',
-                false => ' ',
-            };
-            match &skill.read {
-                Ok(front) => Line::from(vec![
-                    Span::raw(format!("{cursor} {:<20} ", front.name)),
-                    Span::styled(
-                        front.description.trim().to_string(),
-                        Style::default().fg(Color::Gray),
-                    ),
-                ]),
-                Err(reason) => Line::from(Span::styled(
-                    format!("{cursor} {:<20} {reason}", skill.folder),
-                    Style::default().fg(Color::DarkGray),
-                )),
+    let heading = Style::default().fg(Color::Cyan);
+    let mut lines: Vec<Line> = Vec::new();
+    let mut at = 0;
+    for (index, skill) in skills.iter().enumerate() {
+        let previous = index.checked_sub(1).map(|index| &skills[index].workflow);
+        if previous != Some(&skill.workflow) {
+            match &skill.workflow {
+                None => lines.push(Line::styled("Global", heading)),
+                Some(workflow) => {
+                    if !matches!(previous, Some(Some(_))) {
+                        lines.push(Line::styled("Workflows", heading));
+                    }
+                    let title = workflow
+                        .split('-')
+                        .map(|word| {
+                            let mut chars = word.chars();
+                            chars
+                                .next()
+                                .map(|first| first.to_uppercase().chain(chars).collect::<String>())
+                                .unwrap_or_default()
+                        })
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    lines.push(Line::styled(format!("  {title}"), heading));
+                }
             }
-        })
-        .collect();
+        }
+        let indent = match skill.workflow {
+            Some(_) => "    ",
+            None => "  ",
+        };
+        let cursor = match index == selected {
+            true => '>',
+            false => ' ',
+        };
+        if index == selected {
+            at = lines.len();
+        }
+        lines.push(match &skill.read {
+            Ok(front) => Line::from(vec![
+                Span::raw(format!("{indent}{cursor} {:<20} ", front.name)),
+                Span::styled(
+                    front.description.trim().to_string(),
+                    Style::default().fg(Color::Gray),
+                ),
+            ]),
+            Err(reason) => Line::from(Span::styled(
+                format!("{indent}{cursor} {:<20} {reason}", skill.folder),
+                Style::default().fg(Color::DarkGray),
+            )),
+        });
+    }
     if lines.is_empty() {
         lines.push(Line::from("  No Skill is in ~/.varde/ai/skills/ yet."));
     }
-    let mut lines = window_on(lines, selected, height, 4);
+    let mut lines = window_on(lines, at, height, 4);
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         keys::SKILL_LIST_KEYS

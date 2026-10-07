@@ -679,7 +679,10 @@ impl VardeWorld {
                 self.wrote.push(path.clone());
                 self.files.insert(path, contents);
             }
-            Effect::DeleteDir(path) => self.dirs_deleted.push(path),
+            Effect::DeleteDir(path) => {
+                self.files.retain(|file, _| !file.starts_with(&path));
+                self.dirs_deleted.push(path);
+            }
             Effect::DeleteFile(path) => {
                 self.deleted.push(path.clone());
                 self.files.remove(&path);
@@ -1054,13 +1057,13 @@ impl VardeWorld {
                 let skills = self
                     .files
                     .iter()
-                    .filter(|(path, _)| {
-                        path.file_name() == Some(skills::FILE.as_ref())
-                            && path.parent().and_then(Path::parent) == Some(folder.as_path())
-                    })
-                    .map(|(path, text)| {
-                        let name = path.parent().and_then(Path::file_name).expect("a folder");
-                        skills::read(&name.to_string_lossy(), text)
+                    .filter_map(|(path, text)| {
+                        let name = path.parent()?.strip_prefix(&folder).ok()?;
+                        let parts: Vec<_> = name.components().collect();
+                        let skill = path.file_name() == Some(skills::FILE.as_ref())
+                            && (parts.len() == 1
+                                || parts.len() == 3 && parts[0].as_os_str() == skills::WORKFLOWS);
+                        skill.then(|| skills::read(&name.to_string_lossy(), text))
                     })
                     .collect();
                 self.send_now(Event::SkillsListed(skills));
@@ -1335,6 +1338,46 @@ fn skills_modal_lists(world: &mut VardeWorld, name: String) {
             .any(|skill| skill.read.as_ref().is_ok_and(|front| front.name == name)),
         "{name:?} is not in {skills:?}"
     );
+}
+
+#[then(expr = "the Skills modal lists {string} under {string}")]
+fn skills_modal_lists_under(world: &mut VardeWorld, name: String, group: String) {
+    let skills = listed_skills(world);
+    let skill = skills
+        .iter()
+        .find(|skill| skill.read.as_ref().is_ok_and(|front| front.name == name))
+        .unwrap_or_else(|| panic!("{name:?} is not in {skills:?}"));
+    assert_eq!(skill.workflow.as_deref().unwrap_or("global"), group);
+}
+
+#[then(expr = "the Skills modal lists {string} before {string}")]
+fn skills_modal_lists_before(world: &mut VardeWorld, first: String, second: String) {
+    let names: Vec<String> = listed_skills(world)
+        .into_iter()
+        .filter_map(|skill| skill.read.ok().map(|front| front.name))
+        .collect();
+    let at = |name: &str| names.iter().position(|listed| listed == name);
+    assert!(
+        at(&first).is_some() && at(&first) < at(&second),
+        "{names:?}"
+    );
+}
+
+#[then(expr = "the Skills modal lists under {string}, in order:")]
+fn skills_modal_lists_in_order(world: &mut VardeWorld, workflow: String, step: &Step) {
+    let expected: Vec<String> = step
+        .table()
+        .expect("table")
+        .rows
+        .iter()
+        .map(|row| row[0].clone())
+        .collect();
+    let listed: Vec<String> = listed_skills(world)
+        .into_iter()
+        .filter(|skill| skill.workflow.as_deref() == Some(workflow.as_str()))
+        .filter_map(|skill| skill.read.ok().map(|front| front.name))
+        .collect();
+    assert_eq!(listed, expected);
 }
 
 #[then(expr = "the Skills modal does not list {string}")]
@@ -2247,7 +2290,8 @@ fn no_language_server_started(world: &mut VardeWorld) {
                     | Effect::AnalyseRisk { .. }
                     | Effect::CheckRelease { .. }
                     | Effect::RenderView(_)
-            ) && !matches!(effect, Effect::DeleteDir(path) if is_scratch(world, path))
+            ) && !matches!(effect, Effect::DeleteDir(path) if is_scratch(world, path)
+                    || skills::OWNED.iter().any(|folder| *path == world.startup.varde_home.join(folder)))
                 && !matches!(effect, Effect::WriteFile { contents, .. }
                     if *contents == startup::SEEDED_CONFIG || *contents == startup::template()
                         || skills::SHIPPED.iter().any(|(_, text)| contents == text))
@@ -2433,6 +2477,11 @@ fn no_directory_deleted(world: &mut VardeWorld) {
         .dirs_deleted
         .iter()
         .filter(|path| !is_scratch(world, path))
+        .filter(|path| {
+            !skills::OWNED
+                .iter()
+                .any(|folder| **path == world.startup.varde_home.join(folder))
+        })
         .collect();
     assert!(deleted.is_empty(), "deleted: {deleted:?}");
 }

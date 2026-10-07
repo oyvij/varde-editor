@@ -74,7 +74,10 @@ Feature: Keeping knowledge
   Rule: The Skills modal lists every Skill on disk
 
     A Skill is a folder under `~/.varde/ai/skills/` holding an Agent Skills `SKILL.md`. Its row is
-    the `name` and `description` in the frontmatter, so adding one is adding a folder.
+    the `name` and `description` in the frontmatter, so adding one is adding a folder. A Skill
+    directly under `skills/` is Global and listed first; one under `skills/workflows/<workflow>/`
+    is listed under its workflow, in the order its `metadata.varde-step` names. A folder with no
+    `SKILL.md`, such as a workflow's `shared/`, is not a Skill.
 
     Background:
       Given the knowledge base is enabled with the default Vault
@@ -95,7 +98,17 @@ Feature: Keeping knowledge
         Write a three-line standup.
         """
       When I run ":skills"
-      Then the Skills modal lists "standup"
+      Then the Skills modal lists "standup" under "global"
+      And the Skills modal lists "standup" before "init-vault"
+
+    Scenario: A workflow's Skills are listed in the order they run
+      When I run ":skills"
+      Then the Skills modal lists under "knowledge-vault", in order:
+        | init-vault       |
+        | update-knowledge |
+        | search-knowledge |
+        | sweep-knowledge  |
+        | maintain-vault   |
 
     Scenario: A Skill with no readable frontmatter is listed dimmed with its reason
       Given the Skill folder "broken" holds:
@@ -151,7 +164,7 @@ Feature: Keeping knowledge
       Given an AI session is running in the AI pane
       And I run ":skills"
       When I pick the Skill "update-knowledge"
-      Then the AI was told to follow "/home/me/.varde/ai/skills/update-knowledge/SKILL.md"
+      Then the AI was told to follow "/home/me/.varde/ai/skills/workflows/knowledge-vault/update-knowledge/SKILL.md"
       And the AI was told the workspace is "/home/me/projects/varde"
       And the prompt was submitted
       And no modal is open
@@ -183,7 +196,7 @@ Feature: Keeping knowledge
       And I pick the Skill "update-knowledge"
       When the AI session is ready for input
       Then an AI session was started with "claude"
-      And the AI was told to follow "/home/me/.varde/ai/skills/update-knowledge/SKILL.md"
+      And the AI was told to follow "/home/me/.varde/ai/skills/workflows/knowledge-vault/update-knowledge/SKILL.md"
 
     Scenario: Nothing reaches a session that has not spoken yet
       Given no AI session is running in the AI pane
@@ -224,7 +237,7 @@ Feature: Keeping knowledge
       And I pick the Skill "search-knowledge"
       And I type "how do customers renew a licence?"
       When I press Enter
-      Then the AI was told to follow "/home/me/.varde/ai/skills/search-knowledge/SKILL.md"
+      Then the AI was told to follow "/home/me/.varde/ai/skills/workflows/knowledge-vault/search-knowledge/SKILL.md"
       And the AI was told the question "how do customers renew a licence?"
       And the prompt was submitted
 
@@ -245,20 +258,21 @@ Feature: Keeping knowledge
 
   Rule: Varde keeps its shipped Skills current
 
-    The binary carries every Skill and agent it ships and writes each on start wherever the file on
-    disk differs. A folder Varde did not ship is never touched (ADR 0026).
+    The binary carries every file of every workflow it ships. When any of them differs on disk,
+    Varde deletes `skills/workflows/` and the folders older releases shipped, and writes the
+    workflows afresh. A Global Skill is never touched (ADR 0026, ADR 0028).
 
     Scenario: Shipped Skills and the agent are written when missing
       Given "/home/me/.varde/ai" does not exist
       When Varde starts in the project
-      Then "/home/me/.varde/ai/skills/update-knowledge/SKILL.md" holds the shipped text
-      And "/home/me/.varde/ai/skills/search-knowledge/SKILL.md" holds the shipped text
-      And "/home/me/.varde/ai/agents/knowledge-searcher.md" holds the shipped text
+      Then "/home/me/.varde/ai/skills/workflows/knowledge-vault/update-knowledge/SKILL.md" holds the shipped text
+      And "/home/me/.varde/ai/skills/workflows/knowledge-vault/search-knowledge/SKILL.md" holds the shipped text
+      And "/home/me/.varde/ai/skills/workflows/knowledge-vault/agents/knowledge-searcher.md" holds the shipped text
 
     Scenario: An edited shipped Skill is replaced on start
-      Given "/home/me/.varde/ai/skills/update-knowledge/SKILL.md" holds "my own edit"
+      Given "/home/me/.varde/ai/skills/workflows/knowledge-vault/update-knowledge/SKILL.md" holds "my own edit"
       When Varde starts in the project
-      Then "/home/me/.varde/ai/skills/update-knowledge/SKILL.md" holds the shipped text
+      Then "/home/me/.varde/ai/skills/workflows/knowledge-vault/update-knowledge/SKILL.md" holds the shipped text
 
     Scenario: A Skill the user wrote is left alone
       Given the Skill folder "standup" holds:
@@ -270,6 +284,15 @@ Feature: Keeping knowledge
         """
       When Varde starts in the project
       Then the Skill folder "standup" is unchanged
+
+    Scenario: An update removes what the workflows folder held before
+      Given "/home/me/.varde/ai/skills/workflows/knowledge-vault/update-knowledge/SKILL.md" holds "an older release"
+      And "/home/me/.varde/ai/skills/workflows/knowledge-vault/notes.md" holds "mine"
+      And "/home/me/.varde/ai/agents/knowledge-searcher.md" holds "an older release"
+      When Varde starts in the project
+      Then the file "/home/me/.varde/ai/skills/workflows/knowledge-vault/notes.md" does not exist
+      And the file "/home/me/.varde/ai/agents/knowledge-searcher.md" does not exist
+      And "/home/me/.varde/ai/skills/workflows/knowledge-vault/update-knowledge/SKILL.md" holds the shipped text
 
     Scenario: A shipped Skill already current is not written
       Given every shipped Skill on disk holds its shipped text

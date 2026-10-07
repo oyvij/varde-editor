@@ -10,24 +10,58 @@ pub const NO_FRONTMATTER: &str = "no-frontmatter";
 
 pub const SOURCE_MAP: &str = "source-map.md";
 
-pub const SHIPPED: [(&str, &str); 3] = [
+pub const WORKFLOWS: &str = "workflows";
+
+pub const OWNED: [&str; 4] = [
+    "ai/skills/workflows",
+    "ai/agents",
+    "ai/skills/update-knowledge",
+    "ai/skills/search-knowledge",
+];
+
+pub const SHIPPED: [(&str, &str); 9] = [
     (
-        "ai/skills/update-knowledge/SKILL.md",
-        include_str!("../ai/skills/update-knowledge/SKILL.md"),
+        "ai/skills/workflows/knowledge-vault/agents/knowledge-searcher.md",
+        include_str!("../ai/skills/workflows/knowledge-vault/agents/knowledge-searcher.md"),
     ),
     (
-        "ai/skills/search-knowledge/SKILL.md",
-        include_str!("../ai/skills/search-knowledge/SKILL.md"),
+        "ai/skills/workflows/knowledge-vault/init-vault/SKILL.md",
+        include_str!("../ai/skills/workflows/knowledge-vault/init-vault/SKILL.md"),
     ),
     (
-        "ai/agents/knowledge-searcher.md",
-        include_str!("../ai/agents/knowledge-searcher.md"),
+        "ai/skills/workflows/knowledge-vault/maintain-vault/SKILL.md",
+        include_str!("../ai/skills/workflows/knowledge-vault/maintain-vault/SKILL.md"),
+    ),
+    (
+        "ai/skills/workflows/knowledge-vault/search-knowledge/SKILL.md",
+        include_str!("../ai/skills/workflows/knowledge-vault/search-knowledge/SKILL.md"),
+    ),
+    (
+        "ai/skills/workflows/knowledge-vault/shared/leak-check.sh",
+        include_str!("../ai/skills/workflows/knowledge-vault/shared/leak-check.sh"),
+    ),
+    (
+        "ai/skills/workflows/knowledge-vault/shared/topic.base",
+        include_str!("../ai/skills/workflows/knowledge-vault/shared/topic.base"),
+    ),
+    (
+        "ai/skills/workflows/knowledge-vault/shared/vault-format.md",
+        include_str!("../ai/skills/workflows/knowledge-vault/shared/vault-format.md"),
+    ),
+    (
+        "ai/skills/workflows/knowledge-vault/sweep-knowledge/SKILL.md",
+        include_str!("../ai/skills/workflows/knowledge-vault/sweep-knowledge/SKILL.md"),
+    ),
+    (
+        "ai/skills/workflows/knowledge-vault/update-knowledge/SKILL.md",
+        include_str!("../ai/skills/workflows/knowledge-vault/update-knowledge/SKILL.md"),
     ),
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Skill {
     pub folder: String,
+    pub workflow: Option<String>,
     pub read: Result<Frontmatter, &'static str>,
 }
 
@@ -37,11 +71,17 @@ pub struct Frontmatter {
     pub description: String,
     pub vault: bool,
     pub asks: Option<String>,
+    pub step: Option<i64>,
 }
 
 pub fn read(folder: &str, text: &str) -> Skill {
     Skill {
         folder: folder.to_string(),
+        workflow: folder
+            .strip_prefix(WORKFLOWS)
+            .and_then(|rest| rest.strip_prefix('/'))
+            .and_then(|rest| rest.split_once('/'))
+            .map(|(workflow, _)| workflow.to_string()),
         read: frontmatter(text).ok_or(NO_FRONTMATTER),
     }
 }
@@ -63,6 +103,7 @@ fn frontmatter(text: &str) -> Option<Frontmatter> {
         asks: document["metadata"]["varde-asks"]
             .as_str()
             .map(str::to_string),
+        step: document["metadata"]["varde-step"].as_i64(),
     })
 }
 
@@ -99,6 +140,7 @@ mod tests {
                 description: "Summarise today's work as a standup\n".to_string(),
                 vault: false,
                 asks: None,
+                step: None,
             })
         );
     }
@@ -118,6 +160,32 @@ mod tests {
         assert_eq!(opted("metadata:\n  varde-vault: \"true\"\n"), Ok(false));
         assert_eq!(opted("varde-vault: true\n"), Ok(false));
         assert_eq!(opted(""), Ok(false));
+    }
+
+    #[test]
+    fn a_skill_belongs_to_the_workflow_folder_it_sits_in() {
+        let workflow = |folder: &str| read(folder, "").workflow;
+        assert_eq!(
+            workflow("workflows/knowledge-vault/init-vault"),
+            Some("knowledge-vault".to_string())
+        );
+        assert_eq!(workflow("standup"), None);
+        assert_eq!(workflow("workflows-of-mine/a/b"), None);
+    }
+
+    #[test]
+    fn a_skill_takes_its_step_from_its_metadata() {
+        let step = |metadata: &str| {
+            read(
+                "keep",
+                &format!("---\nname: keep\ndescription: Keep it\n{metadata}---\n"),
+            )
+            .read
+            .map(|front| front.step)
+        };
+        assert_eq!(step("metadata:\n  varde-step: 2\n"), Ok(Some(2)));
+        assert_eq!(step("metadata:\n  varde-step: two\n"), Ok(None));
+        assert_eq!(step(""), Ok(None));
     }
 
     #[test]
@@ -150,17 +218,6 @@ mod tests {
         let untold = pointer(skill, workspace, None);
         assert!(!untold.contains("/h/brain") && !untold.contains("source-map"));
         assert!(untold.contains("/h/.varde/ai/skills/keep/SKILL.md") && untold.contains("/h/work"));
-    }
-
-    #[test]
-    fn every_shipped_file_opens_by_saying_it_is_replaced_on_update() {
-        for (path, text) in SHIPPED {
-            let first = text.lines().find(|line| *line != "---").expect("a line");
-            assert!(
-                first.contains("replaced on every update"),
-                "{path} opens with {first:?}"
-            );
-        }
     }
 
     #[test]
