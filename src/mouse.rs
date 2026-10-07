@@ -179,6 +179,7 @@ pub fn on_mouse(state: &State, panes: &Layout, pointer: &mut Pointer, input: Inp
             Modal::Tools { .. } => Some(Event::MoveToolRow),
             Modal::Launches { .. } => Some(Event::MoveLaunchRow),
             Modal::Branches { .. } => Some(Event::MoveBranchRow),
+            Modal::Skills { .. } => Some(Event::MoveSkillRow),
             _ => None,
         };
         if let Some(moved) = moved {
@@ -258,10 +259,7 @@ fn group_tab_at(state: &State, panes: &Layout, column: u16) -> Option<crate::lay
 }
 
 fn strip_chip_at(state: &State, panes: &Layout, column: u16) -> Option<&'static str> {
-    if !crate::showing_transport(state) {
-        return None;
-    }
-    let chips = crate::debug::strip_transport(state);
+    let chips = crate::strip_chips(state);
     let area = crate::transport_area(state, panes.strip());
     let labels = crate::layout::chip_labels(&chips, area.width, crate::layout::CORNER_TITLE);
     Some(chips[crate::layout::strip_at(area, &labels, column)?].action)
@@ -462,8 +460,8 @@ fn pressed(
         return events;
     }
     if let Some(index) = buffer_dot_at(state, panes, input.column, input.row) {
-        return match state.buffers.keys().nth(index) {
-            Some(path) => vec![Event::ShowBuffer(path.clone())],
+        return match crate::buffer_list(state).get(index) {
+            Some(path) => vec![Event::ShowBuffer(path.to_path_buf())],
             None => vec![],
         };
     }
@@ -528,10 +526,6 @@ fn pressed(
             Some(row) => vec![Event::ClickRow(row.path.clone())],
             None => vec![Event::ClickPane(pane)],
         },
-        (Pane::Ai, _) if input.row == panes.ai.y => match inject_at(panes, input.column) {
-            Some(action) => vec![Event::PaneAction(action)],
-            None => vec![Event::ClickPane(Pane::Ai)],
-        },
         (Pane::Risk, _) => pressed_in_risk(state, panes, input),
         (Pane::Buffers, _) => pressed_in_buffers(state, panes, input),
         (Pane::History, _) => pressed_in_history(state, panes, input),
@@ -572,6 +566,10 @@ fn pressed(
                 false => vec![Event::ClickPane(Pane::Variables)],
             }
         }
+        (Pane::Ai, _) if input.row == panes.ai.y => match ai_chip_at(panes, input.column) {
+            Some(action) => vec![Event::PaneAction(action)],
+            None => vec![Event::ClickPane(Pane::Ai)],
+        },
         (Pane::Terminal, _) => vec![Event::FocusSplit(crate::layout::split_at(
             panes.terminal,
             state.terminals.len(),
@@ -1134,12 +1132,20 @@ pub fn palette_entry_at(state: &State, panes: &Layout, column: u16, row: u16) ->
     let height = panes.tree.height + panes.terminal.height;
     let rows = match state.modal {
         Modal::Palette => crate::palette_rows(height),
-        Modal::Chord => crate::keys::chord_rows(state),
+        Modal::Chord => crate::keys::chord_rows(state)
+            .into_iter()
+            .map(|row| vec![row])
+            .collect(),
         _ => return None,
     };
     let widest = rows
         .iter()
-        .map(|(_, line)| line.chars().count() as u16)
+        .map(|cells| {
+            cells
+                .iter()
+                .map(|(_, cell)| cell.chars().count())
+                .sum::<usize>() as u16
+        })
         .max()
         .unwrap_or(0);
     let width = panes.ai.right();
@@ -1148,7 +1154,16 @@ pub fn palette_entry_at(state: &State, panes: &Layout, column: u16, row: u16) ->
         return None;
     }
     let index = row.checked_sub(box_area.y + 1)? as usize;
-    rows.get(index)?.0
+    let mut offset = column.saturating_sub(box_area.x + 1) as usize;
+    let cells = rows.get(index)?;
+    for (key, cell) in &cells[..cells.len() - 1] {
+        let width = cell.chars().count();
+        if offset < width {
+            return *key;
+        }
+        offset -= width;
+    }
+    cells.last()?.0
 }
 
 pub fn position_label(line: usize, column: usize) -> String {
@@ -1156,7 +1171,8 @@ pub fn position_label(line: usize, column: usize) -> String {
 }
 
 pub fn buffer_dot_at(state: &State, panes: &Layout, column: u16, row: u16) -> Option<usize> {
-    if row != panes.editor.bottom().saturating_sub(1) || state.buffers.len() < 2 {
+    let dots = crate::buffer_list(state).len();
+    if row != panes.editor.bottom().saturating_sub(1) || dots < 2 {
         return None;
     }
     let shown = state
@@ -1164,13 +1180,13 @@ pub fn buffer_dot_at(state: &State, panes: &Layout, column: u16, row: u16) -> Op
         .as_ref()
         .and_then(|path| state.buffers.get(path))
         .map(|buffer| position_label(buffer.line, buffer.column))?;
-    let strip = state.buffers.len() as u16 * 2 - 1;
+    let strip = dots as u16 * 2 - 1;
     let start = panes
         .editor
         .right()
         .saturating_sub(1 + shown.len() as u16 + strip);
     let index = (column.checked_sub(start)? / 2) as usize;
-    (index < state.buffers.len()).then_some(index)
+    (index < dots).then_some(index)
 }
 
 fn list_row(area: Area, row: u16, scroll: usize) -> usize {
@@ -1189,10 +1205,16 @@ fn row_index(state: &State, panes: &Layout, row: u16) -> usize {
 }
 
 fn transport_at(state: &State, panes: &Layout, column: u16) -> Option<&'static str> {
-    let chips = crate::reading::transport(state);
+    let chips = crate::editor_chips(state);
     let labels = layout::chip_labels(&chips, panes.editor.width, layout::EDITOR_TITLE);
     let at = layout::strip_at(panes.editor, &labels, column)?;
     Some(chips[at].action)
+}
+
+fn ai_chip_at(panes: &Layout, column: u16) -> Option<&'static str> {
+    let chips = crate::ai_chips();
+    let labels = layout::chip_labels(&chips, panes.ai.width, layout::AI_TITLE);
+    Some(chips[layout::strip_at(panes.ai, &labels, column)?].action)
 }
 
 fn breakpoint_column(state: &State, panes: &Layout, input: Input) -> bool {
@@ -1229,7 +1251,7 @@ fn action_under(state: &State, panes: &Layout, input: Input) -> Option<&'static 
     match layout::pane_at(panes, input.column, input.row)? {
         Pane::Tree => action_at(state, panes, input.column, input.row),
         Pane::Editor if input.row == panes.editor.y => transport_at(state, panes, input.column),
-        Pane::Ai if input.row == panes.ai.y => inject_at(panes, input.column),
+        Pane::Ai if input.row == panes.ai.y => ai_chip_at(panes, input.column),
         Pane::Risk if input.row == panes.corner.y => pane_action_at(state, panes, input.column),
         Pane::Risk if corner_row => {
             let index = list_row(panes.corner, input.row, state.risk_scroll);
@@ -1324,10 +1346,6 @@ fn pane_action_at(state: &State, panes: &Layout, column: u16) -> Option<&'static
     icon_at(&crate::risk::pane_actions(state), panes.corner, column)
 }
 
-fn inject_at(panes: &Layout, column: u16) -> Option<&'static str> {
-    icon_at(&[crate::INJECT], panes.ai, column)
-}
-
 pub fn gutter_range(
     state: &State,
     panes: &Layout,
@@ -1385,6 +1403,31 @@ mod tests {
             ],
         );
         state
+    }
+
+    #[test]
+    fn the_knowledge_views_buffer_dots_are_its_notes() {
+        let note = |name: &str| PathBuf::from("/v").join(name);
+        let reading = State {
+            view: View::Knowledge,
+            vault: Some(PathBuf::from("/v")),
+            buffers: [note("a.md"), note("b.md"), PathBuf::from("/w/a.rs")]
+                .into_iter()
+                .map(|path| (path, crate::editor::Buffer::open("text\n", false, 4)))
+                .collect(),
+            current_buffer: Some(note("b.md")),
+            ..workspace()
+        };
+        let layout = panes(120, 26, 30, None, 0, 0, Shapes::default());
+        let row = layout.editor.bottom() - 1;
+        let shown: std::collections::BTreeSet<PathBuf> = (layout.editor.x..layout.editor.right())
+            .flat_map(|column| click(&reading, column, row))
+            .filter_map(|event| match event {
+                Event::ShowBuffer(path) => Some(path),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(shown, [note("a.md"), note("b.md")].into_iter().collect());
     }
 
     fn click(state: &State, column: u16, row: u16) -> Vec<Event> {
@@ -2037,6 +2080,7 @@ mod tests {
         let chip = |action| vec![Event::PaneAction(action)];
         let border = vec![Event::ClickPane(Pane::Editor)];
         let shed = [
+            (26..=28, crate::INJECT),
             (22..=24, PLAY_PAUSE),
             (18..=20, PREVIOUS),
             (14..=16, NEXT),
@@ -2044,6 +2088,7 @@ mod tests {
             (2..=8, SPEED),
         ];
         let whole = [
+            (58..=78, crate::INJECT),
             (47..=56, PLAY_PAUSE),
             (37..=45, PREVIOUS),
             (27..=35, NEXT),
@@ -2070,7 +2115,37 @@ mod tests {
             [Event::ClickText(_)]
         ));
         state.current_buffer = Some(PathBuf::from("/w/a.rs"));
+        assert_eq!(press(&state, 120, 2, 0), chip(crate::INJECT));
         assert_eq!(press(&state, 120, 5, 0), border);
+    }
+
+    #[test]
+    fn the_skills_chip_on_the_ai_border_opens_skills_and_sheds_its_word_when_narrow() {
+        let state = editing();
+        let press = |width: u16, from_corner: u16| {
+            let panes = panes(width, 26, 30, None, 0, 0, Shapes::default());
+            on_mouse(
+                &state,
+                &panes,
+                &mut Pointer::default(),
+                Input {
+                    kind: Kind::LeftDown,
+                    column: panes.ai.right() - 1 - from_corner,
+                    row: panes.ai.y,
+                    modifiers: KeyModifiers::NONE,
+                },
+            )
+            .events
+        };
+        let chip = vec![Event::PaneAction(crate::SKILLS)];
+        let border = vec![Event::ClickPane(Pane::Ai)];
+        for (width, columns) in [(120, 2..=19), (60, 2..=4)] {
+            assert_eq!(press(width, 1), border, "{width}");
+            assert_eq!(press(width, columns.end() + 1), border, "{width}");
+            for column in columns {
+                assert_eq!(press(width, column), chip, "{width}: {column}");
+            }
+        }
     }
 
     #[test]
@@ -2624,7 +2699,12 @@ mod tests {
                 panes.tree.height + panes.terminal.height,
                 rows.len() as u16,
                 rows.iter()
-                    .map(|(_, line)| line.chars().count() as u16)
+                    .map(|cells| {
+                        cells
+                            .iter()
+                            .map(|(_, cell)| cell.chars().count() as u16)
+                            .sum()
+                    })
                     .max()
                     .unwrap_or(0),
             );
@@ -2649,6 +2729,30 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn a_click_in_the_palettes_second_column_picks_the_entry_drawn_there() {
+        let state = State {
+            modal: Modal::Palette,
+            ..workspace()
+        };
+        let panes = panes(80, 24, 30, None, 0, 0, Shapes::default());
+        let row = (0..24)
+            .find(|row| palette_entry_at(&state, &panes, 40, *row).is_some())
+            .expect("the palette is open");
+        let hits: Vec<Option<char>> = (0..80)
+            .map(|column| palette_entry_at(&state, &panes, column, row))
+            .collect();
+        let editor = hits.iter().position(|hit| *hit == Some('o'));
+        let review = hits.iter().position(|hit| *hit == Some('r'));
+        assert!(
+            matches!((editor, review), (Some(editor), Some(review)) if editor < review),
+            "Editor and Review are not side by side on row {row}: {hits:?}"
+        );
+        assert!(hits[review.unwrap()..]
+            .iter()
+            .all(|hit| matches!(hit, Some('r') | None)));
     }
 
     #[test]
@@ -3107,15 +3211,27 @@ mod tests {
     }
 
     #[test]
-    fn the_ai_panes_border_icon_injects_and_reports_nothing_to_the_child() {
-        let ai = panes(120, 26, 30, None, 0, 0, Shapes::default()).ai;
-        let path = [
-            (Kind::LeftDown, ai.x + ai.width - 3, ai.y),
-            (Kind::LeftUp, ai.x + ai.width - 3, ai.y),
-        ];
+    fn ai_inject_is_on_the_editors_and_the_terminals_border_and_not_the_ais() {
+        let panes = panes(120, 26, 30, None, 0, 0, Shapes::default());
+        let click = |column, row| [(Kind::LeftDown, column, row)];
+        let editor = panes.editor.right() - 3;
+        let terminal = panes.strip().right()
+            - 1
+            - crate::layout::strip_width(&crate::group_labels(&workspace()))
+            - 3;
+        let ai = panes.ai.right() - 3;
+        let inject = vec![Event::PaneAction(crate::INJECT)];
         assert_eq!(
-            gesture(&workspace(), &path),
-            vec![Event::PaneAction(crate::INJECT)]
+            gesture(&workspace(), &click(editor, panes.editor.y)),
+            inject
+        );
+        assert_eq!(
+            gesture(&workspace(), &click(terminal, panes.terminal.y)),
+            inject
+        );
+        assert_eq!(
+            gesture(&workspace(), &click(ai, panes.ai.y)),
+            vec![Event::PaneAction(crate::SKILLS)]
         );
     }
 

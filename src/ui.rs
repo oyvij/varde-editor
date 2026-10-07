@@ -168,7 +168,6 @@ pub fn draw(
                         (k == state.split())
                             .then(|| pty_link(state, shell, Pane::Terminal))
                             .flatten(),
-                        &[],
                     ),
                     *area,
                 );
@@ -193,7 +192,6 @@ pub fn draw(
                         state,
                         Pane::Output,
                         None,
-                        &[],
                     ),
                     rect(areas.panes.output),
                 );
@@ -277,7 +275,7 @@ pub fn draw(
 
 fn draw_list_pane(frame: &mut Frame, state: &State, rows: &[Row], areas: &Areas, chrome: &Chrome) {
     match state.view {
-        View::Edit => {
+        View::Edit | View::Knowledge => {
             frame.render_widget(tree_widget(state, rows, areas.tree.width), areas.tree);
             filter_box(frame, state, areas.tree, chrome.filter_draft);
         }
@@ -302,6 +300,7 @@ fn draw_ai_pane(
     let Some(pane) = ai else {
         let (widget, cursor) = start_ai_widget(state, chrome.ai_draft, areas.ai);
         frame.render_widget(widget, areas.ai);
+        ai_chips(frame, state, areas.ai);
         if state.focus == Pane::Ai && state.modal == Modal::None {
             frame.set_cursor_position(cursor);
         }
@@ -315,12 +314,28 @@ fn draw_ai_pane(
             state,
             Pane::Ai,
             pty_link(state, pane, Pane::Ai),
-            &[varde::INJECT],
         ),
         areas.ai,
     );
+    ai_chips(frame, state, areas.ai);
     if state.focus == Pane::Ai && caret_is_free {
         place_pty_cursor(frame, areas.ai, pane);
+    }
+}
+
+fn ai_chips(frame: &mut Frame, state: &State, area: Rect) {
+    let chips = varde::ai_chips();
+    let labels = layout::chip_labels(&chips, area.width, layout::AI_TITLE);
+    let gap = Style::default().fg(border_colour(state, Pane::Ai));
+    let mut spans = Vec::new();
+    for (chip, label) in chips.iter().zip(labels) {
+        spans.extend(chip_spans(state, chip, label));
+        spans.push(Span::styled("\u{2500}", gap));
+    }
+    let line = Line::from(spans);
+    let width = line.width() as u16;
+    if let Some(x) = area.right().checked_sub(1 + width) {
+        frame.render_widget(line, Rect::new(x, area.y, width, 1));
     }
 }
 
@@ -394,15 +409,32 @@ fn draw_modal(frame: &mut Frame, state: &State, chrome: &Chrome) {
         Modal::Palette => overlay(
             frame,
             "COMMANDS",
-            rows_lines(palette_rows(frame.area().height)),
+            rows_lines(palette_rows(frame.area().height), |key| {
+                !varde::palette_dimmed(state, key)
+            }),
         ),
-        Modal::Chord => overlay(frame, "SPACE", rows_lines(keys::chord_rows(state))),
+        Modal::Chord => overlay(
+            frame,
+            "SPACE",
+            rows_lines(
+                keys::chord_rows(state)
+                    .into_iter()
+                    .map(|row| vec![row])
+                    .collect(),
+                |_| true,
+            ),
+        ),
         Modal::Breakpoint { field, draft, .. } => {
             overlay(frame, "BREAKPOINT", breakpoint_box_lines(*field, draft))
         }
         Modal::NameBox { .. } => overlay(
             frame,
             "NAME",
+            vec![Line::from(chrome.name_draft.to_string())],
+        ),
+        Modal::SkillQuestion { label, .. } => overlay(
+            frame,
+            label,
             vec![Line::from(chrome.name_draft.to_string())],
         ),
         Modal::ExceptionClass => overlay(
@@ -445,6 +477,10 @@ fn draw_modal(frame: &mut Frame, state: &State, chrome: &Chrome) {
                 "BRANCHES",
                 branch_lines(&story::branches(refs, filter), filter, *row, height),
             )
+        }
+        Modal::Skills { skills, row } => {
+            let height = frame.area().height;
+            overlay(frame, "SKILLS", skill_lines(skills, *row, height))
         }
         Modal::Restart => overlay(
             frame,
@@ -689,7 +725,7 @@ fn buffers_widget(state: &State, width: u16) -> Paragraph<'static> {
     let mut title = "buffers".to_string();
     if let Some(path) = varde::buffer_selected(state) {
         title.push_str("  ");
-        title.push_str(&varde::relative(state, path));
+        title.push_str(&varde::relative(state.shown_root(), path));
     }
     Paragraph::new(buffers_lines(state, width))
         .scroll((state.buffers_scroll as u16, 0))
@@ -713,7 +749,7 @@ fn buffers_lines(state: &State, width: u16) -> Vec<Line<'static>> {
             let name = path
                 .file_name()
                 .map(|name| name.to_string_lossy().into_owned())
-                .unwrap_or_else(|| varde::relative(state, path));
+                .unwrap_or_else(|| varde::relative(state.shown_root(), path));
             let (mark, colour) = glyph(varde::mark(state, path));
             let room = inner.saturating_sub(2);
             Line::from(vec![
@@ -785,7 +821,7 @@ fn breakpoints_lines(state: &State, width: u16) -> Vec<Line<'static>> {
                 let room = inner.saturating_sub(tail.width() + 1 + actions.len() * 2);
                 let path = match room {
                     0 => String::new(),
-                    room => truncate(&varde::relative(state, &breakpoint.file), room),
+                    room => truncate(&varde::relative(&state.root, &breakpoint.file), room),
                 };
                 let mut spans = vec![Span::styled(format!(" {path:<room$}"), selected)];
                 spans.push(Span::styled(tail, selected.fg(Color::DarkGray)));
@@ -997,7 +1033,7 @@ fn diagnostics_lines(state: &State, width: u16) -> Vec<Line<'static>> {
             match diagnostic {
                 None => Line::from(Span::styled(
                     truncate(
-                        &format!(" {}", varde::relative(state, path))
+                        &format!(" {}", varde::relative(&state.root, path))
                             .replace(|character: char| character.is_control(), ""),
                         inner,
                     ),
@@ -1208,7 +1244,7 @@ fn tree_lines(state: &State, rows: &[Row], width: u16) -> Vec<Line<'static>> {
         .map(|row| {
             let depth = row
                 .path
-                .strip_prefix(&state.root)
+                .strip_prefix(state.shown_root())
                 .map_or(0, |rest| rest.components().count().saturating_sub(1));
             let marker = match (row.is_dir, row.expanded) {
                 (true, true) => "▾ ",
@@ -1355,7 +1391,7 @@ fn review_lines(state: &State, rows: &[tree::Row], width: u16) -> Vec<Line<'stat
     };
     rows.iter()
         .map(|row| {
-            let name = varde::relative(state, &row.path);
+            let name = varde::relative(&state.root, &row.path);
             let style = match state.tree_selection.as_deref() == Some(row.path.as_path()) {
                 true => Style::default().add_modifier(Modifier::REVERSED),
                 false => Style::default(),
@@ -2476,7 +2512,7 @@ fn right_title(state: &State, room: usize, width: u16) -> Line<'static> {
         clause if clause.is_empty() => Vec::new(),
         clause => vec![Span::styled(clause, Style::default().fg(Color::DarkGray))],
     };
-    let chips = varde::reading::transport(state);
+    let chips = varde::editor_chips(state);
     let labels = layout::chip_labels(&chips, width, layout::EDITOR_TITLE);
     let gap = Style::default().fg(border_colour(state, Pane::Editor));
     for (chip, label) in chips.iter().zip(labels) {
@@ -2487,8 +2523,8 @@ fn right_title(state: &State, room: usize, width: u16) -> Line<'static> {
 }
 
 fn strip_chips(frame: &mut Frame, state: &State, strip: Area) {
-    let chips = varde::debug::strip_transport(state);
-    if chips.is_empty() || !varde::showing_transport(state) {
+    let chips = varde::strip_chips(state);
+    if chips.is_empty() {
         return;
     }
     let area = varde::transport_area(state, strip);
@@ -2552,7 +2588,7 @@ fn chip_spans(state: &State, chip: &varde::Chip, label: String) -> [Span<'static
     if state.hovered_action == Some(chip.action) {
         lift |= Modifier::BOLD | Modifier::UNDERLINED;
     }
-    let (head, tail) = label.split_at(chip.glyph.len() + 2);
+    let (head, tail) = label.split_at((chip.glyph.len() + 2 + chip.word.len()).min(label.len()));
     [
         Span::styled(
             head.to_string(),
@@ -2601,11 +2637,7 @@ fn authorship_clause(state: &State, room: usize) -> String {
 }
 
 fn title_room(state: &State, width: u16) -> usize {
-    let labels = layout::chip_labels(
-        &varde::reading::transport(state),
-        width,
-        layout::EDITOR_TITLE,
-    );
+    let labels = layout::chip_labels(&varde::editor_chips(state), width, layout::EDITOR_TITLE);
     let strip = match labels.is_empty() {
         true => 0,
         false => layout::strip_width(&labels) as usize + 1,
@@ -3519,11 +3551,12 @@ fn place_pty_cursor(frame: &mut Frame, area: Rect, pane: &PtyPane) {
 }
 
 fn dot_spans(state: &State) -> Vec<Span<'static>> {
-    if state.buffers.len() < 2 {
+    let dots = varde::buffer_list(state);
+    if dots.len() < 2 {
         return Vec::new();
     }
     let mut spans = Vec::new();
-    for path in state.buffers.keys() {
+    for path in dots {
         let (glyph, colour) = glyph(mark(state, path));
         spans.push(Span::styled(glyph, Style::default().fg(colour)));
         spans.push(Span::raw(" "));
@@ -3674,7 +3707,6 @@ fn terminal_widget(
     state: &State,
     which: Pane,
     link: Option<(usize, usize, usize)>,
-    actions: &[&'static str],
 ) -> Paragraph<'static> {
     let screen = pane.screen();
     let (rows, columns) = screen.size();
@@ -3732,7 +3764,6 @@ fn terminal_widget(
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
             .title(title.to_string())
-            .title(pane_actions_title(state, actions, None))
             .border_style(Style::default().fg(border)),
     )
 }
@@ -3759,9 +3790,9 @@ fn start_ai_widget(state: &State, draft: &str, area: Rect) -> (Paragraph<'static
         )),
         hint("Enter to start"),
     ];
-    let widget = Paragraph::new(lines).centered().block(
-        pane_block("ai", state, Pane::Ai).title(pane_actions_title(state, &[varde::INJECT], None)),
-    );
+    let widget = Paragraph::new(lines)
+        .centered()
+        .block(pane_block("ai", state, Pane::Ai));
     (widget, cursor)
 }
 
@@ -3814,7 +3845,6 @@ fn action_icon(action: &str) -> &'static str {
         varde::history::GO_TO => "\u{f0a9}",
         varde::debug::REMOVE => "\u{2715}",
         varde::debug::EDIT => "\u{270e}",
-        varde::INJECT => "\u{f061}",
         varde::risk::REFACTOR => "\u{f0ad}",
         varde::risk::RECOMPUTE => "\u{f021}",
         varde::risk::START_LOOP => "\u{f04b}",
@@ -4124,17 +4154,70 @@ fn branch_lines(
     lines
 }
 
+fn skill_lines(
+    skills: &[varde::skills::Skill],
+    selected: usize,
+    height: u16,
+) -> Vec<Line<'static>> {
+    let mut lines: Vec<Line> = skills
+        .iter()
+        .enumerate()
+        .map(|(index, skill)| {
+            let cursor = match index == selected {
+                true => '>',
+                false => ' ',
+            };
+            match &skill.read {
+                Ok(front) => Line::from(vec![
+                    Span::raw(format!("{cursor} {:<20} ", front.name)),
+                    Span::styled(
+                        front.description.trim().to_string(),
+                        Style::default().fg(Color::Gray),
+                    ),
+                ]),
+                Err(reason) => Line::from(Span::styled(
+                    format!("{cursor} {:<20} {reason}", skill.folder),
+                    Style::default().fg(Color::DarkGray),
+                )),
+            }
+        })
+        .collect();
+    if lines.is_empty() {
+        lines.push(Line::from("  No Skill is in ~/.varde/ai/skills/ yet."));
+    }
+    let mut lines = window_on(lines, selected, height, 4);
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        keys::SKILL_LIST_KEYS
+            .iter()
+            .map(|(key, word)| format!("   {key}  {word}"))
+            .collect::<String>(),
+        Style::default().fg(Color::DarkGray),
+    )));
+    lines
+}
+
 fn window_on(lines: Vec<Line<'static>>, at: usize, height: u16, chrome: u16) -> Vec<Line<'static>> {
     let room = height.saturating_sub(chrome).max(1) as usize;
     let start = (at + 1).saturating_sub(room);
     lines.into_iter().skip(start).take(room).collect()
 }
 
-fn rows_lines(rows: Vec<(Option<char>, String)>) -> Vec<Line<'static>> {
+fn rows_lines(
+    rows: Vec<Vec<(Option<char>, String)>>,
+    lit: impl Fn(char) -> bool,
+) -> Vec<Line<'static>> {
     rows.into_iter()
-        .map(|(key, row)| match key {
-            Some(_) => Line::from(row),
-            None => Line::from(Span::styled(row, Style::default().fg(Color::DarkGray))),
+        .map(|cells| {
+            Line::from(
+                cells
+                    .into_iter()
+                    .map(|(key, cell)| match key {
+                        Some(key) if lit(key) => Span::raw(cell),
+                        _ => Span::styled(cell, Style::default().fg(Color::DarkGray)),
+                    })
+                    .collect::<Vec<_>>(),
+            )
         })
         .collect()
 }
@@ -4562,21 +4645,6 @@ mod tests {
     }
 
     #[test]
-    fn the_ai_panes_inject_icon_lands_on_the_column_it_is_hit_tested_from() {
-        use ratatui::widgets::Widget;
-        let state = State::default();
-        let area = ratatui::layout::Rect::new(0, 0, 30, 4);
-        let mut buffer = ratatui::buffer::Buffer::empty(area);
-        super::pane_block("ai", &state, varde::Pane::Ai)
-            .title(pane_actions_title(&state, &[varde::INJECT], None))
-            .render(area, &mut buffer);
-        let top: Vec<String> = (0..30)
-            .map(|column| buffer[(column, 0)].symbol().to_string())
-            .collect();
-        assert_eq!(top[27], super::action_icon(varde::INJECT), "{top:?}");
-    }
-
-    #[test]
     fn the_panes_action_icons_land_on_the_columns_they_are_hit_tested_from() {
         use ratatui::widgets::Widget;
         let state = measured();
@@ -4623,12 +4691,12 @@ mod tests {
         let mut state = State::default();
         state.current_buffer = Some(std::path::PathBuf::from("/w/guide.md"));
         state.speech.speed = 1.25;
-        let chips = varde::reading::transport(&state);
+        let chips = varde::editor_chips(&state);
         for (width, drawn) in [
-            (40, " \u{25ba} \u{2500} \u{ab} \u{2500} \u{bb} \u{2500} \u{25a0} \u{2500} 1.25x \u{2500}"),
+            (40, " \u{25b6} \u{2500} \u{25ba} \u{2500} \u{ab} \u{2500} \u{bb} \u{2500} \u{25a0} \u{2500} 1.25x \u{2500}"),
             (
                 120,
-                " \u{25ba} :pause \u{2500} \u{ab} :prev \u{2500} \u{bb} :next \u{2500} \u{25a0} :stop \u{2500} 1.25x :speed \u{2500}",
+                " \u{25b6} AI Inject :inject \u{2500} \u{25ba} :pause \u{2500} \u{ab} :prev \u{2500} \u{bb} :next \u{2500} \u{25a0} :stop \u{2500} 1.25x :speed \u{2500}",
             ),
         ] {
             let area = ratatui::layout::Rect::new(0, 0, width, 4);
@@ -4757,17 +4825,17 @@ mod tests {
             .into(),
         );
 
-        let area = ratatui::layout::Rect::new(0, 0, 80, 4);
+        let area = ratatui::layout::Rect::new(0, 0, 85, 4);
         let drawn = |state: &State, name: &str| {
             let mut buffer = ratatui::buffer::Buffer::empty(area);
             let title = buffer_title(
                 name,
                 &varde::editor::Buffer::open("x", false, 4),
                 "normal",
-                title_room(state, 80),
+                title_room(state, 85),
             );
-            editor_block(state, title, Vec::new(), None, 80).render(area, &mut buffer);
-            (0..80)
+            editor_block(state, title, Vec::new(), None, 85).render(area, &mut buffer);
+            (0..85)
                 .map(|column| buffer[(column, 0)].symbol().to_string())
                 .collect::<String>()
         };
@@ -4794,7 +4862,7 @@ mod tests {
         let mut state = State::default();
         state.current_buffer = Some(std::path::PathBuf::from("/w/guide.md"));
         state.speech.speed = 1.0;
-        let area = ratatui::layout::Rect::new(0, 0, 40, 4);
+        let area = ratatui::layout::Rect::new(0, 0, 44, 4);
         let mut buffer = ratatui::buffer::Buffer::empty(area);
         let name = "a-very-long-document-name-indeed.md";
         Block::default()
@@ -4803,16 +4871,16 @@ mod tests {
                 name,
                 &varde::editor::Buffer::open("x", false, 4),
                 "normal",
-                title_room(&state, 40),
+                title_room(&state, 44),
             ))
-            .title(right_title(&state, 0, 40))
+            .title(right_title(&state, 0, 44))
             .render(area, &mut buffer);
-        let top: String = (0..40)
+        let top: String = (0..44)
             .map(|column| buffer[(column, 0)].symbol().to_string())
             .collect();
         assert!(top.contains('\u{2026}'), "the name was not cut: {top:?}");
         assert!(top.ends_with(" 1.00x \u{2500}\u{2510}"), "{top:?}");
-        assert!(top.contains("[normal]\u{2500} \u{25ba}"), "{top:?}");
+        assert!(top.contains("[normal]\u{2500} \u{25b6}"), "{top:?}");
     }
 
     #[test]

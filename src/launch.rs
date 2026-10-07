@@ -227,6 +227,7 @@ fn offered(state: &State) -> Vec<(Chip, KeyCode)> {
         name,
         glyph: glyph.to_string(),
         keys,
+        word: "",
         hue,
         tone,
     };

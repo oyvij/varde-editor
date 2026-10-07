@@ -1,6 +1,6 @@
 [package]
 name = "varde"
-version = "0.215.2"
+version = "0.216.0"
 edition = "2021"
 description = "Varde — a terminal IDE that reviews, tests and ships your work"
 license = "MIT"
@@ -51,6 +51,7 @@ toml_edit = "0.25.15"
 terminal-colorsaurus = "1"
 grep-searcher = "0.1.17"
 grep-regex = "0.1.14"
+yaml-rust = "0.4.5"
 
 [dev-dependencies]
 cucumber = "0.21"

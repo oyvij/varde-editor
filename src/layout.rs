@@ -43,7 +43,10 @@ pub fn strip_at(area: Area, labels: &[String], column: u16) -> Option<usize> {
 pub fn chip_labels(chips: &[crate::Chip], width: u16, title: u16) -> Vec<String> {
     let whole: Vec<String> = chips
         .iter()
-        .map(|chip| format!(" {} {} ", chip.glyph, chip.keys))
+        .map(|chip| match chip.word {
+            "" => format!(" {} {} ", chip.glyph, chip.keys),
+            word => format!(" {} {word} {} ", chip.glyph, chip.keys),
+        })
         .collect();
     match strip_width(&whole) <= width.saturating_sub(title) {
         true => whole,
@@ -57,6 +60,8 @@ pub fn chip_labels(chips: &[crate::Chip], width: u16, title: u16) -> Vec<String>
 pub const EDITOR_TITLE: u16 = 34;
 
 pub const CORNER_TITLE: u16 = 14;
+
+pub const AI_TITLE: u16 = 4;
 
 pub const GUTTER: u16 = 10;
 
@@ -1374,6 +1379,7 @@ mod tests {
             name: "a",
             glyph: glyph.to_string(),
             keys,
+            word: "",
             hue: crate::Hue::Plain,
             tone: crate::Tone::Plain,
         }
@@ -1388,5 +1394,14 @@ mod tests {
         let shed = chip_labels(&chips, 59, EDITOR_TITLE);
         assert_eq!(shed, [" \u{25ba} ", " 1.25x "]);
         assert_eq!(strip_width(&shed), 12);
+    }
+
+    #[test]
+    fn a_word_sheds_with_the_keys() {
+        let chips = [crate::inject_chip(), chip("\u{25ba}", ":pause")];
+        let whole = chip_labels(&chips, 67, EDITOR_TITLE);
+        assert_eq!(whole, [" \u{25b6} AI Inject :inject ", " \u{25ba} :pause "]);
+        let shed = chip_labels(&chips, 66, EDITOR_TITLE);
+        assert_eq!(shed, [" \u{25b6} ", " \u{25ba} "]);
     }
 }

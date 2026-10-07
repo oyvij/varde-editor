@@ -24,6 +24,7 @@ pub mod review;
 pub mod risk;
 pub mod run;
 pub mod search;
+pub mod skills;
 pub mod startup;
 pub mod story;
 pub mod tools;
@@ -78,6 +79,7 @@ pub struct Chip {
     pub name: &'static str,
     pub glyph: String,
     pub keys: &'static str,
+    pub word: &'static str,
     pub hue: Hue,
     pub tone: Tone,
 }
@@ -118,6 +120,7 @@ pub enum View {
     Edit,
     Review,
     Story,
+    Knowledge,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -147,7 +150,15 @@ pub const PALETTE: [(&str, &[(char, &str)]); 5] = [
             ('l', "  Tall"),
         ],
     ),
-    ("Views", &[('e', "Edit"), ('r', "Review"), ('s', "Story")]),
+    (
+        "Views",
+        &[
+            ('e', "Edit"),
+            ('r', "Review"),
+            ('s', "Story"),
+            ('w', "Knowledge"),
+        ],
+    ),
     (
         "Project",
         &[
@@ -155,13 +166,14 @@ pub const PALETTE: [(&str, &[(char, &str)]); 5] = [
             ('v', "Tools"),
             ('n', "Launch"),
             ('c', "Collapse"),
+            ('j', "Skills"),
         ],
     ),
     ("Help", &[('h', "Keys"), ('u', "Update")]),
     ("", &[('q', "Quit")]),
 ];
 
-pub fn palette_rows(screen: u16) -> Vec<(Option<char>, String)> {
+pub fn palette_rows(screen: u16) -> Vec<Vec<(Option<char>, String)>> {
     let mut rows: Vec<(Option<char>, String)> = Vec::new();
     for (heading, entries) in PALETTE {
         if !rows.is_empty() {
@@ -186,13 +198,35 @@ pub fn palette_rows(screen: u16) -> Vec<(Option<char>, String)> {
     if rows.len() > budget {
         rows.retain(|(key, _)| key.is_some());
     }
+    let half = rows.len().div_ceil(2);
+    if rows.len() > budget && half <= budget {
+        let left = rows[..half]
+            .iter()
+            .map(|(_, row)| row.chars().count())
+            .max()
+            .unwrap_or(0);
+        let right = rows.split_off(half);
+        return rows
+            .into_iter()
+            .map(|(key, row)| vec![(key, format!("{row:left$}"))])
+            .zip(right.into_iter().map(Some).chain(std::iter::repeat(None)))
+            .map(|(mut cells, beside)| {
+                cells.extend(beside);
+                cells
+            })
+            .collect();
+    }
     if rows.len() > budget {
         rows.truncate(budget);
         if let Some(last) = rows.last_mut() {
             *last = (None, "   …".to_string());
         }
     }
-    rows
+    rows.into_iter().map(|row| vec![row]).collect()
+}
+
+pub fn palette_dimmed(state: &State, key: char) -> bool {
+    palette_entry(key) == Some("Knowledge") && state.vault.is_none()
 }
 
 pub fn palette_entry(key: char) -> Option<&'static str> {
@@ -251,6 +285,14 @@ pub enum Modal {
     },
     Restart,
     Diverged,
+    Skills {
+        skills: Vec<skills::Skill>,
+        row: usize,
+    },
+    SkillQuestion {
+        label: String,
+        pointer: String,
+    },
     Stops {
         path: PathBuf,
         at: Vec<editor::Tail>,
@@ -331,6 +373,8 @@ pub enum Event {
     SubmitReview,
     ConfirmSubmit,
     ToggleCheatsheet,
+    ToggleKnowledge,
+    VaultOpened(Option<Vec<Entry>>),
     ToggleField,
     ToggleMinimap,
     DragMinimap(u32),
@@ -459,6 +503,10 @@ pub enum Event {
     AiExited,
     AiSpoke,
     InjectToAi,
+    OpenSkills,
+    SkillsListed(Vec<skills::Skill>),
+    MoveSkillRow(Direction),
+    PickSkill,
     StartAi {
         command: Option<String>,
         force: bool,
@@ -486,6 +534,10 @@ pub enum Event {
     HoverAction(Option<&'static str>),
     HoverMinimap(bool),
     AskDefinition,
+    NotesListed {
+        note: String,
+        files: Vec<String>,
+    },
     DragText {
         from: Place,
         to: Place,
@@ -764,6 +816,7 @@ pub enum Effect {
     },
     ClearNotice,
     ReadFolder(PathBuf),
+    OpenVault(PathBuf),
     Scrolled(Pane, Direction),
     OpenUrl(String),
     SetClipboard(String),
@@ -823,8 +876,13 @@ pub enum Effect {
         path: PathBuf,
         at: Place,
     },
+    ListNotes {
+        note: String,
+        root: PathBuf,
+    },
     IndexProject {
         walk: u64,
+        root: PathBuf,
     },
     ClipboardViaTerminal(String),
     ReadClipboard,
@@ -854,6 +912,7 @@ pub enum Effect {
     },
     ReadInstallStatus(PathBuf),
     ReadBranches,
+    ListSkills(PathBuf),
     ReadGuestBranches {
         sentinel: PathBuf,
         repo: PathBuf,
@@ -1006,6 +1065,8 @@ pub struct State {
     pub ai_running: bool,
     pub ai_command: String,
     pub ai_env: Vec<String>,
+    pub vault: Option<PathBuf>,
+    pub workspace: Option<Box<State>>,
     pub editor_theme: String,
     pub editor_field: bool,
     pub minimap: bool,
@@ -1162,6 +1223,13 @@ impl State {
         self.guest.as_deref().unwrap_or(&self.root)
     }
 
+    pub fn shown_root(&self) -> &Path {
+        match (self.view, &self.vault) {
+            (View::Knowledge, Some(vault)) => vault,
+            _ => &self.root,
+        }
+    }
+
     pub fn comment_target(&self) -> Option<(String, u32, u32)> {
         self.gutter.clone()
     }
@@ -1230,6 +1298,8 @@ impl Default for State {
             ai_running: false,
             ai_command: "claude".to_string(),
             ai_env: vec![],
+            vault: None,
+            workspace: None,
             editor_theme: "dark".to_string(),
             editor_field: true,
             minimap: true,
@@ -1635,6 +1705,12 @@ pub fn update(state: &State, event: Event) -> (State, Vec<Effect>) {
     if refuse_guest_edits(state, &mut next) {
         next.refusal = Some(preview::Refusal::GuestReadOnly);
     }
+    if refuse_note_edits(state, &mut next) {
+        next.refusal = None;
+        next.editor_scroll = state.editor_scroll;
+        next.editor_hscroll = state.editor_hscroll;
+        effects.push(Effect::Notify("vault-is-read-only"));
+    }
     let mut moved = false;
     for (path, buffer) in &next.buffers {
         match state.buffers.get(path) {
@@ -1653,6 +1729,17 @@ pub fn update(state: &State, event: Event) -> (State, Vec<Effect>) {
         effects.push(Effect::SaveState(state_json(&next)));
     }
     debug::forget_changed(&state.breakpoints, &mut next);
+    if next.shown_root() != state.shown_root() && !next.filter.is_empty() {
+        effects.extend(filter::reindex(&mut next));
+    }
+    if next.shown_root() != state.shown_root()
+        && next.search.as_ref().is_some_and(|search| {
+            search.asked != search.results.generation
+                || search.results.run == search::Run::Searching
+        })
+    {
+        effects.extend(search::ask(&mut next));
+    }
     effects.extend(lsp::sync(&mut next));
     (next, effects)
 }
@@ -2236,19 +2323,28 @@ fn on_trigger(state: &State, mut next: State, event: Event, wheeled: bool) -> An
         Event::Trigger(Action::GoHere, Some(Target::Folder(path))) => {
             vec![Effect::SetTerminalInput(tree_actions::command(
                 "cd",
-                &state.root.join(path),
+                &state.shown_root().join(path),
             ))]
+        }
+        Event::Trigger(Action::Delete | Action::NewFile | Action::NewDirectory, _)
+            if state.view == View::Knowledge =>
+        {
+            vec![Effect::Notify("vault-is-read-only")]
         }
         Event::Trigger(Action::Delete, Some(target)) => {
             let (verb, path) = match target {
                 Target::File(p) => ("rm", p),
                 Target::Folder(p) => ("rm -r", p),
             };
-            next.tree_selection = Some(state.root.join(path.parent().unwrap_or(Path::new(""))));
+            next.tree_selection = Some(
+                state
+                    .shown_root()
+                    .join(path.parent().unwrap_or(Path::new(""))),
+            );
             next.focus = Pane::Tree;
             vec![Effect::RunInTerminal(tree_actions::command(
                 verb,
-                &state.root.join(path),
+                &state.shown_root().join(path),
             ))]
         }
         Event::Trigger(Action::SearchHere, Some(Target::Folder(path))) => {
@@ -2262,7 +2358,10 @@ fn on_trigger(state: &State, mut next: State, event: Event, wheeled: bool) -> An
             let path = match target {
                 Target::File(p) | Target::Folder(p) => p,
             };
-            to_clipboard(state, state.root.join(path).to_string_lossy().into_owned())
+            to_clipboard(
+                state,
+                state.shown_root().join(path).to_string_lossy().into_owned(),
+            )
         }
         Event::Trigger(action @ (Action::NewFile | Action::NewDirectory), Some(target)) => {
             let dir = match target {
@@ -2283,7 +2382,7 @@ fn on_enter_name(state: &State, mut next: State, event: Event, wheeled: bool) ->
     let effects = match event {
         Event::EnterName(name) => match std::mem::take(&mut next.modal) {
             Modal::NameBox { action, dir } => {
-                let base = state.root.join(dir);
+                let base = state.shown_root().join(dir);
                 let path = base.join(name);
                 let folder = path.parent().unwrap_or(&base).to_path_buf();
                 next.tree_selection = Some(path.clone());
@@ -2296,6 +2395,11 @@ fn on_enter_name(state: &State, mut next: State, event: Event, wheeled: bool) ->
             Modal::SetValue => debug::set_value(&mut next, name),
             Modal::NewWatch => debug::add_watch(&mut next, name),
             Modal::ExceptionClass => debug::name_class(&mut next, name),
+            Modal::SkillQuestion { pointer, .. } if !name.trim().is_empty() => queue_for_ai(
+                &mut next,
+                Enter::Pressed,
+                format!("{pointer} The question is: {name}"),
+            ),
             _ => vec![],
         },
 
@@ -2551,7 +2655,9 @@ fn on_key_5(state: &State, mut next: State, event: Event, _wheeled: bool) -> Ans
                 next.modal = Modal::Launches { row: 0 };
                 return Ok((next, vec![]));
             }
-            next.modal = Modal::None;
+            if !palette_dimmed(state, key) {
+                next.modal = Modal::None;
+            }
             let next = match palette_command(next, entry) {
                 Ok(answer) => return Ok(answer),
                 Err(next) => next,
@@ -2584,6 +2690,8 @@ fn palette_command(next: State, entry: &str) -> Result<(State, Vec<Effect>), Sta
         "Merge conflicts" => Event::ToggleConflictList,
         "Collapse" => Event::CollapseTree,
         "Keys" => Event::ToggleCheatsheet,
+        "Knowledge" => Event::ToggleKnowledge,
+        "Skills" => Event::OpenSkills,
         "Update" => Event::Rebuild,
         "Quit" => Event::Quit,
         _ => return Err(next),
@@ -2628,6 +2736,11 @@ fn on_key_6(_state: &State, mut next: State, event: Event, wheeled: bool) -> Ans
             let read_the_install = (next.installing.is_some()
                 && appeared.iter().any(|(path, _)| path == &install))
             .then_some(Effect::ReadInstallStatus(install));
+            let notes: Vec<PathBuf> = appeared
+                .iter()
+                .filter(|(path, _)| next.view == View::Knowledge && preview::is_markdown(path))
+                .map(|(path, _)| path.clone())
+                .collect();
             for (path, kind) in appeared {
                 let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
                     continue;
@@ -2648,6 +2761,9 @@ fn on_key_6(_state: &State, mut next: State, event: Event, wheeled: bool) -> Ans
             };
             effects.extend(read_the_download);
             effects.extend(read_the_install);
+            for note in notes {
+                effects.extend(unfold(&mut next, &note));
+            }
             effects
         }
 
@@ -2844,7 +2960,7 @@ fn on_submit_review(state: &State, mut next: State, event: Event, wheeled: bool)
             }) => {
                 next.focus = Pane::Editor;
                 vec![Effect::OpenAt {
-                    path: state.root.join(path),
+                    path: state.shown_root().join(path),
                     at,
                 }]
             }
@@ -3268,7 +3384,7 @@ fn on_buffer_opened(_state: &State, mut next: State, event: Event, wheeled: bool
 fn on_step_buffer(state: &State, mut next: State, event: Event, wheeled: bool) -> Answered {
     let effects = match event {
         Event::StepBuffer(direction) => {
-            let paths: Vec<PathBuf> = next.buffers.keys().cloned().collect();
+            let paths: Vec<PathBuf> = buffer_list(&next).into_iter().cloned().collect();
             if paths.is_empty() {
                 return Ok((next, vec![]));
             }
@@ -3392,6 +3508,10 @@ fn on_find_query(state: &State, mut next: State, event: Event, wheeled: bool) ->
                 land_on(&mut next, at);
             }
             vec![]
+        }
+
+        Event::FindKeys(FindKeys::Replace(_)) if state.view == View::Knowledge => {
+            vec![Effect::Notify("vault-is-read-only")]
         }
 
         Event::FindKeys(keys) => {
@@ -3568,7 +3688,7 @@ fn on_search_query(state: &State, mut next: State, event: Event, wheeled: bool) 
             next.search = None;
             next.focus = Pane::Editor;
             vec![Effect::OpenAt {
-                path: state.root.join(&hit.file),
+                path: state.shown_root().join(&hit.file),
                 at,
             }]
         }
@@ -3581,7 +3701,7 @@ fn on_search_query(state: &State, mut next: State, event: Event, wheeled: bool) 
             next.focus = Pane::Editor;
             search::files(&search.results)
                 .into_iter()
-                .map(|file| Effect::OpenBuffer(state.root.join(file)))
+                .map(|file| Effect::OpenBuffer(state.shown_root().join(file)))
                 .collect()
         }
 
@@ -3620,9 +3740,9 @@ fn on_accept_filter(state: &State, mut next: State, event: Event, wheeled: bool)
             filter::narrow(&mut next, String::new());
             match chosen {
                 Some(relative) => {
-                    next.tree_selection = Some(state.root.join(&relative));
+                    next.tree_selection = Some(state.shown_root().join(&relative));
                     let parts: Vec<&str> = relative.split('/').collect();
-                    let mut folder = state.root.clone();
+                    let mut folder = state.shown_root().to_path_buf();
                     let mut reads = Vec::new();
                     for part in &parts[..parts.len() - 1] {
                         folder = folder.join(part);
@@ -3943,6 +4063,13 @@ fn on_editor_key(state: &State, mut next: State, event: Event, wheeled: bool) ->
             vec![]
         }
 
+        Event::EditorKey('d') if previewing(state) && pending_g(state) && note(state).is_some() => {
+            if let Some(buffer) = current(&mut next) {
+                buffer.clear_pending();
+            }
+            definition(state, &mut next)
+        }
+
         Event::EditorKey('g') if previewing(state) && pending_g(state) => {
             if let Some(buffer) = current(&mut next) {
                 buffer.clear_pending();
@@ -4066,7 +4193,7 @@ fn on_editor_key_3(state: &State, mut next: State, event: Event, wheeled: bool) 
             if let Some(buffer) = edited_mut(&mut next) {
                 buffer.clear_pending();
             }
-            lsp::ask(&mut next, lsp::About::Definition)
+            definition(state, &mut next)
         }
 
         Event::EditorKey('m') if pending_g(state) => {
@@ -4407,6 +4534,10 @@ fn on_editor_escape(state: &State, mut next: State, event: Event, wheeled: bool)
             vec![]
         }
 
+        Event::WriteBuffer if state.view == View::Knowledge => {
+            vec![Effect::Notify("vault-is-read-only")]
+        }
+
         Event::WriteBuffer => match (next.current_buffer.clone(), current(&mut next)) {
             (Some(path), Some(buffer)) => {
                 let contents = buffer.write();
@@ -4553,7 +4684,7 @@ fn on_resolve(_state: &State, mut next: State, event: Event, wheeled: bool) -> A
                         .and_then(|path| next.buffers.get(&path).map(|buffer| (path, buffer)))
                         .map(|(path, buffer)| {
                             let name = path
-                                .strip_prefix(&next.root)
+                                .strip_prefix(next.shown_root())
                                 .unwrap_or(&path)
                                 .to_string_lossy()
                                 .into_owned();
@@ -5126,6 +5257,64 @@ fn on_ai_spoke(state: &State, mut next: State, event: Event, wheeled: bool) -> A
             None => vec![Effect::Notify("nothing-to-inject")],
         },
 
+        Event::OpenSkills => vec![Effect::ListSkills(next.varde_home.join(skills::FOLDER))],
+
+        Event::SkillsListed(mut skills) => {
+            if next.vault.is_none() {
+                skills.retain(|skill| !skill.read.as_ref().is_ok_and(|front| front.vault));
+            }
+            next.modal = Modal::Skills { skills, row: 0 };
+            vec![]
+        }
+
+        Event::MoveSkillRow(direction) => {
+            if let Modal::Skills { skills, row } = &mut next.modal {
+                *row = match direction {
+                    Direction::Up => row.saturating_sub(1),
+                    Direction::Down => (*row + 1).min(skills.len().saturating_sub(1)),
+                    Direction::Left | Direction::Right => *row,
+                };
+            }
+            vec![]
+        }
+
+        Event::PickSkill => match &state.modal {
+            Modal::Skills { skills, row } => match skills.get(*row) {
+                Some(skills::Skill {
+                    folder,
+                    read: Ok(front),
+                }) => {
+                    let skill = next
+                        .varde_home
+                        .join(skills::FOLDER)
+                        .join(folder)
+                        .join(skills::FILE);
+                    let source_map = next.varde_home.join(skills::SOURCE_MAP);
+                    let knowledge = next
+                        .vault
+                        .as_deref()
+                        .filter(|_| front.vault)
+                        .map(|vault| (vault, source_map.as_path()));
+                    let pointer = skills::pointer(&skill, &next.root, knowledge);
+                    match &front.asks {
+                        Some(label) => {
+                            next.modal = Modal::SkillQuestion {
+                                label: label.clone(),
+                                pointer,
+                            };
+                            vec![]
+                        }
+                        None => {
+                            next.modal = Modal::None;
+                            queue_for_ai(&mut next, Enter::Pressed, pointer)
+                        }
+                    }
+                }
+                _ => vec![],
+            },
+            _ => vec![],
+        },
+
         Event::AiSpoke => {
             next.ai_spoken = true;
             match next.pending_prompt.take() {
@@ -5182,7 +5371,7 @@ fn on_close_buffer(_state: &State, mut next: State, event: Event, wheeled: bool)
                     next.preview = None;
                 }
             }
-            match next.buffers.keys().next().cloned() {
+            match buffer_list(&next).first().map(|path| path.to_path_buf()) {
                 Some(path) => return Ok(update(&next, Event::ShowBuffer(path))),
                 None => next.focus = Pane::Tree,
             }
@@ -5190,19 +5379,21 @@ fn on_close_buffer(_state: &State, mut next: State, event: Event, wheeled: bool)
         }
 
         Event::CloseAllBuffers { force } => {
+            let listed: BTreeSet<PathBuf> = buffer_list(&next).into_iter().cloned().collect();
             let kept: Vec<String> = next
                 .buffers
                 .iter()
-                .filter(|(_, buffer)| !force && buffer.is_dirty())
-                .map(|(path, _)| relative(&next, path))
+                .filter(|(path, buffer)| listed.contains(*path) && !force && buffer.is_dirty())
+                .map(|(path, _)| relative(next.shown_root(), path))
                 .collect();
-            next.buffers.retain(|_, buffer| !force && buffer.is_dirty());
+            next.buffers
+                .retain(|path, buffer| !listed.contains(path) || !force && buffer.is_dirty());
             if let Some(path) = next.preview.as_ref() {
                 if !next.buffers.contains_key(path) {
                     next.preview = None;
                 }
             }
-            let told = match next.buffers.is_empty() {
+            let told = match kept.is_empty() {
                 true => Effect::Notify("buffers-closed"),
                 false => Effect::notify_about("buffers-kept", kept.join(", ")),
             };
@@ -5249,6 +5440,45 @@ fn on_quit_force(state: &State, mut next: State, event: Event, wheeled: bool) ->
             };
             vec![]
         }
+
+        Event::ToggleKnowledge => match (state.view, &state.vault) {
+            (View::Knowledge, _) => {
+                next = leave_knowledge(next);
+                vec![Effect::RenderView(next.view)]
+            }
+            (_, None) => vec![Effect::Notify("knowledge-disabled")],
+            (_, Some(vault)) => vec![Effect::OpenVault(vault.clone())],
+        },
+
+        Event::VaultOpened(entries) => match (state.view, &state.vault, entries) {
+            (View::Knowledge, _, _) | (_, None, _) => vec![],
+            (_, Some(vault), None) if *vault != startup::default_vault(&state.varde_home) => {
+                vec![Effect::Notify("no-such-vault")]
+            }
+            (_, Some(vault), entries) => {
+                let vault = vault.clone();
+                let mut effects = match &entries {
+                    None => vec![Effect::EnsureDir(vault.clone())],
+                    Some(_) => vec![],
+                };
+                let entries = entries.unwrap_or_default();
+                if entries.is_empty() {
+                    effects.push(Effect::Notify("empty-vault"));
+                }
+                next.workspace = Some(Box::new(state.clone()));
+                next.search = None;
+                next.visits = Vec::new();
+                next.history_selection = 0;
+                next.history_scroll = 0;
+                move_to_view(&mut next, View::Knowledge);
+                next.focus = Pane::Tree;
+                next.tree_selection = None;
+                next.preview = None;
+                next.contents.insert(vault, entries);
+                effects.push(Effect::RenderView(View::Knowledge));
+                effects
+            }
+        },
 
         Event::ToggleField => {
             next.editor_field = !state.editor_field;
@@ -5396,7 +5626,12 @@ fn on_rebuild(state: &State, mut next: State, event: Event, wheeled: bool) -> An
             vec![]
         }
 
-        Event::AskDefinition => lsp::ask(&mut next, lsp::About::Definition),
+        Event::AskDefinition => definition(state, &mut next),
+
+        Event::NotesListed { note, files } => match preview::resolve(&note, &files) {
+            Ok(path) => return Ok(open_file(next, state.shown_root().join(path))),
+            Err(refusal) => vec![Effect::Notify(refusal)],
+        },
 
         Event::DragText { from, to } => {
             next.selection = Some(text_selection(state, from, to));
@@ -5846,6 +6081,7 @@ fn on_story_file_written(state: &State, mut next: State, event: Event, wheeled: 
 fn on_pane_action(state: &State, mut next: State, event: Event, wheeled: bool) -> Answered {
     let effects = match event {
         Event::PaneAction(INJECT) => return Ok(update(state, Event::InjectToAi)),
+        Event::PaneAction(SKILLS) => return Ok(update(state, Event::OpenSkills)),
         Event::PaneAction(risk::RECOMPUTE) => return Ok(update(state, Event::RecomputeRisk)),
         Event::PaneAction(risk::START_LOOP) => {
             return Ok(update(
@@ -6095,8 +6331,10 @@ fn on_move_selection_3(state: &State, mut next: State, event: Event, wheeled: bo
             next.selected_action = None;
             match state.view {
                 View::Review => vec![Effect::ReadDiff(landed.path)],
-                View::Edit if !landed.is_dir => vec![Effect::PreviewBuffer(landed.path)],
-                View::Edit | View::Story => vec![],
+                View::Edit | View::Knowledge if !landed.is_dir => {
+                    vec![Effect::PreviewBuffer(landed.path)]
+                }
+                View::Edit | View::Story | View::Knowledge => vec![],
             }
         }
 
@@ -6627,6 +6865,32 @@ fn paste_bytes(text: &str, paste: keys::Paste) -> Vec<u8> {
 
 pub const INJECT: &str = "inject-to-ai";
 
+pub fn inject_chip() -> Chip {
+    Chip {
+        action: INJECT,
+        name: "inject",
+        glyph: "\u{25b6}".to_string(),
+        keys: ":inject",
+        word: "AI Inject",
+        hue: Hue::Plain,
+        tone: Tone::Plain,
+    }
+}
+
+pub const SKILLS: &str = "skills";
+
+pub fn ai_chips() -> Vec<Chip> {
+    vec![Chip {
+        action: SKILLS,
+        name: "skills",
+        glyph: "\u{25c6}".to_string(),
+        keys: ":skills",
+        word: "Skills",
+        hue: Hue::Plain,
+        tone: Tone::Plain,
+    }]
+}
+
 fn sent(bytes: Option<Vec<u8>>) -> Vec<Effect> {
     match bytes {
         Some(bytes) => vec![Effect::SendKeys {
@@ -6717,7 +6981,11 @@ pub enum Mark {
 }
 
 pub fn buffer_list(state: &State) -> Vec<&PathBuf> {
-    state.buffers.keys().collect()
+    state
+        .buffers
+        .keys()
+        .filter(|path| state.view != View::Knowledge || path.starts_with(state.shown_root()))
+        .collect()
 }
 
 pub fn buffer_selected(state: &State) -> Option<&PathBuf> {
@@ -6778,14 +7046,30 @@ fn relaunching(next: State) -> (State, Vec<Effect>) {
 }
 
 pub(crate) fn state_json(state: &State) -> String {
+    let left;
+    let state = match state.workspace {
+        Some(_) => {
+            left = leave_knowledge(state.clone());
+            &left
+        }
+        None => state,
+    };
+    let workspace = |path: &Path| {
+        state
+            .vault
+            .as_ref()
+            .filter(|vault| vault.starts_with(&state.root) && **vault != state.root)
+            .is_none_or(|vault| !path.starts_with(vault))
+    };
     let expanded: Vec<String> = state
         .expanded
         .iter()
+        .filter(|path| workspace(path))
         .filter_map(|path| path.strip_prefix(&state.root).ok())
         .map(|rest| rest.to_string_lossy().into_owned())
         .collect();
     let relative = |path: &std::path::Path| {
-        (Some(path) != state.preview.as_deref())
+        (Some(path) != state.preview.as_deref() && workspace(path))
             .then(|| path.strip_prefix(&state.root).ok())
             .flatten()
             .map(|rest| rest.to_string_lossy().into_owned())
@@ -6845,13 +7129,17 @@ pub(crate) fn state_json(state: &State) -> String {
 
 fn reveal_in_tree(next: &mut State, path: &Path) -> Vec<Effect> {
     next.tree_selection = Some(path.to_path_buf());
-    let Ok(relative) = path.strip_prefix(&next.root) else {
+    unfold(next, path)
+}
+
+fn unfold(next: &mut State, path: &Path) -> Vec<Effect> {
+    let Ok(relative) = path.strip_prefix(next.shown_root()) else {
         return vec![];
     };
     let Some(parent) = relative.parent() else {
         return vec![];
     };
-    let mut folder = next.root.clone();
+    let mut folder = next.shown_root().to_path_buf();
     let mut effects = vec![];
     for part in parent.components() {
         folder.push(part);
@@ -6939,10 +7227,19 @@ pub(crate) fn enter_view(state: &State, view: View) -> (State, Vec<Effect>) {
     (next, effects)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Watch {
+    Folder,
+    Tree,
+}
+
 /// Folders, never files: a file watch is lost when a tool saves by rename
-pub fn watched_folders(state: &State) -> BTreeSet<PathBuf> {
+pub fn watched_folders(state: &State) -> BTreeSet<(PathBuf, Watch)> {
+    let vault = match state.view {
+        View::Knowledge => state.vault.as_deref(),
+        _ => None,
+    };
     let mut folders = BTreeSet::new();
-    folders.insert(state.root.clone());
     folders.insert(state.root.join(".git"));
     folders.insert(varde_dir(&state.root, state.sidecar.as_deref()).join("stories"));
     // The Refactor loop's sentinel lands here; unwatched, the loop never finishes
@@ -6955,10 +7252,48 @@ pub fn watched_folders(state: &State) -> BTreeSet<PathBuf> {
         .cloned()
         .chain(state.diff_file.as_ref().map(|file| state.root.join(file)));
     folders.extend(open.filter_map(|path| path.parent().map(Path::to_path_buf)));
-    folders
+    let mut watched: BTreeSet<(PathBuf, Watch)> = folders
+        .into_iter()
+        .filter(|folder| vault.is_none_or(|vault| !folder.starts_with(vault)))
+        .map(|folder| (folder, Watch::Folder))
+        .collect();
+    watched.insert(match vault {
+        Some(vault) => (vault.to_path_buf(), Watch::Tree),
+        None => (state.shown_root().to_path_buf(), Watch::Folder),
+    });
+    watched
+}
+
+fn leave_knowledge(mut next: State) -> State {
+    let Some(left) = next.workspace.take() else {
+        return next;
+    };
+    if let Some(vault) = &next.vault {
+        next.buffers
+            .retain(|path, _| left.buffers.contains_key(path) || !path.starts_with(vault));
+    }
+    State {
+        view: left.view,
+        focus: left.focus,
+        current_buffer: left.current_buffer,
+        preview: left.preview,
+        tree_selection: left.tree_selection,
+        diff: left.diff,
+        diff_file: left.diff_file,
+        diff_anchor: left.diff_anchor,
+        walking: left.walking,
+        search: left.search,
+        visits: left.visits,
+        history_selection: left.history_selection,
+        history_scroll: left.history_scroll,
+        ..next
+    }
 }
 
 fn move_to_view(state: &mut State, view: View) {
+    if state.view == View::Knowledge && view != View::Knowledge {
+        *state = leave_knowledge(std::mem::take(state));
+    }
     if state.view != view {
         if let Some(path) = state.current_buffer.take() {
             state.view_buffers.insert(state.view, path);
@@ -6991,8 +7326,8 @@ fn edited_mut(state: &mut State) -> Option<&mut Buffer> {
     }
 }
 
-pub fn relative(state: &State, path: &Path) -> String {
-    path.strip_prefix(&state.root)
+pub fn relative(root: &Path, path: &Path) -> String {
+    path.strip_prefix(root)
         .unwrap_or(path)
         .to_string_lossy()
         .into_owned()
@@ -7118,8 +7453,21 @@ pub fn shapes(state: &State) -> layout::Shapes {
     }
 }
 
-pub fn showing_transport(state: &State) -> bool {
-    state.strip == layout::Group::Debug || state.debug.is_none()
+pub fn editor_chips(state: &State) -> Vec<Chip> {
+    let mut chips = vec![inject_chip()];
+    chips.extend(reading::transport(state));
+    chips
+}
+
+pub fn strip_chips(state: &State) -> Vec<Chip> {
+    let mut chips = match state.strip {
+        layout::Group::Shells => vec![inject_chip()],
+        layout::Group::Debug => Vec::new(),
+    };
+    if state.strip == layout::Group::Debug || state.debug.is_none() {
+        chips.extend(debug::strip_transport(state));
+    }
+    chips
 }
 
 pub fn transport_area(state: &State, strip: layout::Area) -> layout::Area {
@@ -7366,6 +7714,25 @@ fn refuse_guest_edits(state: &State, next: &mut State) -> bool {
     refused
 }
 
+fn refuse_note_edits(state: &State, next: &mut State) -> bool {
+    if next.view != View::Knowledge {
+        return false;
+    }
+    let mut refused = next.refusal == Some(preview::Refusal::ReadOnlyPreview);
+    for (path, before) in &state.buffers {
+        let Some(after) = next.buffers.get(path) else {
+            continue;
+        };
+        if after.revision() != before.revision() && after.is_dirty()
+            || after.mode == editor::Mode::Insert && before.mode != editor::Mode::Insert
+        {
+            next.buffers.insert(path.clone(), before.clone());
+            refused = true;
+        }
+    }
+    refused
+}
+
 pub fn current_buffer(state: &State) -> Option<&Buffer> {
     state
         .current_buffer
@@ -7487,6 +7854,15 @@ pub fn find_line(state: &State) -> Vec<(String, Option<FindIcon>)> {
     pieces
 }
 
+pub fn asked_of_git(state: &State) -> impl Iterator<Item = &PathBuf> {
+    state.buffers.keys().filter(|path| {
+        state
+            .vault
+            .as_ref()
+            .is_none_or(|vault| !path.starts_with(vault))
+    })
+}
+
 pub fn changed_lines(state: &State) -> Vec<usize> {
     authorship::traced_lines(state)
         .unwrap_or_default()
@@ -7529,6 +7905,32 @@ fn closest_match(state: &State, from: Place) -> Option<Place> {
         .find(|at| (at.line, at.column) >= (from.line, from.column))
         .or_else(|| places.first())
         .copied()
+}
+
+fn definition(state: &State, next: &mut State) -> Vec<Effect> {
+    match note(state) {
+        Some(note) => vec![Effect::ListNotes {
+            note,
+            root: state.shown_root().to_path_buf(),
+        }],
+        None => lsp::ask(next, lsp::About::Definition),
+    }
+}
+
+fn note(state: &State) -> Option<String> {
+    let at = cursor_place(state)?;
+    match previewing(state) {
+        true => preview::note_on(preview_rows(state).get(at.line.checked_sub(1)?)?, at.column),
+        false
+            if state
+                .current_buffer
+                .as_deref()
+                .is_some_and(preview::is_markdown) =>
+        {
+            preview::note_at(current_buffer(state)?.shown(), at.line, at.column)
+        }
+        false => None,
+    }
 }
 
 fn cursor_place(state: &State) -> Option<Place> {
@@ -7750,7 +8152,11 @@ fn selected_row(state: &State) -> Option<tree::Row> {
 
 fn selected_target(state: &State) -> Option<Target> {
     let row = selected_row(state)?;
-    let relative = row.path.strip_prefix(&state.root).ok()?.to_path_buf();
+    let relative = row
+        .path
+        .strip_prefix(state.shown_root())
+        .ok()?
+        .to_path_buf();
     Some(if row.is_dir {
         Target::Folder(relative)
     } else {
@@ -7773,6 +8179,415 @@ fn row_action(name: &str) -> Action {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn workspace() -> State {
+        State {
+            root: PathBuf::from("/w"),
+            varde_home: PathBuf::from("/h/.varde"),
+            vault: Some(PathBuf::from("/h/.varde/knowledge")),
+            ..State::default()
+        }
+    }
+
+    fn opened(state: &State, path: &str) -> State {
+        update(
+            state,
+            Event::BufferOpened {
+                path: PathBuf::from(path),
+                contents: "text\n".to_string(),
+                preview: false,
+                at: None,
+            },
+        )
+        .0
+    }
+
+    fn in_knowledge(state: &State) -> State {
+        let asked = update(state, Event::ToggleKnowledge).0;
+        let note = Entry {
+            name: "Note.md".to_string(),
+            is_dir: false,
+        };
+        update(&asked, Event::VaultOpened(Some(vec![note]))).0
+    }
+
+    #[test]
+    fn a_filter_typed_before_switching_roots_narrows_the_root_shown_after() {
+        let filtering = update(&workspace(), Event::Filter("acme".to_string())).0;
+        let asked = update(&filtering, Event::ToggleKnowledge).0;
+        let (reading, effects) = update(&asked, Event::VaultOpened(Some(Vec::new())));
+        assert!(effects.contains(&Effect::IndexProject {
+            walk: filtering.index.walk + 1,
+            root: PathBuf::from("/h/.varde/knowledge"),
+        }));
+        let (_, effects) = update(&reading, Event::ToggleKnowledge);
+        assert!(effects.contains(&Effect::IndexProject {
+            walk: filtering.index.walk + 2,
+            root: PathBuf::from("/w"),
+        }));
+    }
+
+    #[test]
+    fn only_a_note_appearing_in_the_knowledge_view_opens_its_folders() {
+        let appeared = |state: &State, path: &str| {
+            update(
+                state,
+                Event::FilesAppeared(vec![(PathBuf::from(path), tree::Kind::File)]),
+            )
+            .0
+            .expanded
+        };
+        let reading = in_knowledge(&workspace());
+        assert!(appeared(&reading, "/h/.varde/knowledge/Acme/New.md")
+            .contains(Path::new("/h/.varde/knowledge/Acme")));
+        assert!(appeared(&reading, "/h/.varde/knowledge/.obsidian/workspace.json").is_empty());
+        assert!(appeared(&workspace(), "/w/docs/New.md").is_empty());
+    }
+
+    #[test]
+    fn leaving_the_knowledge_view_puts_the_review_back_as_it_was() {
+        let reviewing = State {
+            view: View::Review,
+            focus: Pane::Editor,
+            diff: Some(vec![DiffLine {
+                new_line: Some(1),
+                old_line: Some(1),
+                removed: false,
+                text: "one".to_string(),
+            }]),
+            diff_file: Some("a.rs".to_string()),
+            diff_line: 1,
+            diff_anchor: Some(1),
+            tree_selection: Some(PathBuf::from("/w/a.rs")),
+            ..workspace()
+        };
+        let reading = in_knowledge(&reviewing);
+        assert_eq!(reading.view, View::Knowledge);
+        assert_eq!(reading.diff, None);
+        let back = update(&reading, Event::ToggleKnowledge).0;
+        assert_eq!(back.view, View::Review);
+        assert_eq!(back.focus, Pane::Editor);
+        assert_eq!(back.diff, reviewing.diff);
+        assert_eq!(back.diff_file, reviewing.diff_file);
+        assert_eq!(back.diff_anchor, reviewing.diff_anchor);
+        assert_eq!(back.tree_selection, reviewing.tree_selection);
+    }
+
+    #[test]
+    fn leaving_the_knowledge_view_puts_the_scroll_and_the_walk_back() {
+        let lines: String = (1..=200).map(|n| format!("line {n}\n")).collect();
+        let sized = update(
+            &workspace(),
+            Event::Resized {
+                width: 120,
+                height: 40,
+            },
+        )
+        .0;
+        let editing = update(
+            &sized,
+            Event::BufferOpened {
+                path: PathBuf::from("/w/a.rs"),
+                contents: lines,
+                preview: false,
+                at: Some(Place {
+                    line: 150,
+                    column: 1,
+                }),
+            },
+        )
+        .0;
+        let files = (1..=100)
+            .map(|n| Entry {
+                name: format!("{n:03}.rs"),
+                is_dir: false,
+            })
+            .collect();
+        let listed = update(
+            &editing,
+            Event::Expand {
+                path: PathBuf::from("/w"),
+                entries: files,
+            },
+        )
+        .0;
+        let selected = State {
+            tree_selection: Some(PathBuf::from("/w/080.rs")),
+            focus: Pane::Tree,
+            ..listed
+        };
+        let settled = update(&selected, Event::MoveFocus(Direction::Right)).0;
+        assert!(settled.editor_scroll > 0 && settled.tree_scroll > 0);
+        assert_eq!(settled.focus, Pane::Editor);
+        let back = update(&in_knowledge(&settled), Event::ToggleKnowledge).0;
+        assert_eq!(back.editor_scroll, settled.editor_scroll);
+        assert_eq!(back.tree_scroll, settled.tree_scroll);
+        assert_eq!(back.focus, settled.focus);
+
+        let walking = State {
+            view: View::Story,
+            walking: Some(story::Walking::Remainder { index: 0 }),
+            ..workspace()
+        };
+        let back = update(&in_knowledge(&walking), Event::ToggleKnowledge).0;
+        assert_eq!(back.walking, walking.walking);
+    }
+
+    #[test]
+    fn a_note_read_in_the_knowledge_view_is_not_left_among_the_workspaces_buffers() {
+        let editing = opened(&workspace(), "/w/a.rs");
+        let reading = opened(&in_knowledge(&editing), "/h/.varde/knowledge/Note.md");
+        let back = update(&reading, Event::ToggleKnowledge).0;
+        assert_eq!(
+            back.buffers.keys().collect::<Vec<_>>(),
+            [&PathBuf::from("/w/a.rs")]
+        );
+        assert_eq!(back.current_buffer, Some(PathBuf::from("/w/a.rs")));
+    }
+
+    #[test]
+    fn a_note_previewed_from_the_tree_does_not_evict_the_workspaces_previewed_file() {
+        let previewing = update(
+            &workspace(),
+            Event::BufferOpened {
+                path: PathBuf::from("/w/a.rs"),
+                contents: "text\n".to_string(),
+                preview: true,
+                at: None,
+            },
+        )
+        .0;
+        let reading = update(
+            &in_knowledge(&previewing),
+            Event::BufferOpened {
+                path: PathBuf::from("/h/.varde/knowledge/Note.md"),
+                contents: "text\n".to_string(),
+                preview: true,
+                at: None,
+            },
+        )
+        .0;
+        let back = update(&reading, Event::ToggleKnowledge).0;
+        assert!(back.buffers.contains_key(Path::new("/w/a.rs")));
+        assert_eq!(back.preview, previewing.preview);
+    }
+
+    #[test]
+    fn a_note_shown_as_source_in_the_knowledge_view_refuses_an_edit() {
+        let reading = opened(&in_knowledge(&workspace()), "/h/.varde/knowledge/Note.md");
+        let source = update(&reading, Event::TogglePreview).0;
+        assert!(!previewing(&source));
+        let (after, effects) = update(&source, Event::EditorKey('x'));
+        assert_eq!(current_buffer(&after).unwrap().shown(), "text\n");
+        assert_eq!(effects, vec![Effect::Notify("vault-is-read-only")]);
+    }
+
+    #[test]
+    fn a_note_in_the_preview_refuses_an_edit_with_one_notice() {
+        let reading = opened(&in_knowledge(&workspace()), "/h/.varde/knowledge/Note.md");
+        let (after, effects) = update(&reading, Event::EditorKey('x'));
+        assert_eq!(after.refusal, None);
+        assert_eq!(effects, vec![Effect::Notify("vault-is-read-only")]);
+    }
+
+    #[test]
+    fn a_note_a_skill_rewrites_is_reloaded_in_the_knowledge_view() {
+        let reading = opened(&in_knowledge(&workspace()), "/h/.varde/knowledge/Note.md");
+        let (after, effects) = update(
+            &reading,
+            Event::FileChanged {
+                path: PathBuf::from("/h/.varde/knowledge/Note.md"),
+                contents: "rewritten\n".to_string(),
+            },
+        );
+        assert_eq!(current_buffer(&after).unwrap().shown(), "rewritten\n");
+        assert!(!effects.contains(&Effect::Notify("vault-is-read-only")));
+    }
+
+    #[test]
+    fn a_save_made_in_the_knowledge_view_records_the_workspace() {
+        let editing = opened(&workspace(), "/w/a.rs");
+        let reading = opened(&in_knowledge(&editing), "/h/.varde/knowledge/Note.md");
+        let saved: serde_json::Value = serde_json::from_str(&state_json(&reading)).unwrap();
+        assert_eq!(saved["last_view"], "Edit");
+        assert_eq!(saved["buffers"], serde_json::json!(["a.rs"]));
+        assert_eq!(saved["current_buffer"], "a.rs");
+    }
+
+    #[test]
+    fn choosing_another_view_from_the_knowledge_view_leaves_it() {
+        let editing = opened(&workspace(), "/w/a.rs");
+        let story = switch_view(&in_knowledge(&editing), View::Story).0;
+        assert_eq!(story.workspace, None);
+        assert_eq!(story.shown_root(), Path::new("/w"));
+        let edit = switch_view(&story, View::Edit).0;
+        assert_eq!(edit.current_buffer, Some(PathBuf::from("/w/a.rs")));
+    }
+
+    #[test]
+    fn a_late_answer_from_the_vault_does_not_bury_the_workspace() {
+        let reading = in_knowledge(&workspace());
+        let twice = update(&reading, Event::VaultOpened(Some(Vec::new()))).0;
+        assert_eq!(update(&twice, Event::ToggleKnowledge).0.view, View::Edit);
+    }
+
+    fn reading_two_notes(state: &State) -> State {
+        let reading = opened(&in_knowledge(state), "/h/.varde/knowledge/Note.md");
+        opened(&reading, "/h/.varde/knowledge/Other.md")
+    }
+
+    #[test]
+    fn the_knowledge_views_buffer_list_holds_only_notes() {
+        let reading = reading_two_notes(&opened(&workspace(), "/w/a.rs"));
+        assert_eq!(
+            buffer_list(&reading),
+            [
+                &PathBuf::from("/h/.varde/knowledge/Note.md"),
+                &PathBuf::from("/h/.varde/knowledge/Other.md"),
+            ]
+        );
+        assert!(reading.buffers.contains_key(Path::new("/w/a.rs")));
+        let mut stepped = reading.clone();
+        for _ in 0..3 {
+            stepped = update(&stepped, Event::StepBuffer(Direction::Right)).0;
+            assert_ne!(stepped.current_buffer, Some(PathBuf::from("/w/a.rs")));
+        }
+    }
+
+    #[test]
+    fn closing_the_notes_leaves_the_workspaces_buffers_open() {
+        let reading = reading_two_notes(&opened(&workspace(), "/w/a.rs"));
+        let closed = update(&reading, Event::CloseBuffer { force: false }).0;
+        let closed = update(&closed, Event::CloseBuffer { force: false }).0;
+        assert_eq!(closed.current_buffer, None);
+        assert!(closed.buffers.contains_key(Path::new("/w/a.rs")));
+        let all = update(&reading, Event::CloseAllBuffers { force: false }).0;
+        assert!(all.buffers.contains_key(Path::new("/w/a.rs")));
+        assert_eq!(buffer_list(&all), Vec::<&PathBuf>::new());
+        let back = update(&all, Event::ToggleKnowledge).0;
+        assert_eq!(back.current_buffer, Some(PathBuf::from("/w/a.rs")));
+    }
+
+    #[test]
+    fn the_workspaces_cursor_history_waits_outside_the_knowledge_view() {
+        let visit = |file: &str| history::Visit {
+            file: file.to_string(),
+            line: 1,
+            column: 1,
+            text: "text".to_string(),
+        };
+        let editing = State {
+            visits: vec![visit("a.rs"), visit("b.rs")],
+            history_selection: 1,
+            ..opened(&workspace(), "/w/a.rs")
+        };
+        let reading = reading_two_notes(&editing);
+        assert!(reading
+            .visits
+            .iter()
+            .all(|visit| visit.file.ends_with(".md")));
+        let back = update(&reading, Event::ToggleKnowledge).0;
+        assert_eq!(back.visits, editing.visits);
+        assert_eq!(back.history_selection, 1);
+    }
+
+    #[test]
+    fn find_results_stay_with_the_root_they_were_found_under() {
+        let hit = search::Hit {
+            file: "a.rs".to_string(),
+            line: 1,
+            column: 1,
+            text: "text".to_string(),
+        };
+        let found = State {
+            searches_asked: 1,
+            search: Some(Search {
+                query: Buffer::text_box("text"),
+                asked: 1,
+                results: search::Results {
+                    hits: vec![hit.clone()],
+                    generation: 1,
+                    query: "text".to_string(),
+                    run: search::Run::Finished,
+                },
+                ..Search::default()
+            }),
+            ..workspace()
+        };
+        let found = update(
+            &found,
+            Event::Resized {
+                width: 120,
+                height: 40,
+            },
+        )
+        .0;
+        let reading = in_knowledge(&found);
+        assert_eq!(reading.search, None);
+        let late = Event::Searched {
+            generation: 1,
+            hits: vec![hit],
+            done: true,
+        };
+        let reading = update(&reading, late).0;
+        assert_eq!(reading.search, None);
+        let back = update(&reading, Event::ToggleKnowledge).0;
+        assert_eq!(back.search, found.search);
+    }
+
+    #[test]
+    fn a_find_cut_off_by_the_knowledge_view_is_asked_again_on_the_way_back() {
+        let asked = update(&workspace(), Event::SearchQuery("text".to_string())).0;
+        let (_, effects) = update(&in_knowledge(&asked), Event::ToggleKnowledge);
+        assert!(effects.iter().any(|effect| matches!(
+            effect,
+            Effect::RunSearch(request) if request.root == Path::new("/w") && request.query == "text"
+        )));
+    }
+
+    #[test]
+    fn a_vault_inside_the_workspace_never_reaches_the_saved_state() {
+        let saved = |state: &State| -> serde_json::Value {
+            serde_json::from_str(&state_json(state)).unwrap()
+        };
+        let notes = PathBuf::from("/w/notes");
+        let base = State {
+            vault: Some(notes.clone()),
+            ..workspace()
+        };
+        let expanded = update(
+            &base,
+            Event::Expand {
+                path: PathBuf::from("/w/src"),
+                entries: Vec::new(),
+            },
+        )
+        .0;
+        let editing = opened(&opened(&expanded, "/w/a.rs"), "/w/notes/Kept.md");
+        let reading = in_knowledge(&editing);
+        let unfolded = update(
+            &reading,
+            Event::Expand {
+                path: notes.join("Acme"),
+                entries: Vec::new(),
+            },
+        )
+        .0;
+        let reading = opened(&unfolded, "/w/notes/Acme/Note.md");
+        let back = update(&reading, Event::ToggleKnowledge).0;
+        for state in [&editing, &reading, &back] {
+            let saved = saved(state);
+            assert_eq!(saved["expanded"], serde_json::json!(["src"]));
+            assert_eq!(saved["buffers"], serde_json::json!(["a.rs"]));
+        }
+        for around in ["/", "/w"] {
+            let editing = State {
+                vault: Some(PathBuf::from(around)),
+                ..opened(&workspace(), "/w/a.rs")
+            };
+            assert_eq!(saved(&editing)["buffers"], serde_json::json!(["a.rs"]));
+        }
+    }
 
     #[test]
     fn vardes_own_folder_is_the_sidecar_or_under_the_root() {
@@ -7828,6 +8643,35 @@ mod tests {
         let clicked = update(&picked, Event::FocusSplit(0)).0;
         assert_eq!(clicked.selection, None);
         assert_eq!(clicked.focus, Pane::Terminal);
+    }
+
+    #[test]
+    fn the_jump_click_follows_a_wikilink_in_markdown_and_asks_for_a_definition_elsewhere() {
+        let asked = |path: &str, previewing: bool| {
+            let mut state = update(
+                &State::default(),
+                Event::BufferOpened {
+                    path: PathBuf::from(path),
+                    contents: "See [[Setup|the notes]] first.".to_string(),
+                    preview: false,
+                    at: None,
+                },
+            )
+            .0;
+            if let Some(buffer) = current(&mut state) {
+                buffer.previewing = previewing;
+            }
+            let at = Place { line: 1, column: 7 };
+            let clicked = update(&state, Event::ClickText(at)).0;
+            update(&clicked, Event::AskDefinition).1
+        };
+        let follows = vec![Effect::ListNotes {
+            note: "Setup".to_string(),
+            root: PathBuf::new(),
+        }];
+        assert_eq!(asked("/w/README.md", false), follows);
+        assert_eq!(asked("/w/README.md", true), follows);
+        assert!(!asked("/w/lib.rs", false).contains(&follows[0]));
     }
 
     #[test]
@@ -8403,7 +9247,10 @@ mod tests {
             varde_home: PathBuf::from("/home/me/.varde"),
             ..State::default()
         };
-        let watched = watched_folders(&state);
+        let watched: BTreeSet<PathBuf> = watched_folders(&state)
+            .into_iter()
+            .map(|(folder, _)| folder)
+            .collect();
         assert!(state.expanded.is_empty(), "nothing is expanded");
         assert!(
             watched.contains(&state.varde_home),
@@ -8424,7 +9271,24 @@ mod tests {
                 .collect(),
             ..State::default()
         };
-        assert!(!watched_folders(&state).contains(&root.join("src/tree.js")));
+        assert!(!watched_folders(&state)
+            .iter()
+            .any(|(folder, _)| folder == &root.join("src/tree.js")));
+    }
+
+    #[test]
+    fn the_knowledge_view_watches_the_whole_vault_and_nothing_inside_it_twice() {
+        let mut reading = in_knowledge(&workspace());
+        let vault = PathBuf::from("/h/.varde/knowledge");
+        reading.expanded.insert(vault.join("Acme"));
+        let watched = watched_folders(&reading);
+        assert!(watched.contains(&(vault.clone(), Watch::Tree)));
+        assert!(!watched
+            .iter()
+            .any(|(folder, watch)| { folder.starts_with(&vault) && *watch == Watch::Folder }));
+        assert!(watched.contains(&(PathBuf::from("/w/.git"), Watch::Folder)));
+        let back = update(&reading, Event::ToggleKnowledge).0;
+        assert!(watched_folders(&back).contains(&(PathBuf::from("/w"), Watch::Folder)));
     }
 
     #[test]
@@ -10066,7 +10930,7 @@ mod tests {
                 rows.len(),
                 screen - 2
             );
-            let offered: Vec<char> = rows.iter().filter_map(|(key, _)| *key).collect();
+            let offered: Vec<char> = rows.iter().flatten().filter_map(|(key, _)| *key).collect();
             for (_, entries) in PALETTE {
                 for (key, entry) in entries {
                     assert!(offered.contains(key), "{entry} is gone at {screen} rows");
@@ -10075,18 +10939,28 @@ mod tests {
         }
 
         let roomy = palette_rows(40);
-        assert!(roomy.iter().any(|(_, row)| row.is_empty()));
+        assert!(roomy.iter().all(|cells| cells.len() == 1));
+        assert!(roomy.iter().flatten().any(|(_, row)| row.is_empty()));
         assert_eq!(
-            roomy.last().map(|(_, row)| row.as_str()),
+            roomy.last().map(|cells| cells[0].1.as_str()),
             Some("   Esc  cancel")
         );
-        assert!(palette_rows(28)
+        assert!(palette_rows(30)
             .iter()
+            .flatten()
             .any(|(_, row)| row == "   Esc  cancel"));
+        assert!(palette_rows(26).iter().all(|cells| cells.len() == 1));
 
-        let tiny = palette_rows(14);
-        assert_eq!(tiny.len(), 12);
-        assert_eq!(tiny.last(), Some(&(None, "   …".to_string())));
+        let paired = palette_rows(24);
+        assert!(paired.iter().any(|cells| cells.len() == 2));
+        assert!(paired
+            .iter()
+            .filter(|cells| cells.len() == 2)
+            .all(|cells| cells[0].1.chars().count() == paired[0][0].1.chars().count()));
+
+        let tiny = palette_rows(10);
+        assert_eq!(tiny.len(), 8);
+        assert_eq!(tiny.last(), Some(&vec![(None, "   …".to_string())]));
     }
 
     #[test]

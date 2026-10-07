@@ -45,10 +45,12 @@ Feature: The command palette
       | Views   | e   | Edit            |
       | Views   | r   | Review          |
       | Views   | s   | Story           |
+      | Views   | w   | Knowledge       |
       | Project | f   | Find            |
       | Project | v   | Tools           |
       | Project | n   | Launch          |
       | Project | c   | Collapse        |
+      | Project | j   | Skills          |
       | Help    | h   | Keys            |
       | Help    | u   | Update          |
       |         | q   | Quit            |
@@ -157,7 +159,7 @@ Feature: The command palette
   Scenario: The buffer's own commands are not the palette's
     Given "src/tree.js" is open in the editor with unsaved edits
     And the view palette is shown
-    When I press "w"
+    When I press "x"
     Then "src/tree.js" has unsaved edits
     And the view palette is shown
 

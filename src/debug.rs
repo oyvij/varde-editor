@@ -228,6 +228,7 @@ pub fn transport(state: &crate::State) -> Vec<crate::Chip> {
             name: "exception-class",
             glyph: "\u{25c7}".to_string(),
             keys: "x",
+            word: "",
             hue: crate::Hue::Hold,
             tone: match can_name {
                 true => crate::Tone::Plain,
@@ -239,6 +240,7 @@ pub fn transport(state: &crate::State) -> Vec<crate::Chip> {
             name: "clear-all",
             glyph: "\u{2715}".to_string(),
             keys: "D",
+            word: "",
             hue: crate::Hue::Halt,
             tone: match state.breakpoints.is_empty() {
                 true => crate::Tone::Dimmed,
@@ -255,6 +257,7 @@ pub fn strip_transport(state: &crate::State) -> Vec<crate::Chip> {
         name,
         glyph: glyph.to_string(),
         keys,
+        word: "",
         hue,
         tone: match (state.transport_lit == Some(action), dimmed) {
             (true, _) => Tone::Lit,
@@ -365,6 +368,7 @@ pub fn strip_transport(state: &crate::State) -> Vec<crate::Chip> {
                 false => "\u{25a2}".to_string(),
             },
             keys: "\u{2423}h",
+            word: "",
             hue: Hue::Plain,
             tone: match state.output_unseen {
                 true => Tone::Marked,
@@ -1989,6 +1993,7 @@ pub fn row_chips(state: &State, index: usize) -> Vec<crate::Chip> {
         name,
         glyph: glyph.to_string(),
         keys,
+        word: "",
         hue,
         tone: match dimmed {
             true => Tone::Dimmed,
@@ -2452,6 +2457,7 @@ pub fn hover_chips(state: &State) -> Vec<crate::Chip> {
         name,
         glyph: glyph.to_string(),
         keys: "",
+        word: "",
         hue,
         tone,
     };
@@ -2740,6 +2746,7 @@ pub fn evaluator_chips(state: &State) -> Vec<crate::Chip> {
             name: "run",
             glyph: "\u{25b6}".to_string(),
             keys: "\u{21b5}",
+            word: "",
             hue: Hue::Go,
             tone: match stopped {
                 true => Tone::Plain,
@@ -2751,6 +2758,7 @@ pub fn evaluator_chips(state: &State) -> Vec<crate::Chip> {
             name: "cancel",
             glyph: "\u{25a0}".to_string(),
             keys: "",
+            word: "",
             hue: Hue::Halt,
             tone: match running && can_cancel {
                 true => Tone::Plain,
@@ -2762,6 +2770,7 @@ pub fn evaluator_chips(state: &State) -> Vec<crate::Chip> {
             name: "close",
             glyph: "\u{2715}".to_string(),
             keys: "Esc",
+            word: "",
             hue: Hue::Halt,
             tone: Tone::Plain,
         },
@@ -2857,7 +2866,7 @@ pub fn snapshot(state: &State) -> Option<String> {
     let mark = |here: bool| if here { '\u{2192}' } else { ' ' };
     let mut text = format!(
         "My program is Paused at {}:{line}.\n",
-        crate::relative(state, file)
+        crate::relative(&state.root, file)
     );
     if let Some(buffer) = state.buffers.get(file) {
         let lines = buffer.lines();
@@ -2873,7 +2882,7 @@ pub fn snapshot(state: &State) -> Option<String> {
     text.push_str("\nFrames:\n");
     for (index, frame) in pause.frames.iter().enumerate() {
         let at = frame.file.as_deref().map_or(String::new(), |file| {
-            format!("  {}:{}", crate::relative(state, file), frame.line)
+            format!("  {}:{}", crate::relative(&state.root, file), frame.line)
         });
         text.push_str(&format!(
             "{} {}{at}\n",
