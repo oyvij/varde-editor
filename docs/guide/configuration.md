@@ -258,6 +258,15 @@ What reads a Selection aloud. [reading-aloud.md](reading-aloud.md) explains it i
 | `install.macos`, `install.linux` | shipped | string | Installs `piper` with `uv` and fetches the `en_US-bryce-medium` voice into `~/.varde/voices/`. Runs in the shell pane when you take the row in Tools. No `install.windows`. |
 | `configures.voice` | `"~/.varde/voices/en_US-bryce-medium.onnx"` | string | Written into `voice` once the install exits 0, unless `voice` is already set. |
 
+### `[knowledge]`
+
+The Vault and its Skills. [knowledge.md](knowledge.md) explains them in full.
+
+| Key | Default | Type | Meaning |
+|---|---|---|---|
+| `enabled` | `false` | boolean | Turns the knowledge base on: the Knowledge view and the shipped Skills in the Skills modal. Read only from `~/.varde/config.toml`. |
+| `vault` | `"~/.varde/knowledge"` | string | The Vault folder; a leading `~` is your home directory. Varde creates the default on first use, but refuses one you name that does not exist. Read only from `~/.varde/config.toml`. |
+
 ### All substitutions
 
 | Placeholder | Filled in | With |

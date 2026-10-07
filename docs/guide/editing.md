@@ -300,7 +300,8 @@ and indented code (highlighted in the language the fence names, never wrapped), 
 URL hidden, images as their alt text, literal HTML set apart, and YAML frontmatter shown above the
 document rather than hidden. Varde draws a `mermaid` fence as a diagram. When it cannot (an
 unsupported type, a parse error, too wide for the pane), it states the reason and shows the fence's
-source beneath it. Links are styled text only, and nothing follows them.
+source beneath it. Links are styled text. A `[[wikilink]]` opens its file with `gd`, in the Preview and in
+source: see [knowledge.md](knowledge.md#follow-a-wikilink).
 
 The Preview is read-only. `a o O x dd p u V` do nothing and say so. Motions work over the **rendered
 rows** (`h l 0 $ w b e gg G`, the arrows and the word-motion arrows), so `$` stops at the end of the

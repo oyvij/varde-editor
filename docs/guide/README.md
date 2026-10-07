@@ -14,6 +14,7 @@ not there and not in these pages, it does not exist.
 | [Risk](risk.md) | see which functions are too complex, and run the Refactor loop behind the project's test Gate |
 | [AI pane](ai-pane.md) | host an AI CLI beside the editor, pick it with `:ai`, and understand what reaches it |
 | [Debugging](debugging.md) | set Breakpoints, start a Launch configuration, see where the program paused and walk its Frames, continue and stop |
+| [Knowledge base](knowledge.md) | keep Notes in a Vault shared by every workspace, run Skills that write and search it, and read it in the Knowledge view |
 | [Reading aloud](reading-aloud.md) | have a Selection read to you, pause, skip and change speed, install a voice |
 | [Configuration](configuration.md) | every config key, the global and project files, and what lives under `.varde/` |
 
