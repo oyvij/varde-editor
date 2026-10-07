@@ -73,8 +73,15 @@ ticket's criteria this pass covered, for a ticket only partly done or picked up 
 Issue 10 was implemented in a worktree under `.claude/worktrees/`, and renaming this repo's folder
 broke the registration — git stores worktree paths absolutely — so its branch went unmerged and
 invisible while `main` kept the old code. The finished work had to be recovered by reading a dead
-process's arguments. Nothing in the skills asks for a worktree: `/implement` says "commit your work
-to the current branch". Work tickets on a branch in this checkout.
+process's arguments. Work one ticket on a branch in this checkout; `/implement` says "commit your
+work to the current branch".
+
+**Tickets in parallel** (`/implement-spec` asks for a worktree per implementer): give each one a
+plain clone instead, `git clone -q <this checkout> ~/varde-clones/<n>`, branched from the
+integration branch, and fetch its branch back from the clone to merge. A clone registers nothing in
+this repo, so a rename cannot orphan it. Each clone builds its own `target/` from scratch, and four
+Rust builds at once ran this machine out of memory: run at most two implementers at a time, each
+with `cargo -j 4`. Delete the clones once their branches are merged.
 
 ## When a skill says "publish to the issue tracker"
 
