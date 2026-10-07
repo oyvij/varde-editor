@@ -5263,6 +5263,15 @@ fn on_ai_spoke(state: &State, mut next: State, event: Event, wheeled: bool) -> A
             if next.vault.is_none() {
                 skills.retain(|skill| !skill.read.as_ref().is_ok_and(|front| front.vault));
             }
+            skills.sort_by_key(|skill| {
+                let step = skill.read.as_ref().ok().and_then(|front| front.step);
+                (
+                    skill.workflow.clone(),
+                    step.is_none(),
+                    step,
+                    skill.folder.clone(),
+                )
+            });
             next.modal = Modal::Skills { skills, row: 0 };
             vec![]
         }
@@ -5283,6 +5292,7 @@ fn on_ai_spoke(state: &State, mut next: State, event: Event, wheeled: bool) -> A
                 Some(skills::Skill {
                     folder,
                     read: Ok(front),
+                    ..
                 }) => {
                     let skill = next
                         .varde_home

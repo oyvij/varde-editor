@@ -3478,7 +3478,10 @@ palette entry's notice names the key.
 refused out loud and never created — a typo must not leave a stray folder.
 **R51.3** A **Skill** is a folder under `~/.varde/ai/skills/` holding an Agent Skills `SKILL.md`.
 The Skills modal lists every one, by the frontmatter's `name` and `description`; a folder without
-readable frontmatter is listed dimmed with its reason, never silently skipped. It is opened by
+readable frontmatter is listed dimmed with its reason, never silently skipped. A Skill directly
+under `skills/` is **Global** and listed first; one under `skills/workflows/<workflow>/` is listed
+under its **Workflow**, ordered by `metadata: { varde-step: <n> }`, the order a user runs them in.
+A folder with no `SKILL.md` — a workflow's `shared/` or `agents/` — is not a Skill. It is opened by
 `:skills`, palette `j`, and the `◆ Skills` Chip on the AI pane's top border.
 **R51.4** Picking a Skill **pastes one line and submits it**: the path of its `SKILL.md` and the
 workspace root — never the Skill's text, and nothing Varde reads back (ADR 0006). The prompt goes
@@ -3490,14 +3493,16 @@ Skill, no environment variable and no other prompt names the Vault (ADR 0025).
 **R51.6** A Skill whose frontmatter carries `metadata: { varde-asks: "<label>" }` opens a one-line
 question box before it is handed over; the answer goes in the pasted line. An empty answer or
 Escape hands nothing over.
-**R51.7** Varde ships two Skills and one agent: `update-knowledge`, `search-knowledge` and
-`agents/knowledge-searcher.md`. Both Skills opt into the Vault; `search-knowledge` asks what to look
-for. The agent is never picked by the user — the Skills tell the session to run it as a sub-agent
-where the harness has them, and to follow it inline where it does not.
-**R51.8** The binary carries the shipped files and **writes each on start wherever disk differs**.
-A hand edit to a shipped file is lost on the next start, and its first line says so — for a
-`SKILL.md`, the first line inside its frontmatter, since the file must open with `---`. A folder
-Varde did not ship is never touched (ADR 0026).
+**R51.7** Varde ships one Workflow, `knowledge-vault`: the Skills `init-vault`, `update-knowledge`,
+`search-knowledge`, `sweep-knowledge` and `maintain-vault`, the agent `agents/knowledge-searcher.md`
+and the files they share in `shared/`. Every one of its Skills opts into the Vault;
+`search-knowledge` and `maintain-vault` ask a question first. The agent is never picked by the user
+— the Skills tell the session to run it as a sub-agent where the harness has them, and to follow it
+inline where it does not.
+**R51.8** The binary carries every shipped file. **When any differs on disk, Varde deletes
+`skills/workflows/` and the folders earlier releases shipped, and writes the workflows afresh** — a
+hand edit or an added file inside a shipped workflow is lost. A Global Skill is never touched
+(ADR 0026, ADR 0028).
 **R51.9** The **Knowledge view** is a fourth View (palette `w`, `:knowledge`). It points the tree,
 Filter, Find and editor at the Vault; the terminal, the AI pane, git and language servers stay with
 the workspace. Toggling off returns to the View it was entered from, with the workspace's tree,

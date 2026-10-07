@@ -3321,22 +3321,36 @@ fn project(base: &Path) -> ignore::WalkBuilder {
 }
 
 fn list_skills(folder: &Path) -> Vec<varde::skills::Skill> {
-    let mut skills: Vec<varde::skills::Skill> = std::fs::read_dir(folder)
+    let folders = |path: &Path| -> Vec<PathBuf> {
+        std::fs::read_dir(path)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| path.is_dir())
+            .collect()
+    };
+    let workflows = folder.join(varde::skills::WORKFLOWS);
+    folders(folder)
         .into_iter()
-        .flatten()
-        .flatten()
-        .filter(|entry| entry.path().is_dir())
-        .filter_map(|entry| {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            match std::fs::read_to_string(entry.path().join(varde::skills::FILE)) {
+        .chain(
+            folders(&workflows)
+                .iter()
+                .flat_map(|workflow| folders(workflow)),
+        )
+        .filter_map(|path| {
+            let name = path
+                .strip_prefix(folder)
+                .ok()?
+                .to_string_lossy()
+                .into_owned();
+            match std::fs::read_to_string(path.join(varde::skills::FILE)) {
                 Ok(text) => Some(varde::skills::read(&name, &text)),
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
                 Err(_) => Some(varde::skills::read(&name, "")),
             }
         })
-        .collect();
-    skills.sort_by(|a, b| a.folder.cmp(&b.folder));
-    skills
+        .collect()
 }
 
 fn walking(root: &Path) -> impl Iterator<Item = String> + '_ {

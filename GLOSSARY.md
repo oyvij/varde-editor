@@ -915,8 +915,14 @@ _Avoid_: type, subfolder, category
 
 **Skill**:
 A `SKILL.md` in `~/.varde/ai/skills/` that Varde hands to the AI session when the user picks it,
-written so any AI CLI can follow it.
+written so any AI CLI can follow it. One directly in `skills/` is Global; one in
+`skills/workflows/` belongs to a Workflow.
 _Avoid_: prompt, command, action, recipe
+
+**Workflow**:
+A folder under `~/.varde/ai/skills/workflows/` holding Skills meant to be run in order, and the
+files they share. Varde ships its Workflows and replaces each whole on update.
+_Avoid_: pack, bundle, suite
 
 **Source map**:
 The file outside the Vault naming where code lives on this machine, by a name the Vault's Notes may
