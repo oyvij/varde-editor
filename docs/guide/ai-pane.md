@@ -83,8 +83,9 @@ When the CLI has not asked for mouse events, a click only focuses the pane and s
 
 ### Clicking a link
 
-Hold the jump modifier (`Cmd` on macOS, `Ctrl` elsewhere; Varde accepts both) and click a URL the
-CLI printed, and it opens in your browser. Nothing reaches the CLI. Only `http` and `https` URLs
+Point at a URL or a file path the CLI printed and Varde underlines and tints it, and the pointer
+becomes a hand on a terminal that can show one. Hold the jump modifier (`Cmd` on macOS, `Ctrl`
+elsewhere; Varde accepts both) and click it, and a URL opens in your browser. Nothing reaches the CLI. Only `http` and `https` URLs
 count, and only within one row of the screen. Varde does not recognise a URL the terminal wrapped
 onto the next row, and clicking plain text with the modifier held opens nothing.
 

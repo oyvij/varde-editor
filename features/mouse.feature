@@ -247,14 +247,30 @@ Feature: The whole TUI is usable with the mouse
     When I hold the jump modifier over "crates.io" in the AI pane
     Then the AI pane underlines "https://crates.io/crates/vt100"
 
-  Scenario: Pointing at a path without the modifier underlines nothing
+  Scenario: Pointing at a path underlines it without the modifier
     Given the terminal shows:
       """
         --> src/lib.rs:42:7
       """
-    And I hold the jump modifier over "lib.rs" in the terminal pane
     When I point at "lib.rs" in the terminal pane
+    Then the terminal pane underlines "src/lib.rs:42:7"
+
+  Scenario: Pointing at plain text in the terminal underlines nothing
+    Given the terminal shows:
+      """
+      $ cargo test
+      """
+    When I point at "cargo" in the terminal pane
     Then the terminal pane underlines nothing
+
+  Scenario: A link pointed at without the modifier is not followed by a plain click
+    Given the terminal program asked for "no" mouse reporting
+    And the terminal shows:
+      """
+      See https://docs.rs/vt100/latest/vt100/ for the grid.
+      """
+    When I click on "docs.rs" in the terminal pane
+    Then the browser opens nothing
 
   Scenario: Dragging a pane divider resizes the panes
     Given the divider between the file tree and the editor is at column 30

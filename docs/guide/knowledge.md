@@ -92,7 +92,7 @@ Three optional keys under `metadata` change how Varde hands a Skill over:
 | Key | Effect |
 |---|---|
 | `varde-vault: true` | The pointer also names the Vault and the Source map. Without it, the session is told about neither. |
-| `varde-asks: "<question>"` | Varde asks this question before handing the Skill over. |
+| `varde-asks: "<question>"` | Varde asks this question before handing the Skill over, in a text area edited with the editor's keys. `Enter` sends the answer, `Shift+Enter` or `Alt+Enter` starts a new line, and `Esc` cancels. |
 | `varde-step: <number>` | The Skill's place in its Workflow's list. |
 
 A folder under `skills/workflows/<name>/` is a Workflow, and its Skills are listed under its name.
@@ -134,6 +134,9 @@ Put the cursor on a `[[Name]]` link and press `gd` to open the Note it names. Li
 Obsidian resolves them: `Name.md` anywhere under the tree's root, or `[[Folder/Name]]` when two
 files share a name. Varde refuses an ambiguous link rather than guess. Wikilinks work in source and
 in the Preview, and in Edit view they resolve against the workspace.
+
+A wikilink is drawn in blue. Pointing at it underlines and tints it, and `Ctrl+click` (or
+`Cmd+click`) follows it, the same as `gd`.
 
 ## See also
 

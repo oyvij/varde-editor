@@ -220,7 +220,8 @@ Feature: Keeping knowledge
   Rule: A Skill may ask a question before it is handed over
 
     `search-knowledge` asks what to look for. Its `metadata.varde-asks` names the box, and the
-    answer goes to the session with the pointer.
+    answer goes to the session with the pointer. The box is a text area edited with the editor's
+    own keys: Enter hands the question over, and Shift+Enter or Alt+Enter starts a new line.
 
     Background:
       Given the knowledge base is enabled with the default Vault
@@ -255,6 +256,93 @@ Feature: Keeping knowledge
       When I press Escape
       Then the AI received nothing
       And no modal is open
+
+    Scenario: The question can run over more than one line
+      Given I run ":skills"
+      And I pick the Skill "search-knowledge"
+      And I type "renewals"
+      And I press the key "Shift+Enter"
+      And I type "and refunds"
+      When I press Enter
+      Then the AI was told the question:
+        """
+        renewals
+        and refunds
+        """
+
+    Scenario: The question is edited by word as in the editor
+      Given I run ":skills"
+      And I pick the Skill "search-knowledge"
+      And I type "how do renewals"
+      And I press the key "Alt+Backspace"
+      And I type "refunds work"
+      And I press the key "Alt+Left"
+      And I type "really "
+      When I press Enter
+      Then the AI was told the question "how do refunds really work"
+
+    Scenario: Home and End reach the ends of the line
+      Given I run ":skills"
+      And I pick the Skill "search-knowledge"
+      And I type "renewals"
+      And I press the key "Home"
+      And I type "licence "
+      And I press the key "End"
+      And I type "?"
+      When I press Enter
+      Then the AI was told the question "licence renewals?"
+
+    Scenario: A selection in the question is copied
+      Given I run ":skills"
+      And I pick the Skill "search-knowledge"
+      And I type "how do renewals"
+      And I press the key "Shift+Alt+Left"
+      When I press the key "Ctrl+c"
+      Then the clipboard holds "renewals"
+
+    Scenario: A word selected to the right stops at the word's end
+      Given I run ":skills"
+      And I pick the Skill "search-knowledge"
+      And I type "how do renewals"
+      And I press the key "Home"
+      And I press the key "Shift+Alt+Right"
+      When I press the key "Ctrl+c"
+      Then the clipboard holds "how"
+
+    Scenario: Tab indents the question as it does in the editor
+      Given I run ":skills"
+      And I pick the Skill "search-knowledge"
+      And I type "a"
+      And I press the key "Tab"
+      And I type "b"
+      When I press Enter
+      Then the AI was told the question "a    b"
+
+    Scenario: Typing over a selection replaces it
+      Given I run ":skills"
+      And I pick the Skill "search-knowledge"
+      And I type "how do renewals"
+      And I press the key "Shift+Alt+Left"
+      And I type "refunds"
+      When I press Enter
+      Then the AI was told the question "how do refunds"
+
+    Scenario: The clipboard pastes into the question
+      Given the clipboard holds "refunds"
+      And I run ":skills"
+      And I pick the Skill "search-knowledge"
+      And I type "how do "
+      And I press the key "Ctrl+v"
+      When I press Enter
+      Then the AI was told the question "how do refunds"
+
+    Scenario: Undo takes back what was typed
+      Given I run ":skills"
+      And I pick the Skill "search-knowledge"
+      And I type "renewals"
+      And I press the key "Ctrl+z"
+      When I press Enter
+      Then the AI received nothing
 
   Rule: Varde keeps its shipped Skills current
 

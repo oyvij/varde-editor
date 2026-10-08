@@ -61,9 +61,9 @@ definition in the same file. See [Editing](editing.md#going-back).
 
 **Click to definition.** Hold `Cmd` or `Ctrl` while pointing at a name in the editor, and Varde
 underlines the name. The two modifiers do the same thing here, because most terminals report a
-`Cmd`-click with no modifier at all. The underline is the only sign, since a terminal has no hand
-pointer. Clicking the name with the modifier held asks the same question `gd` does. A plain click
-only places the cursor.
+`Cmd`-click with no modifier at all. The name is also tinted, and on a terminal that can change the
+mouse pointer (kitty, foot, Ghostty, WezTerm, recent xterm) the pointer becomes a hand. Clicking the
+name with the modifier held asks the same question `gd` does. A plain click only places the cursor.
 
 ### Candidates
 
