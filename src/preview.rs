@@ -1096,8 +1096,24 @@ pub fn note_at(text: &str, line: usize, column: usize) -> Option<String> {
         })
 }
 
+pub fn prefix(row: &Row) -> String {
+    let RowKind::List(item) = row.kind else {
+        return String::new();
+    };
+    let marker = match item.marker {
+        Some(Marker::Bullet) => "\u{2022} ".to_string(),
+        Some(Marker::Ordinal(ordinal)) => format!("{ordinal}. "),
+        Some(Marker::Task(true)) => "\u{2611} ".to_string(),
+        Some(Marker::Task(false)) => "\u{2610} ".to_string(),
+        None => "  ".to_string(),
+    };
+    format!("{}{marker}", "  ".repeat(item.depth.saturating_sub(1)))
+}
+
 pub fn note_on(row: &Row, column: usize) -> Option<String> {
-    let mut left = column.checked_sub(1)?;
+    let mut left = column
+        .checked_sub(1)?
+        .checked_sub(prefix(row).chars().count())?;
     row.pieces.iter().find_map(|piece| {
         let width = piece.text.chars().count();
         if left < width {
@@ -1106,6 +1122,42 @@ pub fn note_on(row: &Row, column: usize) -> Option<String> {
         left -= width;
         None
     })?
+}
+
+pub fn wikilinks(text: &str) -> Vec<(usize, usize, usize)> {
+    let starts = line_starts(text);
+    Parser::new_ext(text, options())
+        .into_offset_iter()
+        .filter_map(|(event, range)| match event {
+            Event::Start(Tag::Link {
+                link_type: LinkType::WikiLink { .. },
+                ..
+            }) => {
+                let line = line_of(&starts, range.start);
+                let start = starts[line - 1];
+                let column = |end: usize| text[start..end].chars().count();
+                (line == line_of(&starts, range.end - 1))
+                    .then(|| (line, column(range.start) + 1, column(range.end)))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+pub fn row_links(row: &Row) -> Vec<(usize, usize)> {
+    let mut links: Vec<(usize, usize, &str)> = Vec::new();
+    let mut column = prefix(row).chars().count() + 1;
+    for piece in &row.pieces {
+        let width = piece.text.chars().count();
+        if let Some(note) = piece.note.as_deref().filter(|_| width > 0) {
+            match links.last_mut() {
+                Some(last) if last.1 + 1 == column && last.2 == note => last.1 += width,
+                _ => links.push((column, column + width - 1, note)),
+            }
+        }
+        column += width;
+    }
+    links.into_iter().map(|(from, to, _)| (from, to)).collect()
 }
 
 pub fn resolve(note: &str, files: &[String]) -> Result<String, &'static str> {
@@ -1147,6 +1199,17 @@ mod tests {
         assert_eq!(note_on(&rows[0], 4), None, "the space before it");
         assert_eq!(note_on(&rows[0], 20), None, "the space after it");
         assert_eq!(note_on(&rows[0], 99), None, "past the end of the row");
+    }
+
+    #[test]
+    fn a_wikilink_spans_its_brackets_in_source_and_its_shown_text_in_the_preview() {
+        let text = "See [[Setup|the setup notes]] and [[Panes]].\n\n- [[a|b *c* d]]\n";
+        assert_eq!(wikilinks(text), vec![(1, 5, 29), (1, 35, 43), (3, 3, 15)]);
+        let rows = rows(text, 80);
+        assert_eq!(row_links(&rows[0]), vec![(5, 19), (25, 29)]);
+        assert_eq!(row_links(&rows[2]), vec![(3, 7)], "after the bullet");
+        assert_eq!(note_on(&rows[2], 3).as_deref(), Some("a"));
+        assert_eq!(note_on(&rows[2], 1), None, "the bullet is not the link");
     }
 
     #[test]

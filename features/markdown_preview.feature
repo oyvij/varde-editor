@@ -693,3 +693,44 @@ Feature: Markdown preview
       When I follow the link "Renew"
       Then "Acme/how-to/Renew.md" is open in the editor
       And the view is "knowledge"
+
+  Rule: A wikilink looks like a link, and pointing at it marks it
+
+    A wikilink is drawn in the link colour wherever it is shown. Pointing at one underlines and
+    tints it, and on a terminal that can change the mouse pointer the pointer becomes a hand;
+    Ctrl+click follows it. Unlike a name in code, it needs no held modifier to show it is a link.
+
+    Background:
+      Given the workspace holds:
+        | docs/Setup.md |
+      And "README.md" is open in the editor holding:
+        """
+        See [[Setup|the setup notes]] first.
+        """
+
+    Scenario: A wikilink is drawn as a link in the preview
+      Given I run ":preview" in the editor
+      When I run ":preview" in the editor
+      Then the editor draws "the setup notes" as a link
+
+    Scenario: A wikilink is drawn as a link in source
+      When I run ":preview" in the editor
+      Then the editor draws "[[Setup|the setup notes]]" as a link
+
+    Scenario: Pointing at a wikilink in the preview underlines all of it
+      When I point at "setup" in the editor pane
+      Then the editor pane underlines "the setup notes"
+
+    Scenario: Pointing at a wikilink in source underlines all of it
+      Given I run ":preview" in the editor
+      When I point at "Setup" in the editor pane
+      Then the editor pane underlines "[[Setup|the setup notes]]"
+
+    Scenario: Pointing away from a wikilink takes the underline with it
+      Given I point at "setup" in the editor pane
+      When I point at "first" in the editor pane
+      Then the editor pane underlines nothing
+
+    Scenario: Ctrl+click on a wikilink in the preview opens its Note
+      When I click on "setup" in the editor pane with the jump modifier held
+      Then "docs/Setup.md" is open in the editor

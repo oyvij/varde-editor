@@ -10,6 +10,7 @@ use crossterm::event::{
     KeyEventKind, KeyboardEnhancementFlags, MouseButton, MouseEventKind,
     PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
+use crossterm::style::Print;
 use crossterm::{execute, terminal};
 use notify::{RecursiveMode, Watcher};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -508,6 +509,7 @@ struct Edge {
     indexing: Option<(u64, Receiver<String>)>,
     candidates_due: Option<Instant>,
     hover_due: Option<Instant>,
+    hand: bool,
     analysed: Sender<(u64, Figures, Option<Figures>)>,
     tested: Sender<(bool, String)>,
     formatted: Sender<(String, PathBuf, u64, format::Answer)>,
@@ -647,6 +649,7 @@ fn run(
         indexing: None,
         candidates_due: None,
         hover_due: None,
+        hand: false,
         servers: BTreeMap::new(),
         adapter: None,
         on_path: None,
@@ -944,7 +947,7 @@ fn leave_terminal(enhanced: bool) {
         let _ = execute!(out, PopKeyboardEnhancementFlags);
     }
     // DisableMouseCapture does not undo 1003, so it is reset by hand
-    let _ = write!(out, "\x1b[?1003l");
+    let _ = write!(out, "\x1b[?1003l\x1b]22;default\x1b\\");
     let _ = execute!(
         out,
         DisableBracketedPaste,
@@ -1607,6 +1610,19 @@ fn render(terminal: &mut Screen, state: &State, edge: &mut Edge) -> Result<()> {
             },
         );
     })?;
+    let hand = ui::on_link(state, &edge.shells, edge.ai.as_ref());
+    if hand != edge.hand {
+        edge.hand = hand;
+        let shape = match hand {
+            true => "pointer",
+            false => "default",
+        };
+        // OSC 22 sets the mouse pointer's shape; a terminal without it drops the sequence
+        execute!(
+            terminal.backend_mut(),
+            Print(format!("\x1b]22;{shape}\x1b\\"))
+        )?;
+    }
     Ok(())
 }
 

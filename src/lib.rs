@@ -292,6 +292,8 @@ pub enum Modal {
     SkillQuestion {
         label: String,
         pointer: String,
+        answer: Buffer,
+        anchor: Option<Place>,
     },
     Stops {
         path: PathBuf,
@@ -318,6 +320,7 @@ pub enum ReplaceFailed {
 pub enum Event {
     Trigger(Action, Option<Target>),
     EnterName(String),
+    AskQuestion,
     Cancel,
     Tapped {
         key: Tap,
@@ -1914,6 +1917,102 @@ fn on_comment_body(mut next: State, event: Event, wheeled: bool) -> Answered {
     Ok(settle(next, vec![], wheeled))
 }
 
+fn on_question(state: &State, mut next: State, event: Event, wheeled: bool) -> Answered {
+    let Modal::SkillQuestion {
+        pointer,
+        answer,
+        anchor,
+        ..
+    } = &mut next.modal
+    else {
+        return Err((next, event));
+    };
+    if event == Event::AskQuestion {
+        let question = answer.shown().trim().to_string();
+        let prompt = format!("{pointer} The question is: {question}");
+        next.modal = Modal::None;
+        let effects = match question.is_empty() {
+            true => vec![],
+            false => queue_for_ai(&mut next, Enter::Pressed, prompt),
+        };
+        return Ok(settle(next, effects, wheeled));
+    }
+    let cursor = Place {
+        line: answer.line,
+        column: answer.column,
+    };
+    let picked = anchor.and_then(|anchor| Selection::Buffer { anchor, cursor }.buffer_span());
+    let effects = match event {
+        Event::Copy => picked.map_or(vec![], |(from, to)| {
+            to_clipboard(state, answer.text_in(from, to))
+        }),
+        Event::PasteFromClipboard => vec![Effect::ReadClipboard],
+        Event::EditorExtend(direction) => {
+            anchor.get_or_insert(cursor);
+            answer.arrow(direction);
+            vec![]
+        }
+        Event::EditorExtendWord(direction) => {
+            anchor.get_or_insert(cursor);
+            answer.word_motion(match direction {
+                Direction::Right => editor::Word::End,
+                _ => editor::Word::Back,
+            });
+            vec![]
+        }
+        Event::EditorArrow(direction) => {
+            *anchor = None;
+            answer.arrow(direction);
+            vec![]
+        }
+        Event::EditorWord(direction) => {
+            *anchor = None;
+            answer.word_motion(editor::Word::toward(direction));
+            vec![]
+        }
+        Event::QueryEnd(direction) => {
+            *anchor = None;
+            answer.go_to_place(Place {
+                line: answer.line,
+                column: match direction {
+                    Direction::Left => 1,
+                    _ => usize::MAX,
+                },
+            });
+            vec![]
+        }
+        Event::EditorUndo => {
+            *anchor = None;
+            answer.undo();
+            vec![]
+        }
+        Event::EditorRedo => {
+            *anchor = None;
+            answer.redo();
+            vec![]
+        }
+        Event::EditorBackspace
+        | Event::EditorDeleteWord
+        | Event::EditorKey(_)
+        | Event::EditorPaste(_) => {
+            *anchor = None;
+            if let Some((from, to)) = picked {
+                answer.delete_in(from, to);
+            }
+            match (event, picked) {
+                (Event::EditorKey(key), _) => _ = answer.key(key),
+                (Event::EditorPaste(text), _) => answer.paste(&text),
+                (Event::EditorBackspace, None) => answer.backspace(),
+                (Event::EditorDeleteWord, None) => answer.delete_word_back(),
+                _ => {}
+            }
+            vec![]
+        }
+        other => return Err((next, other)),
+    };
+    Ok(settle(next, effects, wheeled))
+}
+
 fn on_query(mut next: State, event: Event, wheeled: bool) -> Answered {
     let keys = next.find.as_ref().map(|find| find.keys);
     let query = if let Some(search) = next.search.as_mut() {
@@ -2030,6 +2129,10 @@ fn route_trigger(state: &State, next: State, event: Event, wheeled: bool) -> Ans
         Err(declined) => declined,
     };
     let declined = match on_comment_body(declined.0, declined.1, wheeled) {
+        Ok(answer) => return Ok(answer),
+        Err(declined) => declined,
+    };
+    let declined = match on_question(state, declined.0, declined.1, wheeled) {
         Ok(answer) => return Ok(answer),
         Err(declined) => declined,
     };
@@ -2395,11 +2498,6 @@ fn on_enter_name(state: &State, mut next: State, event: Event, wheeled: bool) ->
             Modal::SetValue => debug::set_value(&mut next, name),
             Modal::NewWatch => debug::add_watch(&mut next, name),
             Modal::ExceptionClass => debug::name_class(&mut next, name),
-            Modal::SkillQuestion { pointer, .. } if !name.trim().is_empty() => queue_for_ai(
-                &mut next,
-                Enter::Pressed,
-                format!("{pointer} The question is: {name}"),
-            ),
             _ => vec![],
         },
 
@@ -5311,6 +5409,8 @@ fn on_ai_spoke(state: &State, mut next: State, event: Event, wheeled: bool) -> A
                             next.modal = Modal::SkillQuestion {
                                 label: label.clone(),
                                 pointer,
+                                answer: Buffer::text_box(""),
+                                anchor: None,
                             };
                             vec![]
                         }
@@ -7639,10 +7739,48 @@ pub fn spinner(tick: u64) -> char {
     SPINNER[(tick % SPINNER.len() as u64) as usize]
 }
 
+pub fn links(state: &State) -> Vec<(usize, usize, usize)> {
+    if previewing(state) {
+        return preview_rows(state)
+            .iter()
+            .enumerate()
+            .flat_map(|(index, row)| {
+                preview::row_links(row)
+                    .into_iter()
+                    .map(move |(from, to)| (index + 1, from, to))
+            })
+            .collect();
+    }
+    match current_buffer(state) {
+        Some(buffer)
+            if state.diff.is_none()
+                && state
+                    .current_buffer
+                    .as_deref()
+                    .is_some_and(preview::is_markdown) =>
+        {
+            preview::wikilinks(buffer.shown())
+        }
+        _ => Vec::new(),
+    }
+}
+
+pub fn wikilink_under(state: &State, at: Place) -> Option<(usize, usize, usize)> {
+    links(state)
+        .into_iter()
+        .find(|&(line, from, to)| line == at.line && (from..=to).contains(&at.column))
+}
+
 pub fn link(state: &State) -> Option<(usize, usize, usize)> {
     let (Pane::Editor, at) = state.link? else {
         return None;
     };
+    if let Some(span) = wikilink_under(state, at) {
+        return Some(span);
+    }
+    if previewing(state) {
+        return None;
+    }
     let buffer = state.buffers.get(state.current_buffer.as_ref()?)?;
     let (from, to) = buffer.word_span(at.line, at.column)?;
     Some((at.line, from, to))

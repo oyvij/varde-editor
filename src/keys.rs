@@ -669,11 +669,10 @@ fn modal_key(state: &State, drafts: &mut Drafts, event: KeyEvent) -> Vec<Event> 
             }
         }
         Modal::Comment => comment_picker(drafts, event),
-        Modal::NameBox { .. }
-        | Modal::SetValue
-        | Modal::NewWatch
-        | Modal::ExceptionClass
-        | Modal::SkillQuestion { .. } => name_box(drafts, event),
+        Modal::NameBox { .. } | Modal::SetValue | Modal::NewWatch | Modal::ExceptionClass => {
+            name_box(drafts, event)
+        }
+        Modal::SkillQuestion { .. } => question_box(state.tab_width, event),
         Modal::Breakpoint { field, draft, .. } => breakpoint_box(*field, draft, event),
         Modal::Candidates(_) => candidate_list(state, drafts, event),
         Modal::Stops { .. } => match event.code {
@@ -868,7 +867,9 @@ fn a_box_has_the_keys(state: &State, drafts: &Drafts) -> bool {
 }
 
 fn buffer_takes_paste(state: &State, drafts: &Drafts) -> bool {
-    if matches!(state.modal, Modal::Comment) && !drafts.comment_kind.is_empty() {
+    if matches!(state.modal, Modal::Comment) && !drafts.comment_kind.is_empty()
+        || matches!(state.modal, Modal::SkillQuestion { .. })
+    {
         return true;
     }
     !a_box_has_the_keys(state, drafts) && the_buffer_takes_edits(state)
@@ -1116,17 +1117,8 @@ fn comment_body(drafts: &mut Drafts, event: KeyEvent) -> Vec<Event> {
     if let Some(undo) = undo_key(event) {
         return vec![undo];
     }
-    // macOS Option+arrow arrives as the readline escapes ^[b and ^[f, not as Alt+arrow
-    if let (true, false, KeyCode::Char(letter @ ('b' | 'f'))) = (
-        alt,
-        event.modifiers.contains(KeyModifiers::CTRL),
-        event.code,
-    ) {
-        return vec![Event::EditorWord(if letter == 'f' {
-            Direction::Right
-        } else {
-            Direction::Left
-        })];
+    if let Some(direction) = readline_word(event) {
+        return vec![Event::EditorWord(direction)];
     }
     match event.code {
         KeyCode::Esc => {
@@ -1146,6 +1138,41 @@ fn comment_body(drafts: &mut Drafts, event: KeyEvent) -> Vec<Event> {
             Some(c) => vec![Event::EditorKey(c)],
             None => vec![],
         },
+    }
+}
+
+fn question_box(tab_width: usize, event: KeyEvent) -> Vec<Event> {
+    let alt = event.modifiers.contains(KeyModifiers::ALT);
+    let shift = event.modifiers.contains(KeyModifiers::SHIFT);
+    if let Some(undo) = undo_key(event) {
+        return vec![undo];
+    }
+    if ctrl_or_command(event) {
+        return match event.code {
+            KeyCode::Char('c') => vec![Event::Copy],
+            KeyCode::Char('v') => vec![Event::PasteFromClipboard],
+            _ => vec![],
+        };
+    }
+    if let Some(direction) = readline_word(event) {
+        return vec![Event::EditorWord(direction)];
+    }
+    match (event.code, arrow(event.code)) {
+        (KeyCode::Esc, _) => vec![Event::Cancel],
+        (KeyCode::Enter, _) if shift || alt => vec![Event::EditorKey('\n')],
+        (KeyCode::Enter, _) => vec![Event::AskQuestion],
+        (KeyCode::Backspace, _) if alt => vec![Event::EditorDeleteWord],
+        (KeyCode::Backspace, _) => vec![Event::EditorBackspace],
+        (KeyCode::Tab, _) => vec![Event::EditorPaste(" ".repeat(tab_width))],
+        (KeyCode::Home, _) => vec![Event::QueryEnd(Direction::Left)],
+        (KeyCode::End, _) => vec![Event::QueryEnd(Direction::Right)],
+        (_, Some(direction @ (Direction::Left | Direction::Right))) if alt => match shift {
+            true => vec![Event::EditorExtendWord(direction)],
+            false => vec![Event::EditorWord(direction)],
+        },
+        (_, Some(direction)) if shift => vec![Event::EditorExtend(direction)],
+        (_, Some(direction)) => vec![Event::EditorArrow(direction)],
+        _ => typed(event).map_or(vec![], |c| vec![Event::EditorKey(c)]),
     }
 }
 
@@ -1363,18 +1390,20 @@ fn word_motion_alias(state: &State, event: KeyEvent, alt: bool, shift: bool) -> 
         }
         _ => {}
     }
-    // macOS Option+arrow arrives as the readline escapes ^[b and ^[f, not as Alt+arrow
-    let (KeyCode::Char(letter @ ('b' | 'f')), false) =
-        (event.code, event.modifiers.contains(KeyModifiers::CTRL))
-    else {
+    readline_word(event).map(|direction| vec![Event::EditorWord(direction)])
+}
+
+// macOS Option+arrow arrives as the readline escapes ^[b and ^[f, not as Alt+arrow
+fn readline_word(event: KeyEvent) -> Option<Direction> {
+    if !event.modifiers.contains(KeyModifiers::ALT) || event.modifiers.contains(KeyModifiers::CTRL)
+    {
         return None;
-    };
-    let direction = if letter == 'f' {
-        Direction::Right
-    } else {
-        Direction::Left
-    };
-    Some(vec![Event::EditorWord(direction)])
+    }
+    match event.code {
+        KeyCode::Char('b') => Some(Direction::Left),
+        KeyCode::Char('f') => Some(Direction::Right),
+        _ => None,
+    }
 }
 
 fn focus_alias(event: KeyEvent, alt: bool) -> Option<Vec<Event>> {

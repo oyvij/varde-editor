@@ -3045,6 +3045,11 @@ fn named_key(key: &str) -> Option<terminput::KeyEvent> {
         "Shift+Right" => plain(terminput::KeyCode::Right).modifiers(terminput::KeyModifiers::SHIFT),
         "Shift+Alt+Right" => plain(terminput::KeyCode::Right)
             .modifiers(terminput::KeyModifiers::SHIFT | terminput::KeyModifiers::ALT),
+        "Shift+Enter" => plain(terminput::KeyCode::Enter).modifiers(terminput::KeyModifiers::SHIFT),
+        "Shift+Alt+Left" => plain(terminput::KeyCode::Left)
+            .modifiers(terminput::KeyModifiers::SHIFT | terminput::KeyModifiers::ALT),
+        "Home" => plain(terminput::KeyCode::Home),
+        "End" => plain(terminput::KeyCode::End),
         "Left" => plain(terminput::KeyCode::Left),
         "Right" => plain(terminput::KeyCode::Right),
         "Ctrl+c" => plain(terminput::KeyCode::Char('c')).modifiers(terminput::KeyModifiers::CTRL),
@@ -4089,6 +4094,13 @@ fn browser_opens(world: &mut VardeWorld, url: String) {
     assert_eq!(world.browser, vec![url]);
 }
 
+#[when(expr = "I click on {string} in the {word} pane")]
+fn click_text_in_pane(world: &mut VardeWorld, text: String, pane: String) {
+    let pane = parse_pane(&pane);
+    let at = world.place_of(pane, &text);
+    world.click(pane, at, terminput::KeyModifiers::NONE);
+}
+
 #[then("the browser opens nothing")]
 fn browser_opens_nothing(world: &mut VardeWorld) {
     assert!(world.browser.is_empty(), "opened: {:?}", world.browser);
@@ -4108,6 +4120,7 @@ fn hold_over_pane_text(world: &mut VardeWorld, text: String, pane: String) {
     world.point(pane, Some(at), JUMP);
 }
 
+#[given(expr = "I point at {string} in the {word} pane")]
 #[when(expr = "I point at {string} in the {word} pane")]
 fn point_at_pane_text(world: &mut VardeWorld, text: String, pane: String) {
     let pane = parse_pane(&pane);
@@ -4119,7 +4132,7 @@ fn point_at_pane_text(world: &mut VardeWorld, text: String, pane: String) {
 fn pane_underlines(world: &mut VardeWorld, pane: String, text: String) {
     let pane = parse_pane(&pane);
     let lines = world.pane_lines(pane);
-    let (line, from, to) = varde::hosted_link(&world.state, pane, &lines).expect("an underline");
+    let (line, from, to) = underline(world, pane, &lines).expect("an underline");
     let underlined: String = lines[line - 1]
         .chars()
         .skip(from - 1)
@@ -4132,7 +4145,30 @@ fn pane_underlines(world: &mut VardeWorld, pane: String, text: String) {
 fn pane_underlines_nothing(world: &mut VardeWorld, pane: String) {
     let pane = parse_pane(&pane);
     let lines = world.pane_lines(pane);
-    assert_eq!(varde::hosted_link(&world.state, pane, &lines), None);
+    assert_eq!(underline(world, pane, &lines), None);
+}
+
+fn underline(world: &VardeWorld, pane: Pane, lines: &[String]) -> Option<(usize, usize, usize)> {
+    match pane {
+        Pane::Editor => varde::link(&world.state),
+        _ => varde::hosted_link(&world.state, pane, lines),
+    }
+}
+
+#[then(expr = "the editor draws {string} as a link")]
+fn draws_as_link(world: &mut VardeWorld, text: String) {
+    let lines = world.pane_lines(Pane::Editor);
+    let drawn: Vec<String> = varde::links(&world.state)
+        .into_iter()
+        .map(|(line, from, to)| {
+            lines[line - 1]
+                .chars()
+                .skip(from - 1)
+                .take(to + 1 - from)
+                .collect()
+        })
+        .collect();
+    assert!(drawn.contains(&text), "drawn as links: {drawn:?}");
 }
 
 #[when(expr = "I point at line {int} column {int} in the editor")]
@@ -6575,6 +6611,14 @@ fn ai_told_to_follow(world: &mut VardeWorld, skill: String) {
 #[then(expr = "the AI was told the question {string}")]
 fn ai_told_the_question(world: &mut VardeWorld, question: String) {
     told_the_ai(world, &question);
+}
+
+#[then("the AI was told the question:")]
+fn ai_told_the_question_lines(world: &mut VardeWorld, step: &Step) {
+    told_the_ai(
+        world,
+        step.docstring().expect("docstring").trim_matches('\n'),
+    );
 }
 
 #[when("I press Enter")]

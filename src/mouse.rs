@@ -406,24 +406,20 @@ fn in_pane(
 }
 
 fn hovered(state: &State, panes: &Layout, input: Input) -> Vec<Event> {
-    let hosted = match layout::pane_at(panes, input.column, input.row) {
-        Some(pane @ (Pane::Terminal | Pane::Ai))
-            if text_area(state, panes, pane).holds(input.column, input.row) =>
-        {
-            Some(pane)
-        }
-        _ => None,
-    };
-    let at = match (
-        jumping(input.modifiers),
-        resting(state, panes, input),
-        hosted,
-    ) {
-        (true, Pointed::Text(at), _) => Some((Pane::Editor, at)),
-        (true, _, Some(pane)) => Some((
+    let pane = layout::pane_at(panes, input.column, input.row)
+        .filter(|pane| text_area(state, panes, *pane).holds(input.column, input.row));
+    let at = match (pane, resting(state, panes, input)) {
+        (Some(pane @ (Pane::Terminal | Pane::Ai)), _) => Some((
             pane,
             place_in(state, panes, pane, (input.column, input.row)),
         )),
+        (Some(Pane::Editor), Pointed::Text(at)) if jumping(input.modifiers) => {
+            Some((Pane::Editor, at))
+        }
+        (Some(Pane::Editor), Pointed::Text(_) | Pointed::Elsewhere) => {
+            let at = place_in(state, panes, Pane::Editor, (input.column, input.row));
+            crate::wikilink_under(state, at).map(|_| (Pane::Editor, at))
+        }
         _ => None,
     };
     match at == state.link {
@@ -2210,7 +2206,10 @@ mod tests {
             .buffers
             .insert(path, crate::editor::Buffer::open("fn main() {}", false, 4));
         let panes = panes(120, 26, 30, None, 0, 0, Shapes::default());
-        let cell = (panes.editor.x + 5, panes.editor.y + 1);
+        let cell = (
+            panes.editor.x + 1 + crate::gutter(&state),
+            panes.editor.y + 1,
+        );
         let hover = |state: &State, modifiers| {
             on_mouse(
                 state,

@@ -432,11 +432,19 @@ fn draw_modal(frame: &mut Frame, state: &State, chrome: &Chrome) {
             "NAME",
             vec![Line::from(chrome.name_draft.to_string())],
         ),
-        Modal::SkillQuestion { label, .. } => overlay(
-            frame,
+        Modal::SkillQuestion {
             label,
-            vec![Line::from(chrome.name_draft.to_string())],
-        ),
+            answer,
+            anchor,
+            ..
+        } => {
+            let area = frame.area();
+            let width = (usize::from(area.width) * 2 / 3)
+                .min(overlay_measure(area.width).saturating_sub(2))
+                .max(1);
+            let room = usize::from(area.height.saturating_sub(6)).max(1);
+            overlay(frame, label, question_lines(answer, *anchor, width, room));
+        }
         Modal::ExceptionClass => overlay(
             frame,
             "PAUSE ON EXCEPTION CLASS",
@@ -1857,15 +1865,20 @@ fn source_lines(
             true,
         );
     }
-    if let Some((line, from, to)) = varde::link(state) {
+    for (line, from, to) in varde::links(state) {
         if let Some(drawn) = row(line).map(|index| &mut lines[index]) {
             *drawn = picked(
                 drawn,
                 from - 1,
                 to,
-                Style::default().add_modifier(Modifier::UNDERLINED),
+                Style::default().fg(link_colour(dark)),
                 true,
             );
+        }
+    }
+    if let Some((line, from, to)) = varde::link(state) {
+        if let Some(drawn) = row(line).map(|index| &mut lines[index]) {
+            *drawn = picked(drawn, from - 1, to, link_hovered(dark), true);
         }
     }
     for (number, values) in varde::debug::inline(state, tokens, varde::fits(state).2) {
@@ -2331,6 +2344,11 @@ fn preview_widget(
             false,
         );
     }
+    if let Some((line, from, to)) = varde::link(state) {
+        if let Some(drawn) = lines.get_mut(line - 1) {
+            *drawn = picked(drawn, from - 1, to, link_hovered(dark), false);
+        }
+    }
     paint_drag(
         &mut lines,
         &|row| Some(row - 1),
@@ -2358,28 +2376,16 @@ fn preview_line(row: &varde::preview::Row, dark: bool, columns: usize) -> Line<'
     if row.kind == varde::preview::RowKind::Rule {
         return Line::from(Span::styled("─".repeat(columns), row_style(row.kind, dark)));
     }
-    let mut spans = Vec::new();
-    if let varde::preview::RowKind::List(item) = row.kind {
-        spans.push(Span::styled(list_prefix(item), row_style(row.kind, dark)));
-    }
+    let mut spans = vec![Span::styled(
+        varde::preview::prefix(row),
+        row_style(row.kind, dark),
+    )];
     spans.extend(
         row.pieces
             .iter()
             .map(|piece| Span::styled(piece.text.clone(), piece_style(row.kind, dark, piece))),
     );
     Line::from(spans)
-}
-
-fn list_prefix(item: varde::preview::ListItem) -> String {
-    use varde::preview::Marker;
-    let marker = match item.marker {
-        Some(Marker::Bullet) => "\u{2022} ".to_string(),
-        Some(Marker::Ordinal(ordinal)) => format!("{ordinal}. "),
-        Some(Marker::Task(true)) => "\u{2611} ".to_string(),
-        Some(Marker::Task(false)) => "\u{2610} ".to_string(),
-        None => "  ".to_string(),
-    };
-    format!("{}{marker}", "  ".repeat(item.depth.saturating_sub(1)))
 }
 
 fn row_style(kind: varde::preview::RowKind, dark: bool) -> Style {
@@ -2434,7 +2440,27 @@ fn piece_style(kind: varde::preview::RowKind, dark: bool, piece: &varde::preview
     if let Some(kind) = piece.token {
         style = style.fg(colour(kind, dark));
     }
+    if piece.note.is_some() {
+        style = style.fg(link_colour(dark));
+    }
     style
+}
+
+fn link_colour(dark: bool) -> Color {
+    match dark {
+        true => Color::Rgb(0x4e, 0xa1, 0xff),
+        false => Color::Rgb(0x00, 0x5c, 0xc5),
+    }
+}
+
+fn link_hovered(dark: bool) -> Style {
+    Style::default()
+        .fg(link_colour(dark))
+        .bg(match dark {
+            true => Color::Rgb(0x1b, 0x2c, 0x45),
+            false => Color::Rgb(0xdc, 0xe9, 0xfa),
+        })
+        .add_modifier(Modifier::UNDERLINED)
 }
 
 fn refusal_spans(state: &State) -> Vec<Span<'static>> {
@@ -3686,6 +3712,19 @@ fn colour(kind: Kind, dark: bool) -> Color {
     }
 }
 
+pub fn on_link(state: &State, shells: &[PtyPane], ai: Option<&PtyPane>) -> bool {
+    let shell = shells
+        .get(state.split())
+        .filter(|_| state.strip == layout::Group::Shells);
+    varde::link(state).is_some()
+        || shell
+            .and_then(|shell| pty_link(state, shell, Pane::Terminal))
+            .is_some()
+        || ai
+            .and_then(|pane| pty_link(state, pane, Pane::Ai))
+            .is_some()
+}
+
 fn pty_link(state: &State, pane: &PtyPane, which: Pane) -> Option<(usize, usize, usize)> {
     state.link.filter(|(on, _)| *on == which)?;
     let screen = pane.screen();
@@ -3747,7 +3786,7 @@ fn terminal_widget(
                     if link
                         .is_some_and(|(line, from, to)| at.0 == line && (from..=to).contains(&at.1))
                     {
-                        style = style.add_modifier(Modifier::UNDERLINED);
+                        style = style.patch(link_hovered(state.editor_theme != "light"));
                     }
                     Span::styled(text, style)
                 })
@@ -3915,6 +3954,64 @@ fn comment_lines(state: &State, chrome: &Chrome) -> Vec<Line<'static>> {
             Style::default().fg(Color::DarkGray),
         )));
     }
+    lines
+}
+
+fn question_lines(
+    answer: &varde::editor::Buffer,
+    anchor: Option<Place>,
+    width: usize,
+    room: usize,
+) -> Vec<Line<'static>> {
+    let cursor = Place {
+        line: answer.line,
+        column: answer.column,
+    };
+    let picked = anchor.and_then(|anchor| Selection::Buffer { anchor, cursor }.buffer_span());
+    let mut rows = Vec::new();
+    let mut caret_row = 0;
+    for (index, text) in answer.shown().split('\n').enumerate() {
+        let chars: Vec<char> = text.chars().collect();
+        for start in (0..=chars.len()).step_by(width) {
+            let mut spans = vec![Span::raw(" ")];
+            for at in start..(start + width) {
+                let here = Place {
+                    line: index + 1,
+                    column: at + 1,
+                };
+                let style = if here == cursor {
+                    caret_row = rows.len();
+                    Style::default().add_modifier(Modifier::REVERSED)
+                } else if picked.is_some_and(|(from, to)| {
+                    (from.line, from.column) <= (here.line, here.column)
+                        && (here.line, here.column) <= (to.line, to.column)
+                        && at < chars.len()
+                }) {
+                    Style::default().bg(Color::Indexed(238))
+                } else {
+                    Style::default()
+                };
+                spans.push(Span::styled(
+                    chars
+                        .get(at)
+                        .copied()
+                        .filter(|c| !c.is_control())
+                        .unwrap_or(' ')
+                        .to_string(),
+                    style,
+                ));
+            }
+            rows.push(Line::from(spans));
+        }
+    }
+    let shown = rows.len().clamp(6.min(room), room);
+    let first = (caret_row + 1).saturating_sub(shown);
+    let mut lines: Vec<Line> = rows.into_iter().skip(first).take(shown).collect();
+    lines.resize(shown, Line::from(" ".repeat(width + 1)));
+    lines.push(Line::from(Span::styled(
+        " Enter ask · Shift+Enter or Alt+Enter new line · Esc cancel",
+        Style::default().fg(Color::DarkGray),
+    )));
     lines
 }
 

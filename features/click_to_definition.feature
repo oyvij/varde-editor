@@ -2,8 +2,8 @@ Feature: A held modifier makes a name a link to its definition
 
   Go-to-definition is `gd`, and the same jump is a click: holding the jump modifier over a
   name in the editor underlines it, and clicking it asks the language server where that name
-  is defined. The underline is the whole affordance — a terminal has no hand pointer to turn
-  the mouse into — and the key stays, so the jump is reachable with no modifier at all.
+  is defined. The underline and a tint mark the link, the pointer becomes a hand on a terminal
+  that can change it, and the key stays, so the jump is reachable with no modifier at all.
 
   The modifier is Cmd, and Ctrl is the same gesture: the mouse protocol has bits for shift,
   alt and ctrl and none for Cmd, so on most terminals a Cmd+click arrives with no modifier
