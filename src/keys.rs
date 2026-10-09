@@ -21,7 +21,7 @@ pub struct CommandLine {
     pub pick: Option<usize>,
 }
 
-pub const COMMANDS: [(&str, &str, &[View], &[Event]); 35] = [
+pub const COMMANDS: [(&str, &str, &[View], &[Event]); 36] = [
     (
         "format",
         "lay the file out",
@@ -39,6 +39,12 @@ pub const COMMANDS: [(&str, &str, &[View], &[Event]); 35] = [
         "read / edit markdown",
         &[View::Edit],
         &[Event::TogglePreview],
+    ),
+    (
+        "widen-preview",
+        "widen / narrow the markdown preview",
+        &[View::Edit],
+        &[Event::TogglePreviewWidth],
     ),
     (
         "read",

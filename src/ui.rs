@@ -2,7 +2,7 @@ use crate::pty::Pane as PtyPane;
 use ratatui::layout::{Margin, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
+use ratatui::widgets::{Block, BorderType, Borders, Clear, Padding, Paragraph};
 use ratatui::Frame;
 use std::collections::HashMap;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -2369,7 +2369,10 @@ fn preview_widget(
     shift(&mut lines, state, 0);
     Paragraph::new(lines)
         .scroll((state.editor_scroll as u16, 0))
-        .block(editor_block(state, title, footer, command, width))
+        .block(
+            editor_block(state, title, footer, command, width)
+                .padding(Padding::left(varde::preview_text(state).0)),
+        )
 }
 
 fn preview_line(row: &varde::preview::Row, dark: bool, columns: usize) -> Line<'static> {

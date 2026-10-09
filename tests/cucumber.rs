@@ -9672,6 +9672,57 @@ fn more_than_rows(world: &mut VardeWorld, count: usize) {
     assert!(rows.len() > count, "{rows:?}");
 }
 
+#[then(expr = "the preview text is {int} columns wide")]
+fn preview_text_is_columns_wide(world: &mut VardeWorld, columns: usize) {
+    assert_eq!(varde::preview_columns(&world.state), columns);
+}
+
+#[then(expr = "the preview text has a margin of {int} columns on each side")]
+fn preview_text_has_margins(world: &mut VardeWorld, margin: u16) {
+    let inner = varde::layout::panes(
+        world.state.screen_width,
+        world.state.screen_height,
+        world.state.tree_divider as u16,
+        world.state.ai_width.map(|width| width as u16),
+        0,
+        0,
+        varde::shapes(&world.state),
+    )
+    .editor
+    .width
+        - 2;
+    let left = varde::gutter(&world.state);
+    assert_eq!(left, margin, "left margin");
+    assert_eq!(
+        inner - left - varde::preview_columns(&world.state) as u16,
+        margin,
+        "right margin"
+    );
+}
+
+#[when(expr = "I click the {string} Chip on the editor's border")]
+fn click_editor_chip(world: &mut VardeWorld, name: String) {
+    let area = world.panes().editor;
+    let chips = varde::editor_chips(&world.state);
+    let at = chips
+        .iter()
+        .position(|chip| chip.name == name)
+        .unwrap_or_else(|| panic!("no {name:?} Chip on the editor's border"));
+    let labels = layout::chip_labels(&chips, area.width, layout::EDITOR_TITLE);
+    let column = (area.x..area.right())
+        .find(|&column| layout::strip_at(area, &labels, column) == Some(at))
+        .expect("the Chip on screen");
+    world.report(mouse::Kind::LeftDown, column, area.y);
+    world.report(mouse::Kind::LeftUp, column, area.y);
+}
+
+#[then(expr = "the editor's border has no {string} Chip")]
+fn editor_has_no_chip(world: &mut VardeWorld, name: String) {
+    assert!(!varde::editor_chips(&world.state)
+        .iter()
+        .any(|chip| chip.name == name));
+}
+
 #[then(expr = "every row is a paragraph")]
 fn every_row_is_a_paragraph(world: &mut VardeWorld) {
     let rows = preview_rows(world);

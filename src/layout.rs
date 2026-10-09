@@ -76,14 +76,12 @@ pub const MARKER: u16 = 2;
 pub enum Gutter {
     Numbers,
     NumbersAndMarker,
-    None,
 }
 
 pub fn gutter(shows: Gutter) -> u16 {
     match shows {
         Gutter::Numbers => GUTTER,
         Gutter::NumbersAndMarker => GUTTER + MARKER,
-        Gutter::None => 0,
     }
 }
 
