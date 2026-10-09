@@ -237,6 +237,12 @@ pub fn palette_entry(key: char) -> Option<&'static str> {
         .map(|(_, entry)| entry.trim())
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PreviewWidth {
+    Reading,
+    Widened,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum Modal {
     #[default]
@@ -500,6 +506,7 @@ pub enum Event {
     EditorRedo,
     EditorEscape,
     TogglePreview,
+    TogglePreviewWidth,
     WriteBuffer,
     ReloadBuffer,
     Resolve(Resolution),
@@ -1120,6 +1127,7 @@ pub struct State {
     pub link: Option<(Pane, Place)>,
     pub hovered_action: Option<&'static str>,
     pub transport_lit: Option<&'static str>,
+    pub preview_width: PreviewWidth,
     pub hovered_minimap: bool,
     pub tree_selection: Option<PathBuf>,
     pub tree_scroll: usize,
@@ -1435,6 +1443,7 @@ impl Default for State {
             hover: None,
             hovered_action: None,
             transport_lit: None,
+            preview_width: PreviewWidth::Reading,
             hovered_minimap: false,
             pointed_at: Pointed::Elsewhere,
         }
@@ -4124,6 +4133,14 @@ fn on_toggle_preview(state: &State, mut next: State, event: Event, wheeled: bool
             vec![]
         }
 
+        Event::TogglePreviewWidth => {
+            next.preview_width = match state.preview_width {
+                PreviewWidth::Reading => PreviewWidth::Widened,
+                PreviewWidth::Widened => PreviewWidth::Reading,
+            };
+            vec![]
+        }
+
         Event::ToggleFold { all } => {
             match current(&mut next) {
                 Some(buffer) => fold::toggle(buffer, all),
@@ -6191,6 +6208,7 @@ fn on_story_file_written(state: &State, mut next: State, event: Event, wheeled: 
 fn on_pane_action(state: &State, mut next: State, event: Event, wheeled: bool) -> Answered {
     let effects = match event {
         Event::PaneAction(INJECT) => return Ok(update(state, Event::InjectToAi)),
+        Event::PaneAction(WIDEN_PREVIEW) => return Ok(update(state, Event::TogglePreviewWidth)),
         Event::PaneAction(SKILLS) => return Ok(update(state, Event::OpenSkills)),
         Event::PaneAction(risk::RECOMPUTE) => return Ok(update(state, Event::RecomputeRisk)),
         Event::PaneAction(risk::START_LOOP) => {
@@ -6974,6 +6992,7 @@ fn paste_bytes(text: &str, paste: keys::Paste) -> Vec<u8> {
 }
 
 pub const INJECT: &str = "inject-to-ai";
+pub const WIDEN_PREVIEW: &str = "widen-preview";
 
 pub fn inject_chip() -> Chip {
     Chip {
@@ -7564,7 +7583,23 @@ pub fn shapes(state: &State) -> layout::Shapes {
 }
 
 pub fn editor_chips(state: &State) -> Vec<Chip> {
-    let mut chips = vec![inject_chip()];
+    let mut chips = Vec::new();
+    if previewing(state) {
+        let (name, glyph) = match state.preview_width {
+            PreviewWidth::Reading => ("widen", "< >"),
+            PreviewWidth::Widened => ("narrow", "> <"),
+        };
+        chips.push(Chip {
+            action: WIDEN_PREVIEW,
+            name,
+            glyph: glyph.to_string(),
+            keys: ":widen-preview",
+            word: "",
+            hue: Hue::Plain,
+            tone: Tone::Plain,
+        });
+    }
+    chips.push(inject_chip());
     chips.extend(reading::transport(state));
     chips
 }
@@ -7798,10 +7833,12 @@ fn open_search_for(mut next: State, query: String) -> (State, Vec<Effect>) {
 }
 
 pub fn gutter(state: &State) -> u16 {
-    layout::gutter(match (previewing(state), state.diff.is_some()) {
-        (true, _) => layout::Gutter::None,
-        (_, true) => layout::Gutter::NumbersAndMarker,
-        _ => layout::Gutter::Numbers,
+    if previewing(state) {
+        return preview_text(state).0;
+    }
+    layout::gutter(match state.diff.is_some() {
+        true => layout::Gutter::NumbersAndMarker,
+        false => layout::Gutter::Numbers,
     })
 }
 
@@ -7826,6 +7863,12 @@ fn buffer_rows(state: &State) -> Vec<preview::Row> {
 }
 
 pub fn preview_columns(state: &State) -> usize {
+    preview_text(state).1 as usize
+}
+
+const READING_WIDTH: u16 = 80;
+
+pub fn preview_text(state: &State) -> (u16, u16) {
     let panes = layout::panes(
         state.screen_width,
         state.screen_height,
@@ -7835,7 +7878,13 @@ pub fn preview_columns(state: &State) -> usize {
         story::step_menu_width(state),
         shapes(state),
     );
-    panes.editor.width.saturating_sub(2) as usize
+    let inner = panes.editor.width.saturating_sub(2);
+    let margin = inner.saturating_sub(READING_WIDTH)
+        / match state.preview_width {
+            PreviewWidth::Reading => 2,
+            PreviewWidth::Widened => 4,
+        };
+    (margin, inner - 2 * margin)
 }
 
 fn open_comment_box(next: &mut State, file: String, from: u32, to: u32) {

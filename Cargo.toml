@@ -1,6 +1,6 @@
 [package]
 name = "varde"
-version = "0.218.0"
+version = "0.219.0"
 edition = "2021"
 description = "Varde — a terminal IDE that reviews, tests and ships your work"
 license = "MIT"

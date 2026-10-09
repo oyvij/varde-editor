@@ -119,6 +119,57 @@ Feature: Markdown preview
     And every row is a paragraph
     And every row comes from source line 1
 
+  Scenario Outline: A wide pane centres the text at a reading width, as Obsidian does
+    Given the editor pane is <pane> columns wide
+    And "README.md" is open in the editor holding:
+      """
+      one two three four five six seven eight
+      """
+    Then the preview text is <text> columns wide
+    And the preview text has a margin of <margin> columns on each side
+
+    Examples:
+      | pane | text | margin |
+      | 162  | 80   | 40     |
+      | 60   | 58   | 0      |
+
+  Scenario: :widen-preview halves the margins
+    Given the editor pane is 162 columns wide
+    And "README.md" is open in the editor holding:
+      """
+      one two three four five six seven eight
+      """
+    When I run ":widen-preview"
+    Then the preview text is 120 columns wide
+    And the preview text has a margin of 20 columns on each side
+
+  Scenario: Widening again brings the reading width back
+    Given the editor pane is 162 columns wide
+    And "README.md" is open in the editor holding:
+      """
+      one two three four five six seven eight
+      """
+    And I run ":widen-preview"
+    When I run ":widen-preview"
+    Then the preview text is 80 columns wide
+    And the preview text has a margin of 40 columns on each side
+
+  Scenario: The width Chip on the editor's border widens the preview
+    Given the editor pane is 162 columns wide
+    And "README.md" is open in the editor holding:
+      """
+      one two three four five six seven eight
+      """
+    When I click the "widen" Chip on the editor's border
+    Then the preview text is 120 columns wide
+
+  Scenario: Source has no width Chip
+    Given "src/main.rs" is open in the editor holding:
+      """
+      fn main() {}
+      """
+    Then the editor's border has no "widen" Chip
+
   Scenario: A code fence is not wrapped, and is highlighted as its language
     Given the editor pane is 20 columns wide
     And "README.md" is open in the editor holding:
