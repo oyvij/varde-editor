@@ -7407,6 +7407,7 @@ fn leave_knowledge(mut next: State) -> State {
         current_buffer: left.current_buffer,
         preview: left.preview,
         tree_selection: left.tree_selection,
+        expanded: left.expanded,
         diff: left.diff,
         diff_file: left.diff_file,
         diff_anchor: left.diff_anchor,
@@ -8528,6 +8529,26 @@ mod tests {
         };
         let back = update(&in_knowledge(&walking), Event::ToggleKnowledge).0;
         assert_eq!(back.walking, walking.walking);
+    }
+
+    #[test]
+    fn leaving_the_knowledge_view_puts_the_trees_folds_back() {
+        let expand = |state: &State, path: &str| {
+            update(
+                state,
+                Event::Expand {
+                    path: PathBuf::from(path),
+                    entries: Vec::new(),
+                },
+            )
+            .0
+        };
+        let unfolded = expand(&workspace(), "/w/src");
+        let reading = expand(&in_knowledge(&unfolded), "/h/.varde/knowledge/Acme");
+        let collapsed = update(&reading, Event::CollapseTree).0;
+        let reading = expand(&collapsed, "/h/.varde/knowledge/Globex");
+        let back = update(&reading, Event::ToggleKnowledge).0;
+        assert_eq!(back.expanded, BTreeSet::from([PathBuf::from("/w/src")]));
     }
 
     #[test]
