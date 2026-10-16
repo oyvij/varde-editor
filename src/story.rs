@@ -1808,9 +1808,17 @@ mod tests {
     #[test]
     fn the_inquiry_prompt_leaves_no_substitution_unfilled() {
         let text = inquiry_prompt("why", Tag::FeelingLucky, "out.json");
-        assert!(
-            !text.contains("{INQUIRY}") && !text.contains("{OUT}") && !text.contains("{SCOPE}")
-        );
+        for placeholder in [
+            "{INQUIRY}",
+            "{OUT}",
+            "{SCOPE}",
+            "{STORIES}",
+            "{KIND}",
+            "{STEP_RULES}",
+            "{CHECK}",
+        ] {
+            assert!(!text.contains(placeholder), "{placeholder}");
+        }
     }
 
     #[test]
@@ -2305,6 +2313,9 @@ mod tests {
         assert!(!text.contains("{RANGE}"));
         assert!(!text.contains("{OUT}"));
         assert!(!text.contains("{CONTEXT}"));
+        for placeholder in ["{STORIES}", "{KIND}", "{STEP_RULES}", "{CHECK}"] {
+            assert!(!text.contains(placeholder), "{placeholder}");
+        }
     }
 
     #[test]

@@ -433,6 +433,12 @@ pub fn search_box(width: u16, height: u16) -> Area {
     inset(width, height, 8, 3)
 }
 
+pub const INQUIRY_ROWS: u16 = 12;
+
+pub fn inquiry_box(width: u16, height: u16) -> Area {
+    overlay(width, height, INQUIRY_ROWS, width.saturating_sub(4).min(72))
+}
+
 pub fn replace_box(editor: Area) -> Area {
     let width = editor.width.saturating_sub(2).min(44);
     Area {

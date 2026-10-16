@@ -452,7 +452,7 @@ fn draw_modal(frame: &mut Frame, state: &State, chrome: &Chrome) {
         ),
         Modal::SetValue | Modal::NewWatch => {}
         Modal::Comment => overlay(frame, "COMMENT", comment_lines(state, chrome)),
-        Modal::Inquiry { text, tag } => overlay(frame, "INQUIRY", inquiry_lines(state, text, *tag)),
+        Modal::Inquiry { text, tag } => inquiry_box(frame, state, text, *tag),
         Modal::ConfirmSubmit => overlay(
             frame,
             "SUBMIT",
@@ -3966,11 +3966,14 @@ fn comment_lines(state: &State, chrome: &Chrome) -> Vec<Line<'static>> {
     lines
 }
 
-fn inquiry_lines(
+fn inquiry_box(
+    frame: &mut Frame,
     state: &State,
     text: &varde::editor::Buffer,
     picked: varde::story::Tag,
-) -> Vec<Line<'static>> {
+) {
+    let screen = frame.area();
+    let area = layout::inquiry_box(screen.width, screen.height);
     let mut tags = vec![Span::raw("  ")];
     for (tag, word) in varde::story::TAGS {
         tags.push(match tag == picked {
@@ -3983,24 +3986,28 @@ fn inquiry_lines(
             false => Span::styled(format!(" {word} "), Style::default().fg(Color::DarkGray)),
         });
     }
-    let mut lines = vec![Line::from(tags), Line::from("")];
     let caret_row = text.line.saturating_sub(1);
-    for (number, line) in text.shown().split('\n').enumerate() {
-        let mut spans = vec![Span::raw("  ")];
-        match number == caret_row {
-            true => spans.extend(with_caret(line, text.column)),
-            false => spans.push(Span::raw(line.to_string())),
-        }
-        lines.push(Line::from(spans));
-    }
+    let typed: Vec<Line<'static>> = text
+        .shown()
+        .split('\n')
+        .take(caret_row + 1)
+        .enumerate()
+        .map(|(number, line)| {
+            let mut spans = vec![Span::raw("  ")];
+            match number == caret_row {
+                true => spans.extend(with_caret(line, text.column)),
+                false => spans.push(Span::raw(line.to_string())),
+            }
+            Line::from(spans)
+        })
+        .collect();
+    let typed = wrapped(typed, area.width.saturating_sub(2) as usize);
+    let room = area.height.saturating_sub(6) as usize;
+    let mut lines = vec![Line::from(tags), Line::from("")];
+    lines.extend(typed.into_iter().rev().take(room).rev());
+    lines.resize(room + 2, Line::from(""));
     lines.push(Line::from(""));
-    let chip = varde::story::inquiry_chip();
-    let label = layout::chip_labels(std::slice::from_ref(&chip), u16::MAX, 0)
-        .pop()
-        .unwrap_or_default();
-    let mut footer = vec![Span::raw(" ")];
-    footer.extend(chip_spans(state, &chip, label));
-    footer.push(Span::styled(
+    lines.push(Line::from(Span::styled(
         format!(
             "  {}",
             keys::INQUIRY_BOX_KEYS
@@ -4010,9 +4017,29 @@ fn inquiry_lines(
                 .join(" · ")
         ),
         Style::default().fg(Color::DarkGray),
-    ));
-    lines.push(Line::from(footer));
-    lines
+    )));
+    let box_area = rect(area);
+    frame.render_widget(Clear, box_area);
+    frame.render_widget(
+        Paragraph::new(lines).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Thick)
+                .title("INQUIRY"),
+        ),
+        box_area,
+    );
+    let chip = varde::story::inquiry_chip();
+    let mut labels = layout::chip_labels(std::slice::from_ref(&chip), area.width, 0);
+    let x = (area.x + area.width.saturating_sub(1)).checked_sub(layout::strip_width(&labels));
+    let (Some(x), Some(label)) = (x, labels.pop()) else {
+        return;
+    };
+    let columns = label.width() as u16;
+    frame.render_widget(
+        Line::from(chip_spans(state, &chip, label).to_vec()),
+        Rect::new(x, area.y, columns, 1),
+    );
 }
 
 fn question_lines(

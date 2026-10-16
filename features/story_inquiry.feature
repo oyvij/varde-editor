@@ -105,6 +105,14 @@ Feature: Asking for a story set with an Inquiry
       And the spine is empty
       And no file was written
 
+    Scenario: Clicking the Ask Chip submits the Inquiry
+      Given an AI session is running
+      And I run ":story*"
+      And I type "how does a key reach the child" in the inquiry box
+      When I click the Inquiry box's Ask Chip
+      Then the AI pane was sent a prompt containing "how does a key reach the child"
+      And the story view state is "authoring"
+
     Scenario: Two Inquiries in one session name two artifacts
       Given an AI session is running
       And I submitted the Inquiry "where does a key go"
@@ -141,6 +149,14 @@ Feature: Asking for a story set with an Inquiry
       Then the story view state is "no-stories"
       And the project ".gitignore" is unchanged
       And no file was written
+
+    Scenario: Escape while the Inquiry waits for the AI session leaves nothing to send
+      Given no AI session is running
+      And I submitted the Inquiry "why is this slow"
+      And I press "Escape"
+      When the AI session is ready for input
+      Then no keys were sent to the AI pane
+      And the story view state is "no-stories"
 
     Scenario: A dirty working tree is neither refused nor confirmed
       Given the project is a git repository

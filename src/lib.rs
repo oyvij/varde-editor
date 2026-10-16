@@ -1131,7 +1131,7 @@ pub struct State {
     pub ai_spoken: bool,
     pub pending_prompt: Option<(String, Enter)>,
     pub launched_ms: u64,
-    pub inquired_ms: u64,
+    pub last_inquiry_ms: u64,
     pub selection: Option<Selection>,
     pub occurrences: Vec<Place>,
     pub revealing: Option<Place>,
@@ -1389,7 +1389,7 @@ impl Default for State {
             ai_spoken: false,
             pending_prompt: None,
             launched_ms: 0,
-            inquired_ms: 0,
+            last_inquiry_ms: 0,
             selection: None,
             occurrences: Vec::new(),
             revealing: None,
@@ -2055,10 +2055,10 @@ fn on_inquiry(mut next: State, event: Event, wheeled: bool) -> Answered {
         (Modal::Inquiry { text, tag }, Event::SubmitInquiry { at_ms }) => {
             let (inquiry, tag) = (text.shown().to_string(), *tag);
             next.modal = Modal::None;
-            next.inquired_ms = (next.launched_ms + at_ms).max(next.inquired_ms + 1);
+            next.last_inquiry_ms = (next.launched_ms + at_ms).max(next.last_inquiry_ms + 1);
             let out = story::inquiry_path(
                 &varde_dir(&next.root, next.sidecar.as_deref()),
-                next.inquired_ms,
+                next.last_inquiry_ms,
             );
             move_to_view(&mut next, View::Story);
             next.story_set = story::Set::Authoring { spelling: None };
@@ -2584,6 +2584,7 @@ fn on_enter_name(state: &State, mut next: State, event: Event, wheeled: bool) ->
                 )
             {
                 next.story_set = story::Set::None;
+                next.pending_prompt = None;
             }
             vec![]
         }

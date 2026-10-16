@@ -448,6 +448,15 @@ fn pressed(
         return vec![Event::ClickPaletteEntry(key)];
     }
     let screen = (panes.ai.right(), panes.tree.height + panes.terminal.height);
+    if matches!(state.modal, Modal::Inquiry { .. }) {
+        let area = layout::inquiry_box(screen.0, screen.1);
+        let labels = layout::chip_labels(&[crate::story::inquiry_chip()], area.width, 0);
+        if input.row == area.y && layout::strip_at(area, &labels, input.column).is_some() {
+            return vec![Event::SubmitInquiry {
+                at_ms: pointer.at_ms,
+            }];
+        }
+    }
     if let Some(action) = crate::run::chip_at(state, screen.0, screen.1, input.column, input.row) {
         return vec![Event::ChooseRun(action)];
     }

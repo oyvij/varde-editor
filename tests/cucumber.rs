@@ -3629,6 +3629,19 @@ fn submit_inquiry(world: &mut VardeWorld, text: String) {
     route_key(world, "Ctrl+s", 0);
 }
 
+#[when(expr = "I click the Inquiry box's Ask Chip")]
+fn click_inquiry_chip(world: &mut VardeWorld) {
+    let (width, height) = world.screen();
+    let area = layout::inquiry_box(width, height);
+    let labels = layout::chip_labels(&[story::inquiry_chip()], area.width, 0);
+    let column = (area.x..area.right())
+        .find(|&column| layout::strip_at(area, &labels, column) == Some(0))
+        .expect("the Chip on screen");
+    world.pointer = mouse::Pointer::default();
+    world.report(mouse::Kind::LeftDown, column, area.y);
+    world.report(mouse::Kind::LeftUp, column, area.y);
+}
+
 fn inquiry_artifacts(world: &VardeWorld) -> Vec<String> {
     ai_sends(world)
         .iter()
