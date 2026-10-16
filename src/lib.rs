@@ -301,6 +301,10 @@ pub enum Modal {
         answer: Buffer,
         anchor: Option<Place>,
     },
+    Inquiry {
+        text: Buffer,
+        tag: story::Tag,
+    },
     Stops {
         path: PathBuf,
         at: Vec<editor::Tail>,
@@ -568,6 +572,8 @@ pub enum Event {
         force: bool,
     },
     PickBranch(Option<String>),
+    OpenInquiry,
+    NextTag,
     Branches(story::Branching),
     MoveBranchRow(Direction),
     FilterBranches(String),
@@ -1908,10 +1914,10 @@ fn erase(state: &State, next: &mut State) {
 }
 
 fn on_comment_body(mut next: State, event: Event, wheeled: bool) -> Answered {
-    if next.comment.is_none() {
-        return Err((next, event));
-    }
-    let body = next.comment.as_mut().expect("checked just above");
+    let body = match (&mut next.comment, &mut next.modal) {
+        (Some(body), _) | (None, Modal::Inquiry { text: body, .. }) => body,
+        _ => return Err((next, event)),
+    };
     match event {
         Event::EditorKey(key) => _ = body.key(key),
         Event::EditorBackspace => body.backspace(),
@@ -2020,6 +2026,21 @@ fn on_question(state: &State, mut next: State, event: Event, wheeled: bool) -> A
         other => return Err((next, other)),
     };
     Ok(settle(next, effects, wheeled))
+}
+
+fn on_inquiry(mut next: State, event: Event, wheeled: bool) -> Answered {
+    match (&mut next.modal, event) {
+        (_, Event::OpenInquiry) => {
+            next.modal = Modal::Inquiry {
+                text: Buffer::text_box(""),
+                tag: story::Tag::default(),
+            }
+        }
+        (Modal::Inquiry { .. }, Event::Cancel) => next.modal = Modal::None,
+        (Modal::Inquiry { tag, .. }, Event::NextTag) => *tag = tag.next(),
+        (_, other) => return Err((next, other)),
+    }
+    Ok(settle(next, vec![], wheeled))
 }
 
 fn on_query(mut next: State, event: Event, wheeled: bool) -> Answered {
@@ -2142,6 +2163,10 @@ fn route_trigger(state: &State, next: State, event: Event, wheeled: bool) -> Ans
         Err(declined) => declined,
     };
     let declined = match on_question(state, declined.0, declined.1, wheeled) {
+        Ok(answer) => return Ok(answer),
+        Err(declined) => declined,
+    };
+    let declined = match on_inquiry(declined.0, declined.1, wheeled) {
         Ok(answer) => return Ok(answer),
         Err(declined) => declined,
     };

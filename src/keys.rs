@@ -21,7 +21,7 @@ pub struct CommandLine {
     pub pick: Option<usize>,
 }
 
-pub const COMMANDS: [(&str, &str, &[View], &[Event]); 36] = [
+pub const COMMANDS: [(&str, &str, &[View], &[Event]); 37] = [
     (
         "format",
         "lay the file out",
@@ -158,6 +158,12 @@ pub const COMMANDS: [(&str, &str, &[View], &[Event]); 36] = [
         &[],
     ),
     (
+        "story*",
+        "story what you ask about the code",
+        &[View::Edit, View::Story],
+        &[Event::OpenInquiry],
+    ),
+    (
         "ai",
         "start the AI session",
         &[View::Edit, View::Review, View::Story, View::Knowledge],
@@ -237,7 +243,7 @@ pub const COMMANDS: [(&str, &str, &[View], &[Event]); 36] = [
     ),
 ];
 
-pub const CHEATSHEET: [(&str, &str, &[View]); 44] = [
+pub const CHEATSHEET: [(&str, &str, &[View]); 45] = [
     ("i a o O x", "edit", &[View::Edit]),
     ("w b e", "word", &[View::Edit, View::Knowledge]),
     ("gg G", "file ends", &[View::Edit, View::Knowledge]),
@@ -306,6 +312,7 @@ pub const CHEATSHEET: [(&str, &str, &[View]); 44] = [
     ("c", "comment", &[View::Story]),
     ("Esc", "back to spine", &[View::Story]),
     ("t", "spine / files", &[View::Story]),
+    (": story*", "ask the code", &[View::Edit, View::Story]),
     (
         "M-h M-j M-k M-l",
         "focus",
@@ -455,6 +462,13 @@ pub const BRANCH_FILTER_HINT: &str = "type to filter";
 
 pub const COMMENT_BOX_KEYS: [(&str, &str); 4] = [
     ("C-s", "file"),
+    ("Esc", "discard"),
+    ("C-z", "undo"),
+    ("C-S-z", "redo"),
+];
+
+pub const INQUIRY_BOX_KEYS: [(&str, &str); 4] = [
+    ("Tab", "tag"),
     ("Esc", "discard"),
     ("C-z", "undo"),
     ("C-S-z", "redo"),
@@ -679,6 +693,7 @@ fn modal_key(state: &State, drafts: &mut Drafts, event: KeyEvent) -> Vec<Event> 
             name_box(drafts, event)
         }
         Modal::SkillQuestion { .. } => question_box(state.tab_width, event),
+        Modal::Inquiry { .. } => inquiry_box(event),
         Modal::Breakpoint { field, draft, .. } => breakpoint_box(*field, draft, event),
         Modal::Candidates(_) => candidate_list(state, drafts, event),
         Modal::Stops { .. } => match event.code {
@@ -741,6 +756,7 @@ fn answered(modal: &Modal, event: KeyEvent) -> Vec<Event> {
         | Modal::Branches { .. }
         | Modal::Skills { .. }
         | Modal::SkillQuestion { .. }
+        | Modal::Inquiry { .. }
         | Modal::Comment
         | Modal::Candidates(_)
         | Modal::Stops { .. } => {
@@ -874,7 +890,10 @@ fn a_box_has_the_keys(state: &State, drafts: &Drafts) -> bool {
 
 fn buffer_takes_paste(state: &State, drafts: &Drafts) -> bool {
     if matches!(state.modal, Modal::Comment) && !drafts.comment_kind.is_empty()
-        || matches!(state.modal, Modal::SkillQuestion { .. })
+        || matches!(
+            state.modal,
+            Modal::SkillQuestion { .. } | Modal::Inquiry { .. }
+        )
     {
         return true;
     }
@@ -1114,12 +1133,28 @@ fn comment_type(drafts: &mut Drafts, event: KeyEvent) -> Vec<Event> {
 }
 
 fn comment_body(drafts: &mut Drafts, event: KeyEvent) -> Vec<Event> {
-    let alt = event.modifiers.contains(KeyModifiers::ALT);
     if event.modifiers.contains(KeyModifiers::CTRL) && event.code == KeyCode::Char('s') {
         return vec![Event::FileComment {
             kind: std::mem::take(&mut drafts.comment_kind),
         }];
     }
+    if event.code == KeyCode::Esc {
+        drafts.comment_kind.clear();
+        return vec![Event::EditorEscape];
+    }
+    multiline_key(event)
+}
+
+fn inquiry_box(event: KeyEvent) -> Vec<Event> {
+    match event.code {
+        KeyCode::Esc => vec![Event::Cancel],
+        KeyCode::Tab if event.modifiers.is_empty() => vec![Event::NextTag],
+        _ => multiline_key(event),
+    }
+}
+
+fn multiline_key(event: KeyEvent) -> Vec<Event> {
+    let alt = event.modifiers.contains(KeyModifiers::ALT);
     if let Some(undo) = undo_key(event) {
         return vec![undo];
     }
@@ -1127,10 +1162,6 @@ fn comment_body(drafts: &mut Drafts, event: KeyEvent) -> Vec<Event> {
         return vec![Event::EditorWord(direction)];
     }
     match event.code {
-        KeyCode::Esc => {
-            drafts.comment_kind.clear();
-            vec![Event::EditorEscape]
-        }
         KeyCode::Enter => vec![Event::EditorKey('\n')],
         KeyCode::Backspace if alt => vec![Event::EditorDeleteWord],
         KeyCode::Backspace => vec![Event::EditorBackspace],
@@ -2366,6 +2397,119 @@ mod tests {
             unnamed.is_empty(),
             "the comment box answers keys its footer does not name: {unnamed:?}"
         );
+    }
+
+    fn asking() -> State {
+        State {
+            modal: crate::Modal::Inquiry {
+                text: crate::editor::Buffer::text_box(""),
+                tag: crate::story::Tag::default(),
+            },
+            ..editing()
+        }
+    }
+
+    #[test]
+    fn the_inquiry_box_edits_with_the_editors_keys_and_enter_is_a_new_line() {
+        let state = asking();
+        let ctrl = |c| KeyEvent::new(KeyCode::Char(c)).modifiers(KeyModifiers::CTRL);
+        let alt = |code| KeyEvent::new(code).modifiers(KeyModifiers::ALT);
+        for (key, expected) in [
+            (plain('q'), Event::EditorKey('q')),
+            (KeyEvent::new(KeyCode::Enter), Event::EditorKey('\n')),
+            (
+                KeyEvent::new(KeyCode::Left),
+                Event::EditorArrow(Direction::Left),
+            ),
+            (
+                KeyEvent::new(KeyCode::Up),
+                Event::EditorArrow(Direction::Up),
+            ),
+            (alt(KeyCode::Left), Event::EditorWord(Direction::Left)),
+            (alt(KeyCode::Char('f')), Event::EditorWord(Direction::Right)),
+            (KeyEvent::new(KeyCode::Backspace), Event::EditorBackspace),
+            (alt(KeyCode::Backspace), Event::EditorDeleteWord),
+            (ctrl('z'), Event::EditorUndo),
+            (KeyEvent::new(KeyCode::Tab), Event::NextTag),
+            (KeyEvent::new(KeyCode::Esc), Event::Cancel),
+        ] {
+            assert_eq!(press(&state, key), vec![expected], "{key:?}");
+        }
+    }
+
+    #[test]
+    fn the_inquiry_box_answers_exactly_the_keys_its_footer_names() {
+        let state = asking();
+        let gesture = |event| {
+            let events = press(&state, event);
+            !events.is_empty()
+                && !events.iter().all(|e| {
+                    matches!(
+                        e,
+                        Event::EditorKey(_)
+                            | Event::EditorArrow(_)
+                            | Event::EditorWord(_)
+                            | Event::EditorBackspace
+                            | Event::EditorDeleteWord
+                    )
+                })
+        };
+        for (key, word) in super::INQUIRY_BOX_KEYS {
+            let event = every_key()
+                .into_iter()
+                .find(|event| label(*event) == key)
+                .unwrap_or_else(|| panic!("no key spells {key}"));
+            assert!(
+                gesture(event),
+                "the footer offers {key} for {word} and the box does nothing with it"
+            );
+        }
+        let mut unnamed: Vec<String> = every_key()
+            .into_iter()
+            .filter(|event| gesture(*event))
+            .map(label)
+            .filter(|label| {
+                !super::INQUIRY_BOX_KEYS.iter().any(|(key, _)| key == label)
+                    && !listed(&State::default(), label, View::Story)
+                    && !omitted_in(label, View::Story)
+            })
+            .collect();
+        unnamed.sort();
+        unnamed.dedup();
+        assert!(
+            unnamed.is_empty(),
+            "the Inquiry box answers keys its footer does not name: {unnamed:?}"
+        );
+    }
+
+    #[test]
+    fn the_inquiry_is_its_own_spelling_so_a_branch_named_free_is_still_a_range() {
+        assert_eq!(command("story*"), vec![Event::OpenInquiry]);
+        assert_eq!(
+            command("story free"),
+            vec![Event::Story {
+                explicit: Some("free".to_string()),
+                force: false,
+            }]
+        );
+    }
+
+    #[test]
+    fn the_inquiry_is_on_the_cheatsheet_of_the_views_it_opens_from() {
+        for (view, shown) in [
+            (View::Edit, true),
+            (View::Story, true),
+            (View::Review, false),
+        ] {
+            let state = State { view, ..editing() };
+            assert_eq!(
+                super::cheatsheet_rows(&state)
+                    .iter()
+                    .any(|(keys, _)| *keys == ": story*"),
+                shown,
+                "{view:?}"
+            );
+        }
     }
 
     #[test]

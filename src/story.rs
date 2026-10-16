@@ -181,6 +181,41 @@ pub enum Set {
 
 pub const ATTEMPTS: u8 = 2;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Tag {
+    Bug,
+    Feature,
+    Architecture,
+    #[default]
+    FeelingLucky,
+}
+
+pub const TAGS: [(Tag, &str); 4] = [
+    (Tag::Bug, "Bug"),
+    (Tag::Feature, "Feature"),
+    (Tag::Architecture, "Architecture"),
+    (Tag::FeelingLucky, "Feeling lucky"),
+];
+
+impl Tag {
+    pub fn next(self) -> Tag {
+        let at = TAGS.iter().position(|(tag, _)| *tag == self).unwrap_or(0);
+        TAGS[(at + 1) % TAGS.len()].0
+    }
+}
+
+pub fn inquiry_chip() -> crate::Chip {
+    crate::Chip {
+        action: "ask-inquiry",
+        name: "ask",
+        glyph: "\u{25b6}".to_string(),
+        keys: "C-s",
+        word: "AI Ask",
+        hue: crate::Hue::Plain,
+        tone: crate::Tone::Plain,
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Resolution {
     Authored,
@@ -1610,6 +1645,31 @@ pub fn line_at_row(state: &State, row: usize) -> usize {
 mod tests {
 
     use super::*;
+
+    #[test]
+    fn the_inquiry_chip_hands_to_the_ai_on_ctrl_s() {
+        let chip = inquiry_chip();
+        assert_eq!(chip.keys, "C-s");
+        assert_eq!(chip.word, "AI Ask");
+    }
+
+    #[test]
+    fn tab_walks_the_four_tags_and_wraps() {
+        let mut walked = vec![Tag::default()];
+        for _ in 0..4 {
+            walked.push(walked.last().copied().unwrap_or_default().next());
+        }
+        assert_eq!(
+            walked,
+            [
+                Tag::FeelingLucky,
+                Tag::Bug,
+                Tag::Feature,
+                Tag::Architecture,
+                Tag::FeelingLucky
+            ]
+        );
+    }
 
     #[test]
     fn rows_are_worked_out_only_as_far_as_they_are_read() {

@@ -3607,6 +3607,43 @@ fn arrow_in_comment_body(world: &mut VardeWorld, direction: String) {
     route_key(world, &direction, 0);
 }
 
+#[given(expr = "I type {string} in the inquiry box")]
+#[when(expr = "I type {string} in the inquiry box")]
+fn type_in_inquiry_box(world: &mut VardeWorld, text: String) {
+    for key in text.chars() {
+        route_key(world, &key.to_string(), 0);
+    }
+}
+
+#[given(expr = "I press {word} in the inquiry box")]
+#[when(expr = "I press {word} in the inquiry box")]
+fn press_in_inquiry_box(world: &mut VardeWorld, key: String) {
+    route_key(world, &key, 0);
+}
+
+fn inquiry(world: &VardeWorld) -> (&Buffer, story::Tag) {
+    match &world.state.modal {
+        Modal::Inquiry { text, tag } => (text, *tag),
+        other => panic!("the Inquiry box is not open: {other:?}"),
+    }
+}
+
+#[then(expr = "the inquiry reads {string}")]
+fn inquiry_reads(world: &mut VardeWorld, expected: String) {
+    assert_eq!(inquiry(world).0.shown(), expected.replace("\\n", "\n"));
+}
+
+#[then(expr = "the inquiry tag is {string}")]
+fn inquiry_tag_is(world: &mut VardeWorld, expected: String) {
+    let actual = match inquiry(world).1 {
+        story::Tag::Bug => "bug",
+        story::Tag::Feature => "feature",
+        story::Tag::Architecture => "architecture",
+        story::Tag::FeelingLucky => "feeling-lucky",
+    };
+    assert_eq!(actual, expected);
+}
+
 #[given(expr = "I move a word left in the comment body")]
 #[when(expr = "I move a word left in the comment body")]
 fn word_left_in_comment_body(world: &mut VardeWorld) {
@@ -9227,6 +9264,7 @@ fn modal_is(world: &mut VardeWorld, expected: String) {
         Modal::Branches { .. } => "branches",
         Modal::Skills { .. } => "skills",
         Modal::SkillQuestion { .. } => "skill-question",
+        Modal::Inquiry { .. } => "inquiry",
         Modal::Comment => "comment",
         Modal::NameBox { .. } => "name-box",
         Modal::StepDetail => "step-detail",

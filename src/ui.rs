@@ -452,6 +452,7 @@ fn draw_modal(frame: &mut Frame, state: &State, chrome: &Chrome) {
         ),
         Modal::SetValue | Modal::NewWatch => {}
         Modal::Comment => overlay(frame, "COMMENT", comment_lines(state, chrome)),
+        Modal::Inquiry { text, tag } => overlay(frame, "INQUIRY", inquiry_lines(state, text, *tag)),
         Modal::ConfirmSubmit => overlay(
             frame,
             "SUBMIT",
@@ -3957,6 +3958,55 @@ fn comment_lines(state: &State, chrome: &Chrome) -> Vec<Line<'static>> {
             Style::default().fg(Color::DarkGray),
         )));
     }
+    lines
+}
+
+fn inquiry_lines(
+    state: &State,
+    text: &varde::editor::Buffer,
+    picked: varde::story::Tag,
+) -> Vec<Line<'static>> {
+    let mut tags = vec![Span::raw("  ")];
+    for (tag, word) in varde::story::TAGS {
+        tags.push(match tag == picked {
+            true => Span::styled(
+                format!(" {word} "),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::REVERSED),
+            ),
+            false => Span::styled(format!(" {word} "), Style::default().fg(Color::DarkGray)),
+        });
+    }
+    let mut lines = vec![Line::from(tags), Line::from("")];
+    let caret_row = text.line.saturating_sub(1);
+    for (number, line) in text.shown().split('\n').enumerate() {
+        let mut spans = vec![Span::raw("  ")];
+        match number == caret_row {
+            true => spans.extend(with_caret(line, text.column)),
+            false => spans.push(Span::raw(line.to_string())),
+        }
+        lines.push(Line::from(spans));
+    }
+    lines.push(Line::from(""));
+    let chip = varde::story::inquiry_chip();
+    let label = layout::chip_labels(std::slice::from_ref(&chip), u16::MAX, 0)
+        .pop()
+        .unwrap_or_default();
+    let mut footer = vec![Span::raw(" ")];
+    footer.extend(chip_spans(state, &chip, label));
+    footer.push(Span::styled(
+        format!(
+            "  {}",
+            keys::INQUIRY_BOX_KEYS
+                .iter()
+                .map(|(key, word)| format!("{key} {word}"))
+                .collect::<Vec<_>>()
+                .join(" · ")
+        ),
+        Style::default().fg(Color::DarkGray),
+    ));
+    lines.push(Line::from(footer));
     lines
 }
 
