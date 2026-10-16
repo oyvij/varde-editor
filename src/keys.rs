@@ -243,7 +243,7 @@ pub const COMMANDS: [(&str, &str, &[View], &[Event]); 37] = [
     ),
 ];
 
-pub const CHEATSHEET: [(&str, &str, &[View]); 45] = [
+pub const CHEATSHEET: [(&str, &str, &[View]); 46] = [
     ("i a o O x", "edit", &[View::Edit]),
     ("w b e", "word", &[View::Edit, View::Knowledge]),
     ("gg G", "file ends", &[View::Edit, View::Knowledge]),
@@ -313,6 +313,11 @@ pub const CHEATSHEET: [(&str, &str, &[View]); 45] = [
     ("Esc", "back to spine", &[View::Story]),
     ("t", "spine / files", &[View::Story]),
     (": story*", "ask the code", &[View::Edit, View::Story]),
+    (
+        "Tab Esc C-z C-S-z",
+        "inquiry box: tag, discard, undo, redo",
+        &[View::Edit, View::Story],
+    ),
     (
         "M-h M-j M-k M-l",
         "focus",
@@ -2509,6 +2514,24 @@ mod tests {
                 shown,
                 "{view:?}"
             );
+        }
+    }
+
+    #[test]
+    fn the_inquiry_boxs_keys_are_on_the_cheatsheet_of_the_views_it_opens_from() {
+        for view in [View::Edit, View::Story] {
+            let state = State { view, ..editing() };
+            let rows = super::cheatsheet_rows(&state);
+            let row = rows
+                .iter()
+                .find(|(_, what)| what.starts_with("inquiry box"))
+                .unwrap_or_else(|| panic!("no Inquiry box row in {view:?}"));
+            for (key, _) in super::INQUIRY_BOX_KEYS {
+                assert!(
+                    row.0.split_whitespace().any(|token| token == key),
+                    "{key} is missing from the Inquiry box row in {view:?}"
+                );
+            }
         }
     }
 

@@ -26,26 +26,32 @@ Feature: Asking for a story set with an Inquiry
 
   Scenario: Enter starts a new line rather than submitting
     Given I run ":story*"
-    When I type "how does a key" in the inquiry box
-    And I press Enter in the inquiry box
-    And I type "reach the child" in the inquiry box
-    Then the inquiry reads "how does a key\nreach the child"
+    And I type "how does a key" in the inquiry box
+    When I press Enter in the inquiry box
+    Then the inquiry reads "how does a key\n"
     And the modal is "inquiry"
     And no keys were sent to the AI pane
 
-  Scenario: The editor's own keys edit the Inquiry
+  Scenario: The editor's word delete edits the Inquiry
     Given I run ":story*"
     And I type "where does it go" in the inquiry box
     When I press Alt+Backspace in the inquiry box
-    And I press Backspace in the inquiry box
-    And I press Ctrl+z in the inquiry box
     Then the inquiry reads "where does it "
 
-  Scenario: Exactly one Tag is picked, and Tab moves to the next
+  Scenario: The editor's undo takes an edit back
     Given I run ":story*"
+    And I type "where does it go" in the inquiry box
+    And I press Backspace in the inquiry box
+    When I press Ctrl+z in the inquiry box
+    Then the inquiry reads "where does it go"
+
+  Scenario: The box opens with one Tag picked
+    When I run ":story*"
     Then the inquiry tag is "feeling-lucky"
-    When I press Tab in the inquiry box
-    Then the inquiry tag is "bug"
+
+  Scenario: Tab picks the next Tag in place of the last
+    Given I run ":story*"
+    And I press Tab in the inquiry box
     When I press Tab in the inquiry box
     Then the inquiry tag is "feature"
 

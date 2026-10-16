@@ -212,7 +212,7 @@ pub fn inquiry_chip() -> crate::Chip {
         keys: "C-s",
         word: "AI Ask",
         hue: crate::Hue::Plain,
-        tone: crate::Tone::Plain,
+        tone: crate::Tone::Dimmed,
     }
 }
 
@@ -1647,10 +1647,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_inquiry_chip_hands_to_the_ai_on_ctrl_s() {
+    fn the_inquiry_chip_names_ctrl_s_and_is_dimmed_while_nothing_submits() {
         let chip = inquiry_chip();
         assert_eq!(chip.keys, "C-s");
         assert_eq!(chip.word, "AI Ask");
+        assert_eq!(chip.tone, crate::Tone::Dimmed);
     }
 
     #[test]

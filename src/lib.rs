@@ -1913,7 +1913,7 @@ fn erase(state: &State, next: &mut State) {
     }
 }
 
-fn on_comment_body(mut next: State, event: Event, wheeled: bool) -> Answered {
+fn on_multiline_body(mut next: State, event: Event, wheeled: bool) -> Answered {
     let body = match (&mut next.comment, &mut next.modal) {
         (Some(body), _) | (None, Modal::Inquiry { text: body, .. }) => body,
         _ => return Err((next, event)),
@@ -2158,7 +2158,7 @@ fn route_trigger(state: &State, next: State, event: Event, wheeled: bool) -> Ans
         Ok(answer) => return Ok(answer),
         Err(declined) => declined,
     };
-    let declined = match on_comment_body(declined.0, declined.1, wheeled) {
+    let declined = match on_multiline_body(declined.0, declined.1, wheeled) {
         Ok(answer) => return Ok(answer),
         Err(declined) => declined,
     };
