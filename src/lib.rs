@@ -574,6 +574,9 @@ pub enum Event {
     PickBranch(Option<String>),
     OpenInquiry,
     NextTag,
+    SubmitInquiry {
+        at_ms: u64,
+    },
     Branches(story::Branching),
     MoveBranchRow(Direction),
     FilterBranches(String),
@@ -1127,6 +1130,8 @@ pub struct State {
     pub ai_paste: keys::Paste,
     pub ai_spoken: bool,
     pub pending_prompt: Option<(String, Enter)>,
+    pub launched_ms: u64,
+    pub inquired_ms: u64,
     pub selection: Option<Selection>,
     pub occurrences: Vec<Place>,
     pub revealing: Option<Place>,
@@ -1383,6 +1388,8 @@ impl Default for State {
             ai_paste: keys::Paste::Bare,
             ai_spoken: false,
             pending_prompt: None,
+            launched_ms: 0,
+            inquired_ms: 0,
             selection: None,
             occurrences: Vec::new(),
             revealing: None,
@@ -2029,18 +2036,43 @@ fn on_question(state: &State, mut next: State, event: Event, wheeled: bool) -> A
 }
 
 fn on_inquiry(mut next: State, event: Event, wheeled: bool) -> Answered {
-    match (&mut next.modal, event) {
+    let effects = match (&mut next.modal, event) {
         (_, Event::OpenInquiry) => {
             next.modal = Modal::Inquiry {
                 text: Buffer::text_box(""),
                 tag: story::Tag::default(),
-            }
+            };
+            vec![]
         }
-        (Modal::Inquiry { .. }, Event::Cancel) => next.modal = Modal::None,
-        (Modal::Inquiry { tag, .. }, Event::NextTag) => *tag = tag.next(),
+        (Modal::Inquiry { .. }, Event::Cancel) => {
+            next.modal = Modal::None;
+            vec![]
+        }
+        (Modal::Inquiry { tag, .. }, Event::NextTag) => {
+            *tag = tag.next();
+            vec![]
+        }
+        (Modal::Inquiry { text, tag }, Event::SubmitInquiry { at_ms }) => {
+            let (inquiry, tag) = (text.shown().to_string(), *tag);
+            next.modal = Modal::None;
+            next.inquired_ms = (next.launched_ms + at_ms).max(next.inquired_ms + 1);
+            let out = story::inquiry_path(
+                &varde_dir(&next.root, next.sidecar.as_deref()),
+                next.inquired_ms,
+            );
+            move_to_view(&mut next, View::Story);
+            next.story_set = story::Set::Authoring { spelling: None };
+            let mut effects = vec![Effect::RenderView(View::Story)];
+            effects.extend(queue_for_ai(
+                &mut next,
+                Enter::Pressed,
+                story::inquiry_prompt(&inquiry, tag, &out),
+            ));
+            effects
+        }
         (_, other) => return Err((next, other)),
-    }
-    Ok(settle(next, vec![], wheeled))
+    };
+    Ok(settle(next, effects, wheeled))
 }
 
 fn on_query(mut next: State, event: Event, wheeled: bool) -> Answered {
@@ -5977,7 +6009,7 @@ fn on_story_resolved(state: &State, mut next: State, event: Event, wheeled: bool
                 next.modal = Modal::None;
                 move_to_view(&mut next, View::Story);
                 next.story_set = story::Set::Authoring {
-                    spelling: spelling.clone(),
+                    spelling: Some(spelling.clone()),
                 };
                 let context = story::context_path(&out);
                 let mut effects = vec![
@@ -10756,7 +10788,7 @@ mod tests {
         let mut state = State {
             view: View::Story,
             story_set: story::Set::Authoring {
-                spelling: "HEAD".to_string(),
+                spelling: Some("HEAD".to_string()),
             },
             ..hovering(3)
         };

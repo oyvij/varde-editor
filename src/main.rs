@@ -706,6 +706,9 @@ fn run(
     });
 
     let started = Instant::now();
+    state.launched_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_millis() as u64);
     let mut last_git = Instant::now();
     let mut last_tick = Instant::now();
     let mut last_drag = Instant::now();

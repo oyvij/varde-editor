@@ -3621,6 +3621,61 @@ fn press_in_inquiry_box(world: &mut VardeWorld, key: String) {
     route_key(world, &key, 0);
 }
 
+#[given(expr = "I submitted the Inquiry {string}")]
+#[when(expr = "I submit the Inquiry {string}")]
+fn submit_inquiry(world: &mut VardeWorld, text: String) {
+    run_story_command(world, ":story*".to_string());
+    type_in_inquiry_box(world, text);
+    route_key(world, "Ctrl+s", 0);
+}
+
+fn inquiry_artifacts(world: &VardeWorld) -> Vec<String> {
+    ai_sends(world)
+        .iter()
+        .flat_map(|prompt| {
+            prompt
+                .split(|c: char| c.is_whitespace() || c == '`' || c == '/')
+                .filter(|word| {
+                    word.strip_prefix("inquiry-")
+                        .and_then(|rest| rest.strip_suffix(".json"))
+                        .is_some_and(|ms| !ms.is_empty() && ms.chars().all(|c| c.is_ascii_digit()))
+                })
+                .map(str::to_string)
+                .collect::<BTreeSet<_>>()
+        })
+        .collect()
+}
+
+#[then(expr = "the AI pane was sent a prompt naming an Inquiry artifact")]
+fn prompt_names_an_inquiry_artifact(world: &mut VardeWorld) {
+    assert!(
+        !inquiry_artifacts(world).is_empty(),
+        "{:?}",
+        ai_sends(world)
+    );
+}
+
+#[then(expr = "the two prompts name different Inquiry artifacts")]
+fn prompts_name_different_inquiry_artifacts(world: &mut VardeWorld) {
+    let named = inquiry_artifacts(world);
+    let [first, second] = named.as_slice() else {
+        panic!("expected two named artifacts, got {named:?}");
+    };
+    assert_ne!(first, second);
+}
+
+#[then(expr = "the AI pane was sent a prompt for the tag {string}")]
+fn prompt_for_the_tag(world: &mut VardeWorld, tag: String) {
+    let tag = match tag.as_str() {
+        "bug" => story::Tag::Bug,
+        "feature" => story::Tag::Feature,
+        "architecture" => story::Tag::Architecture,
+        "feeling-lucky" => story::Tag::FeelingLucky,
+        other => panic!("no Tag {other:?}"),
+    };
+    prompt_contains(world, story::scope(tag).to_string());
+}
+
 fn inquiry(world: &VardeWorld) -> (&Buffer, story::Tag) {
     match &world.state.modal {
         Modal::Inquiry { text, tag } => (text, *tag),

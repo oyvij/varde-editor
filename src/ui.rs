@@ -1535,7 +1535,12 @@ fn spine_widget(state: &State) -> Paragraph<'static> {
         }
         story::Set::Refused { because } => format!("The story set could not be read:\n{because}"),
         story::Set::Loaded(_) => "The story set holds no stories.".to_string(),
-        story::Set::Authoring { spelling } => format!("Authoring a story for \"{spelling}\"…"),
+        story::Set::Authoring {
+            spelling: Some(spelling),
+        } => format!("Authoring a story for \"{spelling}\"…"),
+        story::Set::Authoring { spelling: None } => {
+            "Authoring a story for your Inquiry — five to eleven minutes is expected…".to_string()
+        }
         story::Set::Filling { .. } => "Reading what the story's sites hold…".to_string(),
         story::Set::Fixing {
             attempt, problems, ..

@@ -169,7 +169,7 @@ pub enum Set {
         status: Option<String>,
     },
     Authoring {
-        spelling: String,
+        spelling: Option<String>,
     },
     AuthoringAbandoned,
     Fixing {
@@ -212,7 +212,7 @@ pub fn inquiry_chip() -> crate::Chip {
         keys: "C-s",
         word: "AI Ask",
         hue: crate::Hue::Plain,
-        tone: crate::Tone::Dimmed,
+        tone: crate::Tone::Plain,
     }
 }
 
@@ -269,7 +269,50 @@ A complete set, with one story and one step filled in:
     "head": "0fedcba9876543210fedcba9876543210fedcba9",
     "spelling": "{RANGE}"
   },
-  "stories": [
+{STORIES}
+}
+```
+
+## Rules, field by field
+
+**`title`** names what the whole range accomplishes — a feature added, a bug fixed, an improvement
+made — never a list of the stories under it. **`name`** on a story and on a step states its concrete
+subject; a step's is about 18 characters, because it sits in a fixed-width menu.
+
+**`range`** carries the two full oids the range resolved to and the `spelling` exactly as given
+above. Do not abbreviate an oid and do not resolve the range yourself against a different `HEAD`.
+
+**`id`** is a short slug on a story and `"<story-id>.<n>"` on a step. **`premise`** is one line: what
+the story is about, so a reader can choose it from a list.
+
+**`claim`** is one sentence — what this code does. **`why`** is why it exists, or why it is done this
+way and not the obvious other way.
+
+**`site`** is where the step points.
+- `file` is a path relative to the repository root.
+- `side` is `"new"` for a line as it is after the change, `"old"` for a line the change removed.
+- `kind` is `"changed"` when the change touched those lines, `"context"` when it did not — a step
+  that walks into untouched code to follow the flow is expected and useful.
+- **A deletion is `side: "old"` with `kind: "changed"`, always.** When the change only *removed*
+  lines, point at them on the old side, where they can still be read, and give the line numbers they
+  had before the change. Never file a removal as `side: "new"` with `kind: "context"`: that says
+  "unchanged code", and removed code is not unchanged code — it is the part of the change nobody
+  will see if it is filed under context.
+- `from`/`to` are line numbers at the revision `side` names, not at any other revision.
+- Do not write the lines themselves. A site is the file, the side, the kind and the range, and
+  nothing else — Varde reads what those lines hold off its own copy of the file.
+- A site may point at prose — a design document that argues the change is a legitimate step, and
+  often the most valuable one.
+
+{STEP_RULES}
+
+**Coverage.** Every changed hunk should be claimed by some step. Do not add a list of what you left
+out and do not guess at line numbers you have not read — what no story reaches is worked out from git
+and reported separately. Leaving something out is allowed; misreporting it is not.
+
+{CHECK}"#;
+
+const EXAMPLE_STORIES: &str = r#"  "stories": [
     {
       "id": "wheel-scroll",
       "name": "A wheel event moves the tree",
@@ -283,7 +326,7 @@ A complete set, with one story and one step filled in:
           "site": {
             "file": "src/lib.rs",
             "side": "new",
-            "kind": "changed",
+            "kind": "{KIND}",
             "from": 412,
             "to": 415
           },
@@ -328,42 +371,9 @@ A complete set, with one story and one step filled in:
         }
       ]
     }
-  ]
-}
-```
+  ]"#;
 
-## Rules, field by field
-
-**`title`** names what the whole range accomplishes — a feature added, a bug fixed, an improvement
-made — never a list of the stories under it. **`name`** on a story and on a step states its concrete
-subject; a step's is about 18 characters, because it sits in a fixed-width menu.
-
-**`range`** carries the two full oids the range resolved to and the `spelling` exactly as given
-above. Do not abbreviate an oid and do not resolve the range yourself against a different `HEAD`.
-
-**`id`** is a short slug on a story and `"<story-id>.<n>"` on a step. **`premise`** is one line: what
-the story is about, so a reader can choose it from a list.
-
-**`claim`** is one sentence — what this code does. **`why`** is why it exists, or why it is done this
-way and not the obvious other way.
-
-**`site`** is where the step points.
-- `file` is a path relative to the repository root.
-- `side` is `"new"` for a line as it is after the change, `"old"` for a line the change removed.
-- `kind` is `"changed"` when the change touched those lines, `"context"` when it did not — a step
-  that walks into untouched code to follow the flow is expected and useful.
-- **A deletion is `side: "old"` with `kind: "changed"`, always.** When the change only *removed*
-  lines, point at them on the old side, where they can still be read, and give the line numbers they
-  had before the change. Never file a removal as `side: "new"` with `kind: "context"`: that says
-  "unchanged code", and removed code is not unchanged code — it is the part of the change nobody
-  will see if it is filed under context.
-- `from`/`to` are line numbers at the revision `side` names, not at any other revision.
-- Do not write the lines themselves. A site is the file, the side, the kind and the range, and
-  nothing else — Varde reads what those lines hold off its own copy of the file.
-- A site may point at prose — a design document that argues the change is a legitimate step, and
-  often the most valuable one.
-
-**`flow`** is what arrives at the site and what leaves it. Omit `flow` entirely when the step is
+const STEP_RULES: &str = r#"**`flow`** is what arrives at the site and what leaves it. Omit `flow` entirely when the step is
 about a decision or an argument rather than data passing through. Do not invent an in and an out to
 fill the field.
 
@@ -391,13 +401,9 @@ refused whole, and nothing in it is walkable. Exactly one choice is `correct`. A
 plausible reasons a competent developer might give, and their `feedback` must explain why they are
 wrong; that explanation is the most valuable text in the file. Never invent a function, file or
 behaviour that does not exist in order to make a wrong choice: draw wrong choices from real
-alternatives.
+alternatives."#;
 
-**Coverage.** Every changed hunk should be claimed by some step. Do not add a list of what you left
-out and do not guess at line numbers you have not read — what no story reaches is worked out from git
-and reported separately. Leaving something out is allowed; misreporting it is not.
-
-## Before you write the file
+const CHECK: &str = r#"## Before you write the file
 
 Check your own work with a script rather than by eye: open every `cite` and confirm the line contains
 that value, confirm every prediction has exactly one `correct: true` and names nothing that does not
@@ -408,9 +414,112 @@ whole output."#;
 
 pub fn prompt(spelling: &str, out: &str, context: &str) -> String {
     AUTHORING_PROMPT
+        .replace("{STORIES}", EXAMPLE_STORIES)
+        .replace("{KIND}", "changed")
+        .replace("{STEP_RULES}", STEP_RULES)
+        .replace("{CHECK}", CHECK)
         .replace("{RANGE}", spelling)
         .replace("{OUT}", out)
         .replace("{CONTEXT}", context)
+}
+
+const INQUIRY_PROMPT: &str = r#"Write a guided walkthrough of this repository's code as JSON (protocolVersion 3), to the file `{OUT}`, answering what the developer asked below.
+
+You are writing for a developer who will walk it step by step, one screen at a time, to build a
+mental model of the code. Nothing has changed: describe the code as it stands on disk now, working
+tree included, and read the files themselves rather than asking git about them. Follow how the code
+runs, not how the files are arranged: start where control enters, and go where it goes. A
+file-by-file summary is not a walkthrough.
+
+## What the developer asked
+
+{SCOPE}
+
+```text
+{INQUIRY}
+```
+
+Choose the code worth walking yourself. Give the whole set a `title` naming what it answers, so a
+reader who has forgotten the question knows what the set is about before reading a single story.
+
+Split it into one or more stories, each with a name and a one-line premise. A question about a whole
+repository is expected to need several. A story's `name` must state its concrete subject, never stand
+alone as a metaphor or narrative flourish; the `premise` is where the why goes. Aim for three to six
+steps per story — a reader gets lost past five, so prefer more short stories over one long one. Give
+each step a short `name` too, next to its claim: the name is what sits in a menu, the claim is the
+full sentence the narration reads aloud. Keep a step's `name` to about 18 characters.
+
+## The shape
+
+A complete set, with one story and one step filled in. It has no `range`: there is no change.
+
+```json
+{
+  "protocolVersion": 3,
+  "title": "The wheel scrolls the tree without waiting for a redraw",
+{STORIES}
+}
+```
+
+## Rules, field by field
+
+**`title`** names what the whole set answers, never a list of the stories under it. **`name`** on a
+story and on a step states its concrete subject; a step's is about 18 characters, because it sits in
+a fixed-width menu. Do not write a `range`.
+
+**`id`** is a short slug on a story and `"<story-id>.<n>"` on a step. **`premise`** is one line: what
+the story is about, so a reader can choose it from a list.
+
+**`claim`** is one sentence — what this code does. **`why`** is why it exists, or why it is done this
+way and not the obvious other way.
+
+**`site`** is where the step points.
+- `file` is a path relative to the repository root.
+- Every site is `side: "new"` and `kind: "context"`: there is no old side and nothing changed.
+- `from`/`to` are line numbers in the file as it is on disk now.
+- Do not write the lines themselves. A site is the file, the side, the kind and the range, and
+  nothing else — Varde reads what those lines hold off its own copy of the file.
+- A site may point at prose — a design document that explains the code is a legitimate step, and
+  often the most valuable one.
+
+{STEP_RULES}
+
+{CHECK}"#;
+
+pub fn scope(tag: Tag) -> &'static str {
+    match tag {
+        Tag::Bug => {
+            "It is about a defect. Find the path by which the failure arises and walk it to the point \
+             where it goes wrong, rather than describing the design around it."
+        }
+        Tag::Feature => {
+            "It is about a capability. Follow how that capability runs, from where it is triggered \
+             to what it finally does."
+        }
+        Tag::Architecture => {
+            "It is about the repository as a whole. Give the major parts and how they meet, a story \
+             for each, rather than one narrow path through them."
+        }
+        Tag::FeelingLucky => {
+            "It may be a loose wondering. Where it does not name a subject, choose the one you think \
+             most worth walking."
+        }
+    }
+}
+
+pub fn inquiry_path(dir: &Path, unix_ms: u64) -> String {
+    format!("{}/stories/inquiry-{unix_ms}.json", dir.display())
+}
+
+pub fn inquiry_prompt(inquiry: &str, tag: Tag, out: &str) -> String {
+    INQUIRY_PROMPT
+        .replace("{STORIES}", EXAMPLE_STORIES)
+        .replace("{KIND}", "context")
+        .replace("{STEP_RULES}", STEP_RULES)
+        .replace("{CHECK}", CHECK)
+        .replace("{SCOPE}", scope(tag))
+        .replace("{OUT}", out)
+        .replace("{INQUIRY}", inquiry)
 }
 
 pub fn context_path(artifact: &str) -> String {
@@ -1647,11 +1756,75 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_inquiry_chip_names_ctrl_s_and_is_dimmed_while_nothing_submits() {
+    fn the_inquiry_chip_names_ctrl_s_and_is_not_dimmed_now_it_submits() {
         let chip = inquiry_chip();
         assert_eq!(chip.keys, "C-s");
         assert_eq!(chip.word, "AI Ask");
-        assert_eq!(chip.tone, crate::Tone::Dimmed);
+        assert_eq!(chip.tone, crate::Tone::Plain);
+    }
+
+    #[test]
+    fn an_inquiry_set_is_named_for_the_unix_millisecond_it_was_asked() {
+        assert_eq!(
+            inquiry_path(Path::new("/w/.varde"), 1_760_000_000_123),
+            "/w/.varde/stories/inquiry-1760000000123.json"
+        );
+    }
+
+    #[test]
+    fn the_inquiry_prompt_names_the_inquiry_the_tag_and_the_artifact() {
+        let text = inquiry_prompt(
+            "how does a key\nreach the child",
+            Tag::Architecture,
+            "/w/.varde/stories/inquiry-7.json",
+        );
+        assert!(text.contains("how does a key\nreach the child"));
+        assert!(text.contains(scope(Tag::Architecture)));
+        assert!(text.contains("`/w/.varde/stories/inquiry-7.json`"));
+    }
+
+    #[test]
+    fn each_tag_scopes_the_inquiry_in_its_own_words() {
+        let scopes: BTreeSet<&str> = TAGS.iter().map(|(tag, _)| scope(*tag)).collect();
+        assert_eq!(scopes.len(), TAGS.len());
+        let text = inquiry_prompt("why", Tag::Bug, "out.json");
+        for (tag, _) in TAGS.iter().filter(|(tag, _)| *tag != Tag::Bug) {
+            assert!(!text.contains(scope(*tag)), "{tag:?}");
+        }
+    }
+
+    #[test]
+    fn the_inquiry_prompt_asks_for_a_set_with_no_range_at_version_3() {
+        let text = inquiry_prompt("why", Tag::Feature, "out.json");
+        assert!(text.contains("\"protocolVersion\": 3"));
+        assert!(!text.contains("\"range\""));
+        assert!(!text.contains("context.md"));
+        assert!(!text.contains("\"side\": \"old\""));
+        assert!(!text.contains("\"kind\": \"changed\""));
+        assert!(text.contains("`side: \"new\"`"));
+        assert!(text.contains("`kind: \"context\"`"));
+    }
+
+    #[test]
+    fn the_inquiry_prompt_leaves_no_substitution_unfilled() {
+        let text = inquiry_prompt("why", Tag::FeelingLucky, "out.json");
+        assert!(
+            !text.contains("{INQUIRY}") && !text.contains("{OUT}") && !text.contains("{SCOPE}")
+        );
+    }
+
+    #[test]
+    fn the_inquiry_prompt_names_every_field_the_schema_reads() {
+        let text = inquiry_prompt("why", Tag::Bug, "out.json");
+        for field in SCHEMA_FIELDS
+            .iter()
+            .filter(|field| !["range", "base", "head", "spelling"].contains(field))
+        {
+            assert!(
+                text.contains(&format!("\"{field}\":")),
+                "the prompt never names `{field}`"
+            );
+        }
     }
 
     #[test]
@@ -2295,7 +2468,7 @@ mod tests {
     fn authoring_reports_its_own_view_state() {
         let state = State {
             story_set: Set::Authoring {
-                spelling: "main..HEAD".to_string(),
+                spelling: Some("main..HEAD".to_string()),
             },
             ..State::default()
         };
@@ -3154,7 +3327,7 @@ from b
                 status: Some("128".to_string()),
             },
             Set::Authoring {
-                spelling: "main..HEAD".to_string(),
+                spelling: Some("main..HEAD".to_string()),
             },
             Set::AuthoringAbandoned,
         ] {

@@ -314,8 +314,8 @@ pub const CHEATSHEET: [(&str, &str, &[View]); 46] = [
     ("t", "spine / files", &[View::Story]),
     (": story*", "ask the code", &[View::Edit, View::Story]),
     (
-        "Tab Esc C-z C-S-z",
-        "inquiry box: tag, discard, undo, redo",
+        "C-s Tab Esc C-z C-S-z",
+        "inquiry box: ask, tag, discard, undo, redo",
         &[View::Edit, View::Story],
     ),
     (
@@ -516,7 +516,7 @@ pub fn on_key_event(state: &State, drafts: &mut Drafts, event: KeyEvent, at_ms: 
     };
     let mut events = match claimed_everywhere(state, event) {
         Some(events) => events,
-        None => modal_key(state, drafts, event),
+        None => modal_key(state, drafts, event, at_ms),
     };
     for leave in leaving_arrange.into_iter().chain(leaving) {
         events.insert(0, leave);
@@ -645,7 +645,7 @@ fn claimed_everywhere(state: &State, event: KeyEvent) -> Option<Vec<Event>> {
     Some(searching(event))
 }
 
-fn modal_key(state: &State, drafts: &mut Drafts, event: KeyEvent) -> Vec<Event> {
+fn modal_key(state: &State, drafts: &mut Drafts, event: KeyEvent, at_ms: u64) -> Vec<Event> {
     match &state.modal {
         Modal::Palette => match event.code {
             KeyCode::Esc => vec![Event::Cancel],
@@ -698,7 +698,7 @@ fn modal_key(state: &State, drafts: &mut Drafts, event: KeyEvent) -> Vec<Event> 
             name_box(drafts, event)
         }
         Modal::SkillQuestion { .. } => question_box(state.tab_width, event),
-        Modal::Inquiry { .. } => inquiry_box(event),
+        Modal::Inquiry { .. } => inquiry_box(event, at_ms),
         Modal::Breakpoint { field, draft, .. } => breakpoint_box(*field, draft, event),
         Modal::Candidates(_) => candidate_list(state, drafts, event),
         Modal::Stops { .. } => match event.code {
@@ -1150,10 +1150,13 @@ fn comment_body(drafts: &mut Drafts, event: KeyEvent) -> Vec<Event> {
     multiline_key(event)
 }
 
-fn inquiry_box(event: KeyEvent) -> Vec<Event> {
+fn inquiry_box(event: KeyEvent, at_ms: u64) -> Vec<Event> {
     match event.code {
         KeyCode::Esc => vec![Event::Cancel],
         KeyCode::Tab if event.modifiers.is_empty() => vec![Event::NextTag],
+        KeyCode::Char('s') if event.modifiers == KeyModifiers::CTRL => {
+            vec![Event::SubmitInquiry { at_ms }]
+        }
         _ => multiline_key(event),
     }
 }
@@ -2440,6 +2443,15 @@ mod tests {
         ] {
             assert_eq!(press(&state, key), vec![expected], "{key:?}");
         }
+    }
+
+    #[test]
+    fn ctrl_s_submits_the_inquiry_at_the_moment_it_was_pressed() {
+        let ctrl_s = KeyEvent::new(KeyCode::Char('s')).modifiers(KeyModifiers::CTRL);
+        assert_eq!(
+            on_key_event(&asking(), &mut Drafts::default(), ctrl_s, 1_234),
+            vec![Event::SubmitInquiry { at_ms: 1_234 }]
+        );
     }
 
     #[test]
