@@ -191,6 +191,31 @@ Feature: The Single-file editor
 
   # The palette and the Command list
 
+  Scenario: The palette offers Keys, Tools and Quit and no pane or View
+    Given "/home/me/projects/theirs/notes.txt" is a file
+    And Varde opened "/home/me/projects/theirs/notes.txt"
+    When I open the palette
+    Then the palette lists "Keys" under the key "h"
+    And the palette lists "Tools" under the key "v"
+    And the palette lists "Quit" under the key "q"
+    And the palette does not list "Files"
+    And the palette does not list "Terminal"
+    And the palette does not list "Review"
+
+  Scenario: Tools opens from the palette
+    Given "/home/me/projects/theirs/notes.txt" is a file
+    And Varde opened "/home/me/projects/theirs/notes.txt"
+    When I open Tools
+    Then the palette is listing tools
+
+  Scenario: A palette key the Single-file editor doesn't offer does nothing
+    Given "/home/me/projects/theirs/notes.txt" is a file
+    And Varde opened "/home/me/projects/theirs/notes.txt"
+    And I open the palette
+    When I press "r" in the palette
+    Then the current view is Edit
+    And the view palette is shown
+
   # Closing
 
   Scenario: Closing the only Buffer exits Varde and deletes the Sidecar

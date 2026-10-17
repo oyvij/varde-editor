@@ -173,9 +173,28 @@ pub const PALETTE: [(&str, &[(char, &str)]); 5] = [
     ("", &[('q', "Quit")]),
 ];
 
-pub fn palette_rows(screen: u16) -> Vec<Vec<(Option<char>, String)>> {
+const SINGLE_FILE_PALETTE: [char; 3] = ['h', 'v', 'q'];
+
+fn palette(
+    state: &State,
+) -> impl Iterator<Item = (&'static str, Vec<&'static (char, &'static str)>)> + '_ {
+    PALETTE
+        .iter()
+        .map(|(heading, entries)| {
+            let offered = entries
+                .iter()
+                .filter(|(key, _)| {
+                    state.opened == Opened::Workspace || SINGLE_FILE_PALETTE.contains(key)
+                })
+                .collect::<Vec<_>>();
+            (*heading, offered)
+        })
+        .filter(|(_, entries)| !entries.is_empty())
+}
+
+pub fn palette_rows(state: &State, screen: u16) -> Vec<Vec<(Option<char>, String)>> {
     let mut rows: Vec<(Option<char>, String)> = Vec::new();
-    for (heading, entries) in PALETTE {
+    for (heading, entries) in palette(state) {
         if !rows.is_empty() {
             rows.push((None, String::new()));
         }
@@ -226,13 +245,12 @@ pub fn palette_rows(screen: u16) -> Vec<Vec<(Option<char>, String)>> {
 }
 
 pub fn palette_dimmed(state: &State, key: char) -> bool {
-    palette_entry(key) == Some("Knowledge") && state.vault.is_none()
+    palette_entry(state, key) == Some("Knowledge") && state.vault.is_none()
 }
 
-pub fn palette_entry(key: char) -> Option<&'static str> {
-    PALETTE
-        .iter()
-        .flat_map(|(_, entries)| entries.iter())
+pub fn palette_entry(state: &State, key: char) -> Option<&'static str> {
+    palette(state)
+        .flat_map(|(_, entries)| entries)
         .find(|(k, _)| *k == key)
         .map(|(_, entry)| entry.trim())
 }
@@ -2860,7 +2878,7 @@ fn on_key_5(state: &State, mut next: State, event: Event, _wheeled: bool) -> Ans
             Ok(update(&next, chord))
         }
         Event::Key(key) if state.modal == Modal::Palette => {
-            let Some(entry) = palette_entry(key) else {
+            let Some(entry) = palette_entry(state, key) else {
                 return Ok((next, vec![]));
             };
             if entry == "Tools" {
@@ -11372,7 +11390,7 @@ mod tests {
     #[test]
     fn the_palette_fits_the_screen_it_is_drawn_on() {
         for screen in [24u16, 26, 30, 40] {
-            let rows = palette_rows(screen);
+            let rows = palette_rows(&State::default(), screen);
             assert!(
                 rows.len() <= (screen - 2) as usize,
                 "{} rows in a box that draws {} at {screen}",
@@ -11387,29 +11405,56 @@ mod tests {
             }
         }
 
-        let roomy = palette_rows(40);
+        let roomy = palette_rows(&State::default(), 40);
         assert!(roomy.iter().all(|cells| cells.len() == 1));
         assert!(roomy.iter().flatten().any(|(_, row)| row.is_empty()));
         assert_eq!(
             roomy.last().map(|cells| cells[0].1.as_str()),
             Some("   Esc  cancel")
         );
-        assert!(palette_rows(30)
+        assert!(palette_rows(&State::default(), 30)
             .iter()
             .flatten()
             .any(|(_, row)| row == "   Esc  cancel"));
-        assert!(palette_rows(26).iter().all(|cells| cells.len() == 1));
+        assert!(palette_rows(&State::default(), 26)
+            .iter()
+            .all(|cells| cells.len() == 1));
 
-        let paired = palette_rows(24);
+        let paired = palette_rows(&State::default(), 24);
         assert!(paired.iter().any(|cells| cells.len() == 2));
         assert!(paired
             .iter()
             .filter(|cells| cells.len() == 2)
             .all(|cells| cells[0].1.chars().count() == paired[0][0].1.chars().count()));
 
-        let tiny = palette_rows(10);
+        let tiny = palette_rows(&State::default(), 10);
         assert_eq!(tiny.len(), 8);
         assert_eq!(tiny.last(), Some(&vec![(None, "   …".to_string())]));
+    }
+
+    #[test]
+    fn the_single_file_palette_offers_keys_tools_and_quit() {
+        let single_file = State {
+            opened: Opened::SingleFile,
+            ..State::default()
+        };
+        let offered: Vec<(Option<char>, String)> = palette_rows(&single_file, 40)
+            .into_iter()
+            .flatten()
+            .collect();
+        assert_eq!(
+            offered,
+            vec![
+                (None, "  Project".to_string()),
+                (Some('v'), "   (v) Tools".to_string()),
+                (None, String::new()),
+                (None, "  Help".to_string()),
+                (Some('h'), "   (h) Keys".to_string()),
+                (None, String::new()),
+                (Some('q'), "   (q) Quit".to_string()),
+                (None, "   Esc  cancel".to_string()),
+            ]
+        );
     }
 
     #[test]

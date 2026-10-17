@@ -408,7 +408,7 @@ fn draw_modal(frame: &mut Frame, state: &State, chrome: &Chrome) {
         Modal::Palette => overlay(
             frame,
             "COMMANDS",
-            rows_lines(palette_rows(frame.area().height), |key| {
+            rows_lines(palette_rows(state, frame.area().height), |key| {
                 !varde::palette_dimmed(state, key)
             }),
         ),
