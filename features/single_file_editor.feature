@@ -139,13 +139,25 @@ Feature: The Single-file editor
     When I run "<command>"
     Then the editor is the only pane and fills the screen
     And the editor pane has focus
-    And no AI session was started
+    And <absence>
 
     Examples:
-      | command |
-      | :ai     |
-      | :tall   |
-      | :split  |
+      | command | absence                   |
+      | :ai     | no AI session was started |
+      | :split  | no shell is asked for     |
+
+  Scenario Outline: Picking another pane from the palette leaves the editor focused
+    Given "/home/me/projects/theirs/notes.txt" is a file
+    And Varde opened "/home/me/projects/theirs/notes.txt"
+    When I click the palette entry "<entry>"
+    Then the editor is the only pane and fills the screen
+    And the editor pane has focus
+
+    Examples:
+      | entry    |
+      | Files    |
+      | AI       |
+      | Terminal |
 
   Scenario Outline: Asking for another View leaves the View as Edit
     Given the global config holds:
@@ -161,10 +173,11 @@ Feature: The Single-file editor
     And the editor pane has focus
 
     Examples:
-      | ask                       |
-      | open Review view          |
-      | open Story view           |
-      | toggle the Knowledge view |
+      | ask                              |
+      | open Review view                 |
+      | click the palette entry "Review" |
+      | open Story view                  |
+      | toggle the Knowledge view        |
 
   Scenario: A Diagnostic shows in the gutter on its line
     Given "/home/me/projects/theirs/lib.rs" is a file

@@ -1735,6 +1735,9 @@ fn clamp_buffers(next: &mut State) {
 pub fn update(state: &State, event: Event) -> (State, Vec<Effect>) {
     let jump = history::jumped(state, &event);
     let (mut next, mut effects) = route(state, event);
+    if next.opened == Opened::SingleFile {
+        next.focus = Pane::Editor;
+    }
     if next.focus != state.focus {
         next.selected_action = None;
     }
@@ -1815,8 +1818,7 @@ fn route(state: &State, event: Event) -> (State, Vec<Effect>) {
 fn reaches_another_pane_or_view(event: &Event) -> bool {
     matches!(
         event,
-        Event::MoveFocus(_)
-            | Event::OpenReviewView
+        Event::OpenReviewView
             | Event::ToggleKnowledge
             | Event::Story { .. }
             | Event::ToggleRiskList
@@ -8524,7 +8526,6 @@ mod tests {
             ..workspace.clone()
         };
         for event in [
-            Event::MoveFocus(Direction::Left),
             Event::OpenReviewView,
             Event::ToggleKnowledge,
             Event::Story {

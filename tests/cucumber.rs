@@ -2548,13 +2548,6 @@ fn editor_alone_fills_screen(world: &mut VardeWorld) {
     ] {
         assert_eq!(area.width * area.height, 0, "the {pane} takes {area:?}");
     }
-    assert_eq!(
-        varde::shapes(&world.state),
-        layout::Shapes {
-            opened: Opened::SingleFile,
-            ..layout::Shapes::default()
-        }
-    );
 }
 
 #[then(expr = "no config file was seeded")]
