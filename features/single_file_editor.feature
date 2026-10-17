@@ -115,6 +115,67 @@ Feature: The Single-file editor
 
   # The full-screen editor
 
+  Scenario: The editor is the only pane and fills the screen
+    Given "/home/me/projects/theirs/notes.txt" is a file
+    When Varde opens "/home/me/projects/theirs/notes.txt"
+    Then the editor is the only pane and fills the screen
+
+  Scenario Outline: A focus move leaves the editor alone on the screen
+    Given "/home/me/projects/theirs/notes.txt" is a file
+    And Varde opened "/home/me/projects/theirs/notes.txt"
+    When I press "<key>"
+    Then the editor is the only pane and fills the screen
+    And the editor pane has focus
+
+    Examples:
+      | key   |
+      | Alt+h |
+      | Alt+j |
+      | Alt+l |
+
+  Scenario Outline: A Command that would show the AI pane or the Strip leaves the layout unchanged
+    Given "/home/me/projects/theirs/notes.txt" is a file
+    And Varde opened "/home/me/projects/theirs/notes.txt"
+    When I run "<command>"
+    Then the editor is the only pane and fills the screen
+    And the editor pane has focus
+    And no AI session was started
+
+    Examples:
+      | command |
+      | :ai     |
+      | :tall   |
+      | :split  |
+
+  Scenario Outline: Asking for another View leaves the View as Edit
+    Given the global config holds:
+      """
+      [knowledge]
+      enabled = true
+      """
+    And "/home/me/projects/theirs/notes.txt" is a file
+    And Varde opened "/home/me/projects/theirs/notes.txt"
+    When I <ask>
+    Then the current view is Edit
+    And the editor is the only pane and fills the screen
+    And the editor pane has focus
+
+    Examples:
+      | ask                       |
+      | open Review view          |
+      | open Story view           |
+      | toggle the Knowledge view |
+
+  Scenario: A Diagnostic shows in the gutter on its line
+    Given "/home/me/projects/theirs/lib.rs" is a file
+    And Varde opened "/home/me/projects/theirs/lib.rs"
+    And a language server for "rust" is ready
+    When the language server for "rust" publishes diagnostics for "lib.rs":
+      | line | severity | message           |
+      | 3    | error    | cannot find value |
+    Then the gutter mark on line 3 of "lib.rs" is "error"
+    And the gutter has no mark on line 2 of "lib.rs"
+
   # The palette and the Command list
 
   # Closing

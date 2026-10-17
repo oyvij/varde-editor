@@ -2524,6 +2524,39 @@ fn is_single_file_editor(world: &mut VardeWorld) {
     assert_eq!(world.state.opened, Opened::SingleFile);
 }
 
+#[then(expr = "the editor is the only pane and fills the screen")]
+fn editor_alone_fills_screen(world: &mut VardeWorld) {
+    let (width, height) = world.screen();
+    let panes = world.panes();
+    assert_eq!(
+        panes.editor,
+        layout::Area {
+            x: 0,
+            y: 0,
+            width,
+            height
+        }
+    );
+    for (pane, area) in [
+        ("tree", panes.tree),
+        ("AI", panes.ai),
+        ("Strip", panes.strip()),
+        ("Corner", panes.corner),
+        ("band", panes.band),
+        ("step menu", panes.step_menu),
+        ("evaluator", panes.evaluator),
+    ] {
+        assert_eq!(area.width * area.height, 0, "the {pane} takes {area:?}");
+    }
+    assert_eq!(
+        varde::shapes(&world.state),
+        layout::Shapes {
+            opened: Opened::SingleFile,
+            ..layout::Shapes::default()
+        }
+    );
+}
+
 #[then(expr = "no config file was seeded")]
 fn no_config_seeded(world: &mut VardeWorld) {
     let seeded: Vec<&PathBuf> = world

@@ -243,8 +243,9 @@ pub enum PreviewWidth {
     Widened,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Opened {
+    #[default]
     Workspace,
     SingleFile,
 }
@@ -1789,6 +1790,9 @@ pub fn update(state: &State, event: Event) -> (State, Vec<Effect>) {
 }
 
 fn route(state: &State, event: Event) -> (State, Vec<Effect>) {
+    if state.opened == Opened::SingleFile && reaches_another_pane_or_view(&event) {
+        return (state.clone(), vec![]);
+    }
     let mut next = state.clone();
     next.refusal = None;
     let wheeled = matches!(event, Event::Scroll { .. } | Event::ScrollHover(_));
@@ -1806,6 +1810,30 @@ fn route(state: &State, event: Event) -> (State, Vec<Effect>) {
         Err(declined) => declined,
     };
     unreachable!("no group answers {:?}", declined.1)
+}
+
+fn reaches_another_pane_or_view(event: &Event) -> bool {
+    matches!(
+        event,
+        Event::MoveFocus(_)
+            | Event::OpenReviewView
+            | Event::ToggleKnowledge
+            | Event::Story { .. }
+            | Event::ToggleRiskList
+            | Event::ToggleBuffersList
+            | Event::ToggleCursorHistory
+            | Event::ToggleBreakpointList
+            | Event::ToggleDiagnosticList
+            | Event::ToggleConflictList
+            | Event::ShowDiagnostics(_)
+            | Event::ToggleTallAi
+            | Event::StartAi { .. }
+            | Event::OpenSkills
+            | Event::SplitTerminal
+            | Event::ShowGroup(_)
+            | Event::DragDivider(_)
+            | Event::DragAiDivider(_)
+    )
 }
 
 fn opens_a_chord(state: &State) -> bool {
@@ -7430,7 +7458,7 @@ fn open_file(mut next: State, path: PathBuf) -> (State, Vec<Effect>) {
 }
 
 fn switch_view(state: &State, view: View) -> (State, Vec<Effect>) {
-    if view == state.view {
+    if view == state.view || state.opened == Opened::SingleFile {
         return (state.clone(), vec![]);
     }
     enter_view(state, view)
@@ -7666,6 +7694,7 @@ pub fn group_tabs(state: &State) -> Vec<Tab> {
 
 pub fn shapes(state: &State) -> layout::Shapes {
     layout::Shapes {
+        opened: state.opened,
         ai: state.ai_pane,
         slot: state.ai_slot,
         corner: state.corner,
@@ -8484,6 +8513,52 @@ mod tests {
             varde_home: PathBuf::from("/h/.varde"),
             vault: Some(PathBuf::from("/h/.varde/knowledge")),
             ..State::default()
+        }
+    }
+
+    #[test]
+    fn the_single_file_editor_ignores_what_would_reach_another_pane_or_view() {
+        let workspace = opened(&workspace(), "/w/notes.txt");
+        let single_file = State {
+            opened: Opened::SingleFile,
+            ..workspace.clone()
+        };
+        for event in [
+            Event::MoveFocus(Direction::Left),
+            Event::OpenReviewView,
+            Event::ToggleKnowledge,
+            Event::Story {
+                explicit: None,
+                force: false,
+            },
+            Event::ToggleRiskList,
+            Event::ToggleBuffersList,
+            Event::ToggleCursorHistory,
+            Event::ToggleBreakpointList,
+            Event::ToggleDiagnosticList,
+            Event::ToggleConflictList,
+            Event::ShowDiagnostics(lsp::Severity::Error),
+            Event::ToggleTallAi,
+            Event::StartAi {
+                command: Some("claude".to_string()),
+                force: false,
+            },
+            Event::OpenSkills,
+            Event::SplitTerminal,
+            Event::ShowGroup(layout::Group::Debug),
+            Event::DragDivider(50),
+            Event::DragAiDivider(50),
+        ] {
+            assert_ne!(
+                update(&workspace, event.clone()),
+                (workspace.clone(), vec![]),
+                "{event:?} does nothing in a workspace either"
+            );
+            assert_eq!(
+                update(&single_file, event.clone()),
+                (single_file.clone(), vec![]),
+                "{event:?}"
+            );
         }
     }
 
