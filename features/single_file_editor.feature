@@ -232,6 +232,15 @@ Feature: The Single-file editor
     When I press Enter in the command line
     Then the command line answered with no events
 
+  Scenario: :e reads the Buffer from disk again
+    Given "/home/me/projects/theirs/notes.txt" is a file
+    And Varde opened "/home/me/projects/theirs/notes.txt"
+    And "notes.txt" is open in the editor with unsaved edits
+    And "notes.txt" is changed on disk
+    When I run ":e"
+    Then the editor shows the version on disk
+    And "notes.txt" is not flagged as changed on disk
+
   # Closing
 
   Scenario: Closing the only Buffer exits Varde and deletes the Sidecar
