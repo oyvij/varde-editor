@@ -990,6 +990,7 @@ pub enum PathStatus {
     #[default]
     Folder,
     File,
+    NewFile,
     Missing,
     NotAFolder,
     Unreadable,
@@ -1402,7 +1403,7 @@ pub fn start(input: &Startup) -> Result<(State, Config, Vec<Effect>), StartupErr
 
 fn path_refusal(status: PathStatus) -> Option<&'static str> {
     match status {
-        PathStatus::Folder | PathStatus::File => None,
+        PathStatus::Folder | PathStatus::File | PathStatus::NewFile => None,
         PathStatus::Missing => Some("no-such-folder"),
         PathStatus::NotAFolder => Some("not-a-folder"),
         PathStatus::Unreadable => Some("folder-not-readable"),
@@ -1534,7 +1535,7 @@ fn initial_state(
     update: Option<String>,
 ) -> State {
     let opened = match input.path_status {
-        PathStatus::File => Opened::SingleFile,
+        PathStatus::File | PathStatus::NewFile => Opened::SingleFile,
         _ => Opened::Workspace,
     };
     let mut state = State {

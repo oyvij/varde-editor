@@ -20,8 +20,8 @@ Feature: Opening Varde on a folder
     Then the workspace root is "/home/me/projects/fresh"
     And the file tree is empty
 
-  Scenario: A path that does not exist stops Varde
-    Given "/home/me/projects/nope" does not exist
+  Scenario: A path that does not exist, in a folder that does not exist either, stops Varde
+    Given neither "/home/me/projects/nope" nor its folder exists
     When Varde opens "/home/me/projects/nope"
     Then Varde refuses to start
     And the reason is "no-such-folder"

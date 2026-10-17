@@ -74,8 +74,8 @@ fn main() -> Result<()> {
         return Ok(());
     }
     let named = args.path.as_deref().unwrap_or(Path::new("."));
-    let path_status = path_status(named);
-    let path = std::fs::canonicalize(named).unwrap_or_else(|_| named.to_path_buf());
+    let path = canonical(named);
+    let path_status = path_status(&path);
     let (root, sidecar) = root_and_sidecar(args.path.as_deref(), path_status, &path);
     sweep();
 
@@ -132,7 +132,7 @@ fn root_and_sidecar(
     path: &Path,
 ) -> (PathBuf, Option<PathBuf>) {
     match (named, status) {
-        (_, PathStatus::File) => {
+        (_, PathStatus::File | PathStatus::NewFile) => {
             let folder = path.parent().unwrap_or(path).to_path_buf();
             let sidecar = sidecar(&folder);
             (folder, Some(sidecar))
@@ -182,9 +182,27 @@ fn flatten(root: &Path) -> String {
         .replace(std::path::MAIN_SEPARATOR, "%")
 }
 
+fn canonical(named: &Path) -> PathBuf {
+    std::fs::canonicalize(named)
+        .or_else(|error| match (named.parent(), named.file_name()) {
+            (Some(folder), Some(name)) => match folder.as_os_str().is_empty() {
+                true => std::fs::canonicalize("."),
+                false => std::fs::canonicalize(folder),
+            }
+            .map(|folder| folder.join(name)),
+            _ => Err(error),
+        })
+        .unwrap_or_else(|_| named.to_path_buf())
+}
+
 fn path_status(path: &Path) -> PathStatus {
     match std::fs::metadata(path) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => PathStatus::Missing,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            match path.parent().is_some_and(Path::is_dir) {
+                true => PathStatus::NewFile,
+                false => PathStatus::Missing,
+            }
+        }
         Err(_) => PathStatus::Unreadable,
         Ok(meta) if meta.is_file() => match std::fs::File::open(path) {
             Ok(_) => PathStatus::File,
@@ -4126,9 +4144,9 @@ fn queue_story_file(path: &Path, state: &State, queue: &mut VecDeque<Event>) {
 #[cfg(test)]
 mod tests {
     use super::{
-        alive, authorship, checkout, committed, describe, file_hunks, flatten, found, notice_text,
-        path_status, pid_of, range_ends, read_branches, rewrite, root_and_sidecar, samples,
-        short_date, sidecar, space, stitch, watched_path, Args, ClapParser,
+        alive, authorship, canonical, checkout, committed, describe, file_hunks, flatten, found,
+        notice_text, path_status, pid_of, range_ends, read_branches, rewrite, root_and_sidecar,
+        samples, short_date, sidecar, space, stitch, watched_path, Args, ClapParser,
     };
     use notify::event::{CreateKind, DataChange, ModifyKind, RenameMode};
     use std::collections::BTreeMap;
@@ -4272,6 +4290,44 @@ mod tests {
     }
 
     #[test]
+    fn a_new_file_is_rooted_at_its_folder_like_an_existing_one() {
+        let file = Path::new("/home/me/projects/theirs/new.txt");
+        assert_eq!(
+            root_and_sidecar(Some(file), PathStatus::NewFile, file),
+            root_and_sidecar(Some(file), PathStatus::File, file)
+        );
+    }
+
+    #[test]
+    fn a_missing_path_is_a_new_file_only_when_its_folder_exists() {
+        let dir = tempfile::tempdir().expect("a temporary directory");
+        assert_eq!(
+            path_status(&dir.path().join("new.txt")),
+            PathStatus::NewFile
+        );
+        assert_eq!(
+            path_status(&dir.path().join("nope").join("new.txt")),
+            PathStatus::Missing
+        );
+    }
+
+    #[test]
+    fn a_new_file_is_named_by_its_folder_resolved_and_its_own_name() {
+        let dir = tempfile::tempdir().expect("a temporary directory");
+        let folder = fs::canonicalize(dir.path()).expect("a resolved folder");
+        assert_eq!(
+            canonical(&dir.path().join(".").join("new.txt")),
+            folder.join("new.txt")
+        );
+        assert_eq!(
+            canonical(Path::new("new.txt")),
+            fs::canonicalize(".")
+                .expect("the current folder")
+                .join("new.txt")
+        );
+    }
+
+    #[test]
     fn a_named_folder_has_no_sidecar_and_no_name_has_one() {
         let folder = Path::new("/home/me/projects/varde");
         assert_eq!(
@@ -4303,10 +4359,9 @@ mod tests {
     }
 
     #[test]
-    fn folders_missing_paths_and_devices_keep_their_classification() {
+    fn folders_and_devices_keep_their_classification() {
         let dir = tempfile::tempdir().expect("a temporary directory");
         assert_eq!(path_status(dir.path()), PathStatus::Folder);
-        assert_eq!(path_status(&dir.path().join("nope")), PathStatus::Missing);
         assert_eq!(path_status(Path::new("/dev/null")), PathStatus::NotAFolder);
     }
 

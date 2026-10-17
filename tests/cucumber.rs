@@ -2361,10 +2361,19 @@ fn folder_exists(world: &mut VardeWorld, path: String) {
 
 #[given(expr = "{string} does not exist")]
 fn path_missing(world: &mut VardeWorld, path: String) {
-    match Path::new(&path).starts_with(Path::new(HOME).join(varde::VARDE_DIR)) {
-        true => world.files.retain(|file, _| !file.starts_with(&path)),
-        false => world.startup.path_status = PathStatus::Missing,
-    }
+    world.files.retain(|file, _| !file.starts_with(&path));
+}
+
+#[given(expr = "neither {string} nor its folder exists")]
+fn path_and_folder_missing(world: &mut VardeWorld, _path: String) {
+    world.startup.path_status = PathStatus::Missing;
+}
+
+#[given(expr = "{string} does not exist but its folder does")]
+fn new_file(world: &mut VardeWorld, path: String) {
+    world.startup.path_status = PathStatus::NewFile;
+    world.startup.sidecar = Some(PathBuf::from(SIDECAR));
+    world.files.insert(PathBuf::from(path), String::new());
 }
 
 #[given(expr = "{string} is a file")]

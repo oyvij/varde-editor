@@ -77,6 +77,41 @@ Feature: The Single-file editor
 
   # A new file
 
+  Scenario: A missing file in an existing folder opens one empty Buffer and writes nothing
+    Given "/home/me/projects/theirs/new.txt" does not exist but its folder does
+    When Varde opens "/home/me/projects/theirs/new.txt"
+    Then Varde is the Single-file editor
+    And the open buffers are:
+      | new.txt |
+    And the buffer holds ""
+    And no file was written next to the file
+
+  Scenario: Saving the new Buffer writes the file at the named path
+    Given "/home/me/projects/theirs/new.txt" does not exist but its folder does
+    And Varde opened "/home/me/projects/theirs/new.txt"
+    And the editor mode is insert
+    And I type "hello" in the editor
+    And the editor mode is normal
+    When I run ":w"
+    Then "new.txt" was written with:
+      """
+      hello
+      """
+
+  Scenario: Quitting without saving the new Buffer writes nothing
+    Given "/home/me/projects/theirs/new.txt" does not exist but its folder does
+    And Varde opened "/home/me/projects/theirs/new.txt"
+    When I quit
+    Then Varde exits
+    And the Sidecar was deleted
+    And no file was written next to the file
+
+  Scenario: A missing file whose folder is missing too stops Varde
+    Given neither "/home/me/projects/nope/new.txt" nor its folder exists
+    When Varde opens "/home/me/projects/nope/new.txt"
+    Then Varde refuses to start
+    And the reason is "no-such-folder"
+
   # The full-screen editor
 
   # The palette and the Command list
