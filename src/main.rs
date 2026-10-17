@@ -1618,7 +1618,6 @@ fn render(terminal: &mut Screen, state: &State, edge: &mut Edge) -> Result<()> {
                 command: edge.drafts.command.as_ref(),
                 ai_draft: &edge.drafts.ai,
                 comment_kind: &edge.drafts.comment_kind,
-                filter_draft: edge.drafts.filter.as_deref(),
                 tokens: &edge.highlighted.2,
                 run_marks: &edge.run_marks,
                 diff_new: &edge.diff_sides.0,

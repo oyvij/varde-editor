@@ -151,7 +151,7 @@ until you open it. Varde remembers which folders are expanded per project.
 
 | Key | Effect |
 |---|---|
-| `↑` `↓` | move the Row selection; landing on a file previews it in the editor without leaving the tree |
+| `↑` `↓` `j` `k` | move the Row selection; landing on a file previews it in the editor without leaving the tree |
 | `Enter` | expand or collapse a folder; open a file and move focus to the editor |
 | click | the same, but focus stays in the tree |
 | `/` | put the keyboard in the filter box |
@@ -167,9 +167,24 @@ until you open it. Varde remembers which folders are expanded per project.
 only those. Only files match. Folders appear when they lead to a match, opened so the match is
 visible, and the tree goes back to how it was when the filter clears. The filter searches the whole
 project, not only the folders you have opened, and skips `.git`. The box shows the best match
-completed ahead of what you typed, and narrows as you type. `Enter` selects that match in the tree,
-opens the folders down to it, and clears the filter. It does not open the file, so you decide what
-to do with it. `Esc` leaves and clears. With no match, the tree says so rather than going blank.
+completed ahead of what you typed, and narrows as you type. `Enter`, `↓` or `Tab` selects that
+match in the tree, opens the folders down to it and moves the keyboard into the filtered list. The
+filter stays on, and no file opens, so you decide what to do with the match. With nothing matching
+they do nothing and the keyboard stays in the box; in an empty box they close it. With no match,
+the tree says so rather than going blank.
+
+In the filtered list the tree works as usual on the rows the filter shows. `↑` `↓` `j` `k` walk
+every row, folders included. `Enter` on a file opens it in the editor and the tree stays filtered, so
+coming back to the tree you can open the next match. On a folder, `Enter` does nothing, so the folders leading to the matches
+stay open. `n`, `N`, `d`, `c` and `-` act on the selected row; a file you create waits for the next
+filter.
+
+The box has the keyboard only while you type in it. Click another pane, press a focus key or open
+the palette, and your keys go there while the tree stays filtered. Coming back to the tree puts
+the keyboard in the list, not the box; `/` goes back into the box with the query as you left it,
+and typing starts again from the best match. An empty box closes when the keyboard leaves it.
+`Esc`, in the box or in the filtered list, is how you clear the filter: it keeps the selected row
+and opens the folders down to it.
 
 ### Tree actions
 

@@ -475,6 +475,11 @@ fn pressed(
             return vec![Event::ShowDiagnostics(severity)];
         }
     }
+    let border = panes.tree.bottom().saturating_sub(1);
+    let filter_box = border.saturating_sub(tree::filter_rows(state.view) as u16)..border;
+    if pane == Pane::Tree && filter_box.contains(&input.row) {
+        return vec![Event::ClickPane(Pane::Tree), Event::OpenFilter];
+    }
     let row_index = row_index(state, panes, input.row);
     match (pane, action_at(state, panes, input.column, input.row)) {
         (Pane::Tree, Some(action)) => vec![Event::RowAction(action)],
@@ -1751,6 +1756,59 @@ mod tests {
         assert_eq!(click(&searching, 10, top + 1), vec![Event::SelectHit(2)]);
 
         assert_eq!(click(&searching, 10, top + 15), vec![], "the box's chrome");
+    }
+
+    fn filtered_on(focus: Pane, keys: crate::FilterKeys) -> State {
+        let mut state = State {
+            focus: Pane::Tree,
+            ..workspace()
+        };
+        for event in [
+            Event::OpenFilter,
+            Event::Filter("b".to_string()),
+            Event::Indexed {
+                walk: 1,
+                files: vec!["src/b.rs".to_string(), "a.rs".to_string()],
+                done: true,
+            },
+        ] {
+            state = crate::update(&state, event).0;
+        }
+        State {
+            focus,
+            filter_keys: keys,
+            ..state
+        }
+    }
+
+    fn clicked(state: &State, column: u16, row: u16) -> State {
+        click(state, column, row)
+            .into_iter()
+            .fold(state.clone(), |state, event| crate::update(&state, event).0)
+    }
+
+    #[test]
+    fn a_click_on_the_filter_box_puts_the_keyboard_in_it() {
+        let tree = panes(120, 26, 30, None, 0, 0, Shapes::default()).tree;
+        let away = filtered_on(Pane::Editor, crate::FilterKeys::Away);
+        for row in [tree.bottom() - 3, tree.bottom() - 2] {
+            let typing = clicked(&away, 5, row);
+            assert_eq!(typing.focus, Pane::Tree, "row {row}");
+            assert_eq!(typing.filter_keys, crate::FilterKeys::Box, "row {row}");
+            assert_eq!(typing.filter, "b", "row {row}");
+            assert_eq!(typing.tree_selection, away.tree_selection, "row {row}");
+        }
+        assert!(!click(&away, 5, tree.bottom() - 1).contains(&Event::OpenFilter));
+    }
+
+    #[test]
+    fn a_click_on_a_filtered_row_puts_the_keyboard_in_the_list_on_that_row() {
+        let typing = filtered_on(Pane::Tree, crate::FilterKeys::Box);
+        let picked = clicked(&typing, 5, 2);
+        assert_eq!(picked.focus, Pane::Tree);
+        assert_eq!(picked.filter_keys, crate::FilterKeys::Away);
+        assert_eq!(picked.tree_selection, Some(PathBuf::from("/w/src/b.rs")));
+        assert_eq!(picked.filter, "b");
     }
 
     #[test]

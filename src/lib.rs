@@ -437,7 +437,6 @@ pub enum Event {
     MoveFocus(Direction),
     MoveSelection(Direction),
     MoveAction(Direction),
-    StepFilter(Direction),
     Activate,
     Bytes(Vec<u8>),
     Pasted(String),
@@ -465,6 +464,8 @@ pub enum Event {
     StepBuffer(Direction),
     ShowBuffer(PathBuf),
     Filter(String),
+    OpenFilter,
+    CloseFilter,
     OpenSearch,
     SearchWordUnderCursor,
     SearchSelection,
@@ -750,6 +751,12 @@ pub enum FindKeys {
     Query,
     Icon(FindIcon),
     Replace(ReplaceField),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FilterKeys {
+    Away,
+    Box,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1066,6 +1073,7 @@ pub struct State {
     pub expanded: BTreeSet<PathBuf>,
     pub ignored: BTreeSet<PathBuf>,
     pub filter: String,
+    pub filter_keys: FilterKeys,
     pub index: filter::Index,
     pub buffers: BTreeMap<PathBuf, Buffer>,
     pub current_buffer: Option<PathBuf>,
@@ -1306,6 +1314,7 @@ impl Default for State {
             expanded: BTreeSet::new(),
             ignored: BTreeSet::new(),
             filter: String::new(),
+            filter_keys: FilterKeys::Away,
             index: filter::Index::default(),
             buffers: BTreeMap::new(),
             current_buffer: None,
@@ -1494,6 +1503,9 @@ fn settle(mut next: State, mut effects: Vec<Effect>, wheeled: bool) -> (State, V
         if next.focus != Pane::Editor || next.search.is_some() || next.modal != Modal::None {
             find.keys = FindKeys::Away;
         }
+    }
+    if next.focus != Pane::Tree || next.modal != Modal::None {
+        next.filter_keys = FilterKeys::Away;
     }
     let showing_lines = next.focus == Pane::Evaluator
         || (next.focus == Pane::Editor && next.diff.is_none() && !previewing(&next));
@@ -2785,6 +2797,8 @@ fn on_key_4(state: &State, next: State, event: Event, _wheeled: bool) -> Answere
             let action = match key {
                 '-' => return Ok(update(state, Event::Trigger(Action::BackToRoot, None))),
                 'c' => return Ok(update(state, Event::CollapseTree)),
+                'j' => return Ok(update(state, Event::MoveSelection(Direction::Down))),
+                'k' => return Ok(update(state, Event::MoveSelection(Direction::Up))),
                 'n' => "new-file",
                 'N' => "new-directory",
                 'd' => "delete",
@@ -3140,6 +3154,7 @@ fn on_click_row(state: &State, mut next: State, event: Event, wheeled: bool) -> 
     let effects = match event {
         Event::ClickRow(path) => {
             next.focus = Pane::Tree;
+            next.filter_keys = FilterKeys::Away;
             next.tree_selection = Some(path.clone());
             if state.view == View::Review {
                 next.focus = Pane::Editor;
@@ -3892,6 +3907,21 @@ fn on_complete_search(state: &State, mut next: State, event: Event, wheeled: boo
 
         Event::Filter(text) => filter::narrow(&mut next, text),
 
+        Event::OpenFilter => {
+            next.filter_keys = FilterKeys::Box;
+            vec![]
+        }
+
+        Event::CloseFilter => {
+            let moved = !state.filter.is_empty() && state.tree_selection != state.index.opened_on;
+            filter::narrow(&mut next, String::new());
+            next.filter_keys = FilterKeys::Away;
+            match next.tree_selection.clone() {
+                Some(selected) if moved => unfold(&mut next, &selected),
+                _ => vec![],
+            }
+        }
+
         other => return Err((next, other)),
     };
     Ok(settle(next, effects, wheeled))
@@ -3899,24 +3929,25 @@ fn on_complete_search(state: &State, mut next: State, event: Event, wheeled: boo
 
 fn on_accept_filter(state: &State, mut next: State, event: Event, wheeled: bool) -> Answered {
     let effects = match event {
-        Event::AcceptFilter => {
-            let chosen = filter::chosen(state).map(str::to_string);
-            filter::narrow(&mut next, String::new());
-            match chosen {
-                Some(relative) => {
-                    next.tree_selection = Some(state.shown_root().join(&relative));
-                    let parts: Vec<&str> = relative.split('/').collect();
-                    let mut folder = state.shown_root().to_path_buf();
-                    let mut reads = Vec::new();
-                    for part in &parts[..parts.len() - 1] {
-                        folder = folder.join(part);
-                        reads.push(Effect::ReadFolder(folder.clone()));
-                    }
-                    reads
+        Event::AcceptFilter => match filter::chosen(state) {
+            Some(relative) => {
+                next.filter_keys = FilterKeys::Away;
+                next.tree_selection = Some(state.shown_root().join(relative));
+                let parts: Vec<&str> = relative.split('/').collect();
+                let mut folder = state.shown_root().to_path_buf();
+                let mut reads = Vec::new();
+                for part in &parts[..parts.len() - 1] {
+                    folder = folder.join(part);
+                    reads.push(Effect::ReadFolder(folder.clone()));
                 }
-                None => vec![],
+                reads
             }
-        }
+            None if state.filter.is_empty() => {
+                next.filter_keys = FilterKeys::Away;
+                vec![]
+            }
+            None => vec![],
+        },
 
         Event::EditorBackspace => {
             if state.diff.is_none() && state.walking.is_none() {
@@ -6494,10 +6525,6 @@ fn on_move_selection_2(state: &State, mut next: State, event: Event, wheeled: bo
 
 fn on_move_selection_3(state: &State, mut next: State, event: Event, wheeled: bool) -> Answered {
     let effects = match event {
-        Event::StepFilter(direction) => {
-            filter::step(state, &mut next, direction);
-            vec![]
-        }
         Event::MoveSelection(direction) => {
             let rows = tree::visible_rows(state);
             if rows.is_empty() {
@@ -6769,6 +6796,7 @@ fn on_activate_3(state: &State, next: State, event: Event, _wheeled: bool) -> An
 fn on_activate_4(state: &State, mut next: State, event: Event, wheeled: bool) -> Answered {
     let effects = match event {
         Event::Activate => match selected_row(state) {
+            Some(row) if row.is_dir && !state.filter.is_empty() => vec![],
             Some(row) if row.is_dir && row.expanded => {
                 next.expanded.remove(&row.path);
                 vec![]
@@ -8407,7 +8435,7 @@ pub(crate) fn editor_inserting(state: &State) -> bool {
 
 fn selected_row(state: &State) -> Option<tree::Row> {
     let selection = state.tree_selection.as_ref()?;
-    tree::rows(state)
+    tree::visible_rows(state)
         .into_iter()
         .find(|row| &row.path == selection)
 }
@@ -8487,6 +8515,36 @@ mod tests {
             walk: filtering.index.walk + 2,
             root: PathBuf::from("/w"),
         }));
+    }
+
+    #[test]
+    fn l_and_h_on_a_folder_in_the_filtered_list_leave_the_folders_as_they_are() {
+        let tree = State {
+            focus: Pane::Tree,
+            ..workspace()
+        };
+        let filtering = update(&tree, Event::Filter("main".to_string())).0;
+        let indexed = update(
+            &filtering,
+            Event::Indexed {
+                walk: filtering.index.walk,
+                files: vec!["src/main.rs".to_string()],
+                done: true,
+            },
+        )
+        .0;
+        let listed = State {
+            filter_keys: FilterKeys::Away,
+            tree_selection: Some(PathBuf::from("/w/src")),
+            ..indexed
+        };
+        for key in ['l', 'h'] {
+            let (next, effects) = update(&listed, Event::Key(key));
+            assert_eq!(effects, vec![]);
+            assert_eq!(next.expanded, listed.expanded);
+            assert_eq!(next.filter, "main");
+            assert_eq!(next.tree_selection, listed.tree_selection);
+        }
     }
 
     #[test]

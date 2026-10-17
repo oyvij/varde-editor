@@ -12,8 +12,8 @@ use varde::lsp;
 use varde::minimap;
 use varde::tree::Row;
 use varde::{
-    filter, keys, mark, palette_rows, reading, review, story, tools, tree, Mark, Modal, Pane,
-    Place, Selection, State, View,
+    filter, keys, mark, palette_rows, reading, review, story, tools, tree, FilterKeys, Mark, Modal,
+    Pane, Place, Selection, State, View,
 };
 
 const DIRTY: Color = Color::LightYellow;
@@ -48,7 +48,6 @@ pub struct Chrome<'a> {
     pub command: Option<&'a varde::keys::CommandLine>,
     pub ai_draft: &'a str,
     pub comment_kind: &'a str,
-    pub filter_draft: Option<&'a str>,
     pub tokens: &'a [Vec<highlight::Token>],
     pub run_marks: &'a [usize],
     pub diff_new: &'a [Vec<highlight::Token>],
@@ -111,7 +110,7 @@ pub fn draw(
     chrome: Chrome,
 ) {
     let areas = areas(frame.area(), state);
-    draw_list_pane(frame, state, rows, &areas, &chrome);
+    draw_list_pane(frame, state, rows, &areas);
     let typing = chrome.command.map(|line| format!(":{}█", line.text));
     let finding = state
         .find
@@ -273,11 +272,11 @@ pub fn draw(
     draw_modal(frame, state, &chrome);
 }
 
-fn draw_list_pane(frame: &mut Frame, state: &State, rows: &[Row], areas: &Areas, chrome: &Chrome) {
+fn draw_list_pane(frame: &mut Frame, state: &State, rows: &[Row], areas: &Areas) {
     match state.view {
         View::Edit | View::Knowledge => {
             frame.render_widget(tree_widget(state, rows, areas.tree.width), areas.tree);
-            filter_box(frame, state, areas.tree, chrome.filter_draft);
+            filter_box(frame, state, areas.tree);
         }
         View::Review => frame.render_widget(review_widget(state, areas.tree.width), areas.tree),
         View::Story => match state.story_listing {
@@ -1319,12 +1318,12 @@ fn tree_lines(state: &State, rows: &[Row], width: u16) -> Vec<Line<'static>> {
         .collect()
 }
 
-fn filter_box(frame: &mut Frame, state: &State, area: Rect, draft: Option<&str>) {
+fn filter_box(frame: &mut Frame, state: &State, area: Rect) {
     if area.height < 4 {
         return;
     }
-    let active = draft.is_some();
-    let draft = draft.unwrap_or(&state.filter);
+    let active = state.filter_keys == FilterKeys::Box;
+    let query = &state.filter;
     let inner = area.width.saturating_sub(2);
     let rule = Rect {
         x: area.x + 1,
@@ -1348,13 +1347,13 @@ fn filter_box(frame: &mut Frame, state: &State, area: Rect, draft: Option<&str>)
     let completion = filter::chosen(state)
         .map(|chosen| chosen.rsplit('/').next().unwrap_or(chosen).to_string())
         .filter(|name| {
-            name.to_lowercase().starts_with(&draft.to_lowercase()) && name.len() > draft.len()
+            name.to_lowercase().starts_with(&query.to_lowercase()) && name.len() > query.len()
         })
-        .map(|name| name[draft.len()..].to_string())
+        .map(|name| name[query.len()..].to_string())
         .unwrap_or_default();
     let hint = if state.index.walking {
         format!(" {}", varde::spinner(state.tick))
-    } else if active || !draft.is_empty() {
+    } else if active || !query.is_empty() {
         String::new()
     } else {
         "filter files".to_string()
@@ -1365,14 +1364,14 @@ fn filter_box(frame: &mut Frame, state: &State, area: Rect, draft: Option<&str>)
                 "/",
                 Style::default().fg(if active { Color::Cyan } else { Color::DarkGray }),
             ),
-            Span::raw(draft.to_string()),
+            Span::raw(query.to_string()),
             Span::styled(completion, Style::default().fg(Color::DarkGray)),
             Span::styled(hint, Style::default().fg(Color::DarkGray)),
         ])),
         field,
     );
     if active {
-        frame.set_cursor_position((field.x + 1 + draft.chars().count() as u16, field.y));
+        frame.set_cursor_position((field.x + 1 + query.chars().count() as u16, field.y));
     }
 }
 

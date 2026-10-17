@@ -19,8 +19,8 @@ use varde::tools;
 use varde::tree::{self, Entry};
 use varde::tree_actions::{Action, Target};
 use varde::{
-    layout, mouse, reading, update, DiffLine, Direction, Effect, Event, Modal, Pane, Place,
-    ReplaceFailed, Selection, State, Tap, View, PALETTE,
+    layout, mouse, reading, update, DiffLine, Direction, Effect, Event, FilterKeys, Modal, Pane,
+    Place, ReplaceFailed, Selection, State, Tap, View, PALETTE,
 };
 
 const POINTER: Place = Place { line: 3, column: 7 };
@@ -4131,7 +4131,7 @@ fn holds_reviews(world: &mut VardeWorld, dir: String, expected: usize) {
 
 fn parse_pane(name: &str) -> Pane {
     match name {
-        "file tree" => Pane::Tree,
+        "file tree" | "tree" => Pane::Tree,
         "editor" => Pane::Editor,
         "terminal" => Pane::Terminal,
         "AI" => Pane::Ai,
@@ -7044,7 +7044,32 @@ fn project_gains(world: &mut VardeWorld, path: String) {
 #[when(expr = "I filter the tree for {string}")]
 #[when(expr = "I filter by {string}")]
 fn filter_by(world: &mut VardeWorld, text: String) {
+    if world.state.filter_keys != FilterKeys::Box {
+        world.state.focus = Pane::Tree;
+        route_key(world, "/", 0);
+    }
     world.send(Event::Filter(text));
+}
+
+#[then(expr = "the filter query is {string}")]
+fn filter_query_is(world: &mut VardeWorld, text: String) {
+    assert_eq!(world.state.filter, text);
+}
+
+#[then("the filter box has the keyboard")]
+fn filter_box_has_keyboard(world: &mut VardeWorld) {
+    assert_eq!(world.state.filter_keys, FilterKeys::Box);
+}
+
+#[then("the filter box does not have the keyboard")]
+fn filter_box_lacks_keyboard(world: &mut VardeWorld) {
+    assert_eq!(world.state.filter_keys, FilterKeys::Away);
+}
+
+#[then("the filter box is closed")]
+fn filter_box_closed(world: &mut VardeWorld) {
+    assert_eq!(world.state.filter_keys, FilterKeys::Away);
+    assert!(world.state.filter.is_empty());
 }
 
 #[then("the filtered files are:")]
@@ -7094,29 +7119,9 @@ fn tree_not_filtered(world: &mut VardeWorld) {
     assert!(world.state.filter.is_empty());
 }
 
-#[given(expr = "I step {word} through the matches")]
-#[when(expr = "I step {word} through the matches")]
-fn step_through_matches(world: &mut VardeWorld, way: String) {
-    world.send(Event::StepFilter(match way.as_str() {
-        "down" => Direction::Down,
-        "up" => Direction::Up,
-        other => panic!("no way {other:?}"),
-    }));
-}
-
-#[then(expr = "no row is highlighted")]
-fn no_row_highlighted(world: &mut VardeWorld) {
-    assert_eq!(tree::highlighted(&world.state), None);
-}
-
 #[then(expr = "the highlighted row is {string}")]
 fn highlighted_row_is(world: &mut VardeWorld, path: String) {
     assert_eq!(tree::highlighted(&world.state), Some(abs(world, &path)));
-}
-
-#[when(expr = "I accept the filter")]
-fn accept_filter(world: &mut VardeWorld) {
-    world.send(Event::AcceptFilter);
 }
 
 #[then(expr = "the tree filter state is {string}")]

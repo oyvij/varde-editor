@@ -1,4 +1,5 @@
-use crate::{Direction, Effect, State};
+use crate::{Effect, State};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 pub fn score(needle: &str, haystack: &str) -> Option<i32> {
@@ -39,7 +40,7 @@ pub struct Index {
     pub walking: bool,
     pub files: Arc<Vec<String>>,
     pub ranked: Arc<Vec<Ranked>>,
-    pub pick: Option<String>,
+    pub opened_on: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -61,10 +62,11 @@ pub fn narrow(next: &mut State, text: String) -> Vec<Effect> {
         return vec![];
     }
     if opening {
-        return reindex(next);
+        let effects = reindex(next);
+        next.index.opened_on = next.tree_selection.clone();
+        return effects;
     }
     next.index.ranked = Arc::new(ranked(&next.filter, &next.index.files));
-    next.index.pick = None;
     vec![]
 }
 
@@ -143,27 +145,7 @@ pub fn matches(state: &State) -> impl Iterator<Item = &str> {
 }
 
 pub fn chosen(state: &State) -> Option<&str> {
-    matches(state)
-        .find(|found| state.index.pick.as_deref() == Some(*found))
-        .or_else(|| matches(state).next())
-}
-
-pub fn step(state: &State, next: &mut State, direction: Direction) {
-    let found: Vec<&str> = matches(state).collect();
-    let Some(last) = found.len().checked_sub(1) else {
-        return;
-    };
-    let current = chosen(state);
-    let at = found
-        .iter()
-        .position(|path| Some(*path) == current)
-        .unwrap_or(0);
-    let to = match direction {
-        Direction::Down => (at + 1).min(last),
-        Direction::Up => at.saturating_sub(1),
-        Direction::Left | Direction::Right => return,
-    };
-    next.index.pick = Some(found[to].to_string());
+    matches(state).next()
 }
 
 #[cfg(test)]

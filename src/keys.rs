@@ -1,6 +1,6 @@
 use crate::{
-    debug, tree, Direction, Event, Find, FindIcon, FindKeys, Modal, Pane, ReplaceField, Resolution,
-    Selection, State, Tap, View, FIND_ICONS, REPLACE_FIELDS,
+    debug, tree, Direction, Event, FilterKeys, Find, FindIcon, FindKeys, Modal, Pane, ReplaceField,
+    Resolution, Selection, State, Tap, View, FIND_ICONS, REPLACE_FIELDS,
 };
 use terminput::{
     Encoding, Event as Input, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, ModifierKeyCode,
@@ -11,7 +11,6 @@ pub struct Drafts {
     pub name: String,
     pub command: Option<CommandLine>,
     pub ai: String,
-    pub filter: Option<String>,
     pub comment_kind: String,
 }
 
@@ -890,7 +889,7 @@ fn a_box_has_the_keys(state: &State, drafts: &Drafts) -> bool {
             .as_ref()
             .is_some_and(|find| find.keys != FindKeys::Away)
         || drafts.command.is_some()
-        || drafts.filter.is_some()
+        || typing_a_filter(state)
 }
 
 fn buffer_takes_paste(state: &State, drafts: &Drafts) -> bool {
@@ -1484,14 +1483,17 @@ fn collecting(state: &State, drafts: &mut Drafts, event: KeyEvent) -> Option<Vec
     if state.focus == Pane::Ai && !state.ai_running {
         return Some(start_ai_box(drafts, event));
     }
-    if drafts.filter.is_some() {
-        return Some(filter_box(drafts, event));
+    if typing_a_filter(state) {
+        return Some(filter_box(state, event));
     }
     if state.focus == Pane::Tree && tree::filter_rows(state.view) > 0 && typed(event) == Some('/') {
-        drafts.filter = Some(String::new());
-        return Some(vec![]);
+        return Some(vec![Event::OpenFilter]);
     }
     None
+}
+
+fn typing_a_filter(state: &State) -> bool {
+    state.focus == Pane::Tree && state.filter_keys == FilterKeys::Box
 }
 
 fn claims_colon(state: &State) -> bool {
@@ -1577,7 +1579,7 @@ fn pane_key(state: &State, event: KeyEvent) -> Vec<Event> {
         }
         Pane::Evaluator if event.code == KeyCode::Char('s') && ctrl_or_command(event) => vec![],
         Pane::Editor | Pane::Evaluator => editor_pane_key(event),
-        Pane::Tree => tree_pane_key(event),
+        Pane::Tree => tree_pane_key(state, event),
         Pane::Risk
         | Pane::Buffers
         | Pane::History
@@ -1633,8 +1635,9 @@ fn editor_pane_key(event: KeyEvent) -> Vec<Event> {
     }
 }
 
-fn tree_pane_key(event: KeyEvent) -> Vec<Event> {
+fn tree_pane_key(state: &State, event: KeyEvent) -> Vec<Event> {
     match event.code {
+        KeyCode::Esc if !state.filter.is_empty() => vec![Event::CloseFilter],
         KeyCode::Esc => vec![Event::Cancel],
         KeyCode::Enter => vec![Event::Activate],
         _ => match typed(event) {
@@ -1806,29 +1809,17 @@ fn start_ai_box(drafts: &mut Drafts, event: KeyEvent) -> Vec<Event> {
     }
 }
 
-fn filter_box(drafts: &mut Drafts, event: KeyEvent) -> Vec<Event> {
+fn filter_box(state: &State, event: KeyEvent) -> Vec<Event> {
     match event.code {
-        KeyCode::Esc => {
-            drafts.filter = None;
-            vec![Event::Filter(String::new())]
-        }
-        KeyCode::Enter => {
-            drafts.filter = None;
-            vec![Event::AcceptFilter]
-        }
-        KeyCode::Down => vec![Event::StepFilter(Direction::Down)],
-        KeyCode::Up => vec![Event::StepFilter(Direction::Up)],
+        KeyCode::Esc => vec![Event::CloseFilter],
+        KeyCode::Enter | KeyCode::Down | KeyCode::Tab => vec![Event::AcceptFilter],
         KeyCode::Backspace => {
-            let draft = drafts.filter.as_mut().expect("open");
-            draft.pop();
-            vec![Event::Filter(draft.clone())]
+            let mut text = state.filter.clone();
+            text.pop();
+            vec![Event::Filter(text)]
         }
         _ => match typed(event) {
-            Some(c) => {
-                let draft = drafts.filter.as_mut().expect("open");
-                draft.push(c);
-                vec![Event::Filter(draft.clone())]
-            }
+            Some(c) => vec![Event::Filter(format!("{}{c}", state.filter))],
             None => vec![],
         },
     }
@@ -1841,8 +1832,8 @@ mod tests {
         Pasted, COMMANDS,
     };
     use crate::{
-        story, DiffLine, Direction, Event, Find, FindIcon, FindKeys, Modal, Pane, Place,
-        ReplaceField, Selection, State, Tap, View,
+        story, DiffLine, Direction, Event, FilterKeys, Find, FindIcon, FindKeys, Modal, Pane,
+        Place, ReplaceField, Selection, State, Tap, View,
     };
     use terminput::{
         KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MediaKeyCode, ModifierDirection,
@@ -2124,7 +2115,7 @@ mod tests {
     #[test]
     fn a_paste_into_a_line_varde_is_collecting_never_reaches_the_child() {
         let drafts = Drafts {
-            filter: Some(String::new()),
+            command: Some(CommandLine::default()),
             ..Drafts::default()
         };
         assert!(matches!(
@@ -2774,35 +2765,60 @@ mod tests {
     }
 
     #[test]
-    fn the_filter_claims_the_trees_keys_while_it_is_open() {
-        let mut drafts = Drafts::default();
-        let state = focused(Pane::Tree);
-        on_key_event(&state, &mut drafts, plain('/'), 0);
-        let events = on_key_event(&state, &mut drafts, plain('n'), 0);
-        assert_eq!(events, vec![Event::Filter("n".to_string())]);
+    fn the_filter_claims_the_trees_keys_only_while_the_box_has_them() {
+        let typing = State {
+            filter: "tre".to_string(),
+            filter_keys: FilterKeys::Box,
+            ..focused(Pane::Tree)
+        };
         assert_eq!(
-            drafts.filter.as_deref(),
-            Some("n"),
+            press(&typing, plain('n')),
+            vec![Event::Filter("tren".to_string())],
             "not a new-file shortcut"
+        );
+        let in_the_list = State {
+            filter_keys: FilterKeys::Away,
+            ..typing.clone()
+        };
+        assert_eq!(press(&in_the_list, plain('n')), vec![Event::Key('n')]);
+        let elsewhere = State {
+            focus: Pane::Editor,
+            ..typing
+        };
+        assert_eq!(press(&elsewhere, plain('i')), vec![Event::EditorKey('i')]);
+    }
+
+    #[test]
+    fn slash_goes_back_into_the_box_with_the_query_intact() {
+        let in_the_list = State {
+            filter: "tree".to_string(),
+            ..focused(Pane::Tree)
+        };
+        let typing = press(&in_the_list, plain('/'))
+            .into_iter()
+            .fold(in_the_list, |state, event| crate::update(&state, event).0);
+        assert_eq!(typing.filter_keys, FilterKeys::Box);
+        assert_eq!(typing.filter, "tree");
+        assert_eq!(
+            press(&typing, plain('s')),
+            vec![Event::Filter("trees".to_string())]
         );
     }
 
     #[test]
-    fn the_arrows_step_through_the_filter_and_leave_the_box_open() {
-        let mut drafts = Drafts::default();
-        let state = focused(Pane::Tree);
-        on_key_event(&state, &mut drafts, plain('/'), 0);
-        on_key_event(&state, &mut drafts, plain('n'), 0);
-        for (code, direction) in [
-            (KeyCode::Down, Direction::Down),
-            (KeyCode::Up, Direction::Up),
-        ] {
+    fn enter_down_and_tab_in_the_box_accept_the_filter_and_up_does_nothing() {
+        let typing = State {
+            filter: "n".to_string(),
+            filter_keys: FilterKeys::Box,
+            ..focused(Pane::Tree)
+        };
+        for code in [KeyCode::Enter, KeyCode::Down, KeyCode::Tab] {
             assert_eq!(
-                on_key_event(&state, &mut drafts, KeyEvent::new(code), 0),
-                vec![Event::StepFilter(direction)]
+                press(&typing, KeyEvent::new(code)),
+                vec![Event::AcceptFilter]
             );
         }
-        assert_eq!(drafts.filter.as_deref(), Some("n"));
+        assert_eq!(press(&typing, KeyEvent::new(KeyCode::Up)), vec![]);
     }
 
     #[test]
