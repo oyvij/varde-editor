@@ -19,8 +19,8 @@ use varde::tools;
 use varde::tree::{self, Entry};
 use varde::tree_actions::{Action, Target};
 use varde::{
-    layout, mouse, reading, update, DiffLine, Direction, Effect, Event, Modal, Pane, Place,
-    ReplaceFailed, Selection, State, Tap, View, PALETTE,
+    layout, mouse, reading, update, DiffLine, Direction, Effect, Event, FilterKeys, Modal, Pane,
+    Place, ReplaceFailed, Selection, State, Tap, View, PALETTE,
 };
 
 const POINTER: Place = Place { line: 3, column: 7 };
@@ -4131,7 +4131,7 @@ fn holds_reviews(world: &mut VardeWorld, dir: String, expected: usize) {
 
 fn parse_pane(name: &str) -> Pane {
     match name {
-        "file tree" => Pane::Tree,
+        "file tree" | "tree" => Pane::Tree,
         "editor" => Pane::Editor,
         "terminal" => Pane::Terminal,
         "AI" => Pane::Ai,
@@ -7044,7 +7044,32 @@ fn project_gains(world: &mut VardeWorld, path: String) {
 #[when(expr = "I filter the tree for {string}")]
 #[when(expr = "I filter by {string}")]
 fn filter_by(world: &mut VardeWorld, text: String) {
+    if world.state.filter_keys != FilterKeys::Box {
+        world.state.focus = Pane::Tree;
+        route_key(world, "/", 0);
+    }
     world.send(Event::Filter(text));
+}
+
+#[then(expr = "the filter query is {string}")]
+fn filter_query_is(world: &mut VardeWorld, text: String) {
+    assert_eq!(world.state.filter, text);
+}
+
+#[then("the filter box has the keyboard")]
+fn filter_box_has_keyboard(world: &mut VardeWorld) {
+    assert_eq!(world.state.filter_keys, FilterKeys::Box);
+}
+
+#[then("the filter box does not have the keyboard")]
+fn filter_box_lacks_keyboard(world: &mut VardeWorld) {
+    assert_eq!(world.state.filter_keys, FilterKeys::Away);
+}
+
+#[then("the filter box is closed")]
+fn filter_box_closed(world: &mut VardeWorld) {
+    assert_eq!(world.state.filter_keys, FilterKeys::Away);
+    assert!(world.state.filter.is_empty());
 }
 
 #[then("the filtered files are:")]

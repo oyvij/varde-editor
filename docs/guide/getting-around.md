@@ -169,7 +169,13 @@ visible, and the tree goes back to how it was when the filter clears. The filter
 project, not only the folders you have opened, and skips `.git`. The box shows the best match
 completed ahead of what you typed, and narrows as you type. `Enter` selects that match in the tree,
 opens the folders down to it, and clears the filter. It does not open the file, so you decide what
-to do with it. `Esc` leaves and clears. With no match, the tree says so rather than going blank.
+to do with it. With no match, the tree says so rather than going blank.
+
+The box has the keyboard only while you type in it. Click another pane, press a focus key or open
+the palette, and your keys go there while the tree stays filtered. Coming back to the tree puts
+the keyboard in the tree, not the box; `/` goes back into the box with the query as you left it.
+An empty box closes when the keyboard leaves it. `Esc`, in the box or in the filtered tree, clears
+the filter, keeps the selected row and opens the folders down to it.
 
 ### Tree actions
 

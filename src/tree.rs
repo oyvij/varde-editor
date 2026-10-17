@@ -1,4 +1,4 @@
-use crate::{filter, review, story, State, View};
+use crate::{filter, review, story, FilterKeys, State, View};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
@@ -54,9 +54,11 @@ fn changed_files(state: &State) -> Vec<Row> {
 }
 
 pub fn highlighted(state: &State) -> Option<PathBuf> {
-    match state.filter.is_empty() {
-        true => state.tree_selection.clone(),
-        false => filter::chosen(state).map(|path| state.shown_root().join(path)),
+    match state.filter_keys {
+        FilterKeys::Box if !state.filter.is_empty() => {
+            filter::chosen(state).map(|path| state.shown_root().join(path))
+        }
+        FilterKeys::Box | FilterKeys::Away => state.tree_selection.clone(),
     }
 }
 

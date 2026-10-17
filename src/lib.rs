@@ -465,6 +465,8 @@ pub enum Event {
     StepBuffer(Direction),
     ShowBuffer(PathBuf),
     Filter(String),
+    OpenFilter,
+    CloseFilter,
     OpenSearch,
     SearchWordUnderCursor,
     SearchSelection,
@@ -750,6 +752,12 @@ pub enum FindKeys {
     Query,
     Icon(FindIcon),
     Replace(ReplaceField),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FilterKeys {
+    Away,
+    Box,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1066,6 +1074,7 @@ pub struct State {
     pub expanded: BTreeSet<PathBuf>,
     pub ignored: BTreeSet<PathBuf>,
     pub filter: String,
+    pub filter_keys: FilterKeys,
     pub index: filter::Index,
     pub buffers: BTreeMap<PathBuf, Buffer>,
     pub current_buffer: Option<PathBuf>,
@@ -1306,6 +1315,7 @@ impl Default for State {
             expanded: BTreeSet::new(),
             ignored: BTreeSet::new(),
             filter: String::new(),
+            filter_keys: FilterKeys::Away,
             index: filter::Index::default(),
             buffers: BTreeMap::new(),
             current_buffer: None,
@@ -1494,6 +1504,9 @@ fn settle(mut next: State, mut effects: Vec<Effect>, wheeled: bool) -> (State, V
         if next.focus != Pane::Editor || next.search.is_some() || next.modal != Modal::None {
             find.keys = FindKeys::Away;
         }
+    }
+    if next.focus != Pane::Tree || next.modal != Modal::None {
+        next.filter_keys = FilterKeys::Away;
     }
     let showing_lines = next.focus == Pane::Evaluator
         || (next.focus == Pane::Editor && next.diff.is_none() && !previewing(&next));
@@ -3892,6 +3905,20 @@ fn on_complete_search(state: &State, mut next: State, event: Event, wheeled: boo
 
         Event::Filter(text) => filter::narrow(&mut next, text),
 
+        Event::OpenFilter => {
+            next.filter_keys = FilterKeys::Box;
+            vec![]
+        }
+
+        Event::CloseFilter => {
+            filter::narrow(&mut next, String::new());
+            next.filter_keys = FilterKeys::Away;
+            match next.tree_selection.clone() {
+                Some(selected) => unfold(&mut next, &selected),
+                None => vec![],
+            }
+        }
+
         other => return Err((next, other)),
     };
     Ok(settle(next, effects, wheeled))
@@ -3902,6 +3929,7 @@ fn on_accept_filter(state: &State, mut next: State, event: Event, wheeled: bool)
         Event::AcceptFilter => {
             let chosen = filter::chosen(state).map(str::to_string);
             filter::narrow(&mut next, String::new());
+            next.filter_keys = FilterKeys::Away;
             match chosen {
                 Some(relative) => {
                     next.tree_selection = Some(state.shown_root().join(&relative));

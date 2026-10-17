@@ -22,6 +22,15 @@ Feature: Filtering the file tree
   highlights the match Enter would mark, and stepping is not choosing: it
   opens nothing, and until Enter the tree's own selection stays where it was.
 
+  The box holds the keyboard only while you type in it. A filter stays on the
+  tree while another pane has the keyboard, so the narrowed tree is a map while
+  you work elsewhere, and what you type there goes there. Coming back to the
+  tree lands in the tree, never in the box, so returning cannot type into the
+  filter by accident; "/" goes back into the box with the query intact. An
+  empty box closes when the keyboard leaves it. Escape, in the box or in the
+  filtered tree, removes the filter, keeps the selection and opens the folders
+  leading to it.
+
   Opening the filter walks the project afresh, in the background, so typing
   never waits for the walk. Matches appear as the walk finds them. The filter
   searches the project as it was when the filter opened: a file created since
@@ -164,6 +173,7 @@ Feature: Filtering the file tree
     Given I filter by "treeac"
     When I accept the filter
     Then the tree is not filtered
+    And the filter box is closed
 
   Scenario: Enter with nothing matching opens nothing and leaves no filter
     Given I filter by "zzzz"
@@ -183,6 +193,89 @@ Feature: Filtering the file tree
     When I filter by "keys"
     Then the filtered files are:
       | src/keys.rs |
+
+  Scenario: Typing in the editor leaves the filter as it was
+    Given "README.md" is open in the editor holding nothing
+    And I filter by "tree"
+    And I click in the editor pane
+    When I press the key "i"
+    Then the editor mode is insert
+    And the filter query is "tree"
+
+  Scenario: Typing in the AI pane leaves the filter as it was
+    Given an AI session is running in the AI pane
+    And I filter by "tree"
+    And I click in the AI pane
+    When I press the key "x"
+    Then the AI received "x"
+    And the filter query is "tree"
+
+  Scenario: Opening the palette takes the keyboard out of the box
+    Given the terminal reports modifier key events
+    And the double-tap window is 300 ms
+    And I filter by "tree"
+    When I press Ctrl and press Ctrl again after 100 ms
+    Then the view palette is shown
+    And the filter box does not have the keyboard
+    And the filter query is "tree"
+
+  Scenario: The tree stays filtered while another pane has the keyboard
+    Given I filter by "main"
+    When I click in the editor pane
+    Then the tree shows "src/main.rs"
+    And the tree does not show "README.md"
+
+  Scenario: Coming back to a filtered tree lands in the list, not the box
+    Given I filter by "tree"
+    And I click in the editor pane
+    And I click in the tree pane
+    When I press the key "q"
+    Then the filter query is "tree"
+    And the filter box does not have the keyboard
+
+  Scenario: Away from the box the tree highlights its selection, not the best match
+    Given I filter by "tree"
+    And the tree selection is "src/tree_actions.rs"
+    When I click in the editor pane
+    Then the highlighted row is "/home/me/projects/varde/src/tree_actions.rs"
+
+  Scenario: The keyboard leaving an empty box closes it
+    Given I filter by ""
+    When I click in the editor pane
+    Then the filter box is closed
+
+  Scenario: Backspace to an empty query leaves the box open
+    Given I filter by "t"
+    When I press the key "Backspace"
+    Then the tree is not filtered
+    And the filter box has the keyboard
+
+  Scenario: Slash in the filtered tree goes back to the box with the query intact
+    Given I filter by "tree"
+    And I click in the editor pane
+    And I click in the tree pane
+    When I press the key "/"
+    Then the filter box has the keyboard
+    And the filter query is "tree"
+
+  Scenario: Escape in the box removes the filter and leaves the tree as it was
+    Given the tree selection is "README.md"
+    And I filter by "main"
+    When I press the key "Escape"
+    Then the tree is not filtered
+    And the filter box is closed
+    And the tree selection is "/home/me/projects/varde/README.md"
+    And "src" is collapsed
+
+  Scenario: Escape in the filtered tree removes the filter and opens the way to the selection
+    Given I filter by "main"
+    And I click in the editor pane
+    And I click in the tree pane
+    And the tree selection is "src/main.rs"
+    When I press the key "Escape"
+    Then the tree is not filtered
+    And the tree selection is "/home/me/projects/varde/src/main.rs"
+    And "src" is expanded
 
   Scenario: A file created while the filter is open waits for the next one
     Given I filter by "ke"
