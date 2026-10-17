@@ -1454,7 +1454,7 @@ fn spine_widget(state: &State) -> Paragraph<'static> {
         let mut lines: Vec<Line> = Vec::new();
         if let Some(title) = story::title(state) {
             lines.push(Line::from(Span::styled(
-                title.to_string(),
+                title,
                 Style::default().add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
             )));
         }
@@ -1471,13 +1471,12 @@ fn spine_widget(state: &State) -> Paragraph<'static> {
             };
             Line::from(Span::styled(text, style))
         }));
-        lines.push(Line::from(""));
-        let remainder_selected =
-            !story::remainder_locations(state).is_empty() && state.story_selection >= rows.len();
-        lines.extend(remainder_lines(
-            &story::remainder(state),
-            remainder_selected,
-        ));
+        if let Some(remainder) = story::remainder(state) {
+            lines.push(Line::from(""));
+            let remainder_selected = !story::remainder_locations(state).is_empty()
+                && state.story_selection >= rows.len();
+            lines.extend(remainder_lines(&remainder, remainder_selected));
+        }
         return Paragraph::new(lines)
             .scroll((state.spine_scroll as u16, 0))
             .block(pane_block(story_title(state), state, Pane::Tree));

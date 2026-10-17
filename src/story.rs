@@ -1243,8 +1243,11 @@ pub fn spine(state: &State) -> Vec<SpineRow> {
         .collect()
 }
 
-pub fn title(state: &State) -> Option<&str> {
-    loaded(state).map(|artifact| artifact.title.as_str())
+pub fn title(state: &State) -> Option<String> {
+    loaded(state).map(|artifact| match artifact.range {
+        Some(_) => artifact.title.clone(),
+        None => format!("Inquiry: {}", artifact.title),
+    })
 }
 
 pub fn spine_row_count(state: &State) -> usize {
@@ -1434,29 +1437,15 @@ fn overlaps(from: u32, to: u32, start: u32, lines: u32) -> bool {
     lines > 0 && from < start + lines && start <= to
 }
 
-fn claim_sites(state: &State) -> Vec<&Site> {
-    match &state.story_set {
-        Set::Loaded(artifact) => artifact
+fn claim_sites(state: &State) -> Option<Vec<&Site>> {
+    let artifact = loaded(state).filter(|artifact| artifact.range.is_some())?;
+    Some(
+        artifact
             .stories
             .iter()
             .flat_map(|story| story.steps.iter().map(|step| &step.site))
             .collect(),
-        Set::None
-        | Set::Filling { .. }
-        | Set::Refused { .. }
-        | Set::RangeGone
-        | Set::NoDefaultBranch
-        | Set::BadRange
-        | Set::NotARepository
-        | Set::WorkingTreeDirty
-        | Set::GuestNeedsBareWorkspace
-        | Set::NoGit
-        | Set::Downloading { .. }
-        | Set::DownloadFailed { .. }
-        | Set::Authoring { .. }
-        | Set::AuthoringAbandoned
-        | Set::Fixing { .. } => Vec::new(),
-    }
+    )
 }
 
 fn claims(site: &Site, file: &str, hunk: &Hunk) -> bool {
@@ -1472,8 +1461,8 @@ fn is_claimed(sites: &[&Site], file: &str, hunk: &Hunk) -> bool {
     sites.iter().any(|site| claims(site, file, hunk))
 }
 
-pub fn remainder(state: &State) -> Remainder {
-    let sites = claim_sites(state);
+pub fn remainder(state: &State) -> Option<Remainder> {
+    let sites = claim_sites(state)?;
     let mut result = Remainder::default();
     let mut deletions_total = 0usize;
     let mut deletions_unwalked = 0usize;
@@ -1494,7 +1483,7 @@ pub fn remainder(state: &State) -> Remainder {
     }
 
     result.unwalked_deletions = (deletions_total > 0).then_some(deletions_unwalked);
-    result
+    Some(result)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1505,7 +1494,9 @@ pub struct RemainderLocation {
 }
 
 pub fn remainder_locations(state: &State) -> Vec<RemainderLocation> {
-    let sites = claim_sites(state);
+    let Some(sites) = claim_sites(state) else {
+        return Vec::new();
+    };
     let mut locations = Vec::new();
     for file in state.file_hunks.iter() {
         for hunk in &file.hunks {
@@ -3081,6 +3072,38 @@ from b
         assert!(current_step(&state).is_none());
     }
 
+    fn inquiry(stories: Vec<(&str, Vec<Step>)>) -> State {
+        let mut state = loaded(stories);
+        if let Set::Loaded(artifact) = &mut state.story_set {
+            artifact.range = None;
+        }
+        state
+    }
+
+    #[test]
+    fn an_inquiry_sets_title_is_prefixed_as_an_inquiry() {
+        let state = inquiry(vec![("Story", vec![])]);
+        assert_eq!(title(&state).as_deref(), Some("Inquiry: Title"));
+    }
+
+    #[test]
+    fn a_story_set_for_a_range_is_titled_with_no_prefix() {
+        let state = loaded(vec![("Story", vec![])]);
+        assert_eq!(title(&state).as_deref(), Some("Title"));
+    }
+
+    #[test]
+    fn an_inquiry_set_has_no_remainder_even_over_uncommitted_hunks() {
+        let mut state = inquiry(vec![(
+            "Story",
+            vec![step("s1", site("keys.rs", Side::New, Kind::Context, 1, 1))],
+        )]);
+        state.file_hunks = vec![file_hunks("keys.rs", "a\n", "a\nX\n")].into();
+        assert_eq!(remainder(&state), None);
+        assert!(remainder_locations(&state).is_empty());
+        assert_eq!(spine_row_count(&state), 1);
+    }
+
     #[test]
     fn a_hunk_no_step_claims_is_the_remainder() {
         let mut state = loaded(vec![(
@@ -3092,7 +3115,7 @@ from b
             file_hunks("mouse.rs", "a\nb\nc\n", "a\nX\nc\n"),
         ]
         .into();
-        let found = remainder(&state);
+        let found = remainder(&state).expect("a remainder");
         assert_eq!(found.unclaimed, 1);
         assert_eq!(found.locations, vec!["mouse.rs".to_string()]);
     }
@@ -3138,7 +3161,7 @@ from b
             vec![step("s1", site("keys.rs", Side::New, Kind::Changed, 1, 2))],
         )]);
         state.file_hunks = vec![file_hunks("keys.rs", "a\nb\nc\nd\ne\n", "a\nb\nc\nX\ne\n")].into();
-        assert_eq!(remainder(&state).unclaimed, 0);
+        assert_eq!(remainder(&state).expect("a remainder").unclaimed, 0);
     }
 
     #[test]
@@ -3148,7 +3171,7 @@ from b
             vec![step("s1", site("keys.rs", Side::New, Kind::Context, 4, 4))],
         )]);
         state.file_hunks = vec![file_hunks("keys.rs", "a\nb\nc\nd\ne\n", "a\nb\nc\nX\ne\n")].into();
-        assert_eq!(remainder(&state).unclaimed, 1);
+        assert_eq!(remainder(&state).expect("a remainder").unclaimed, 1);
     }
 
     #[test]
@@ -3164,21 +3187,27 @@ from b
             ),
         ]);
         state.file_hunks = vec![file_hunks("keys.rs", "a\nb\nc\nd\ne\n", "a\nb\nc\nX\ne\n")].into();
-        assert_eq!(remainder(&state).unclaimed, 0);
+        assert_eq!(remainder(&state).expect("a remainder").unclaimed, 0);
     }
 
     #[test]
     fn a_range_that_deletes_nothing_has_no_deletions_line() {
         let state = loaded(Vec::new());
-        assert_eq!(remainder(&state).unwalked_deletions, None);
+        assert_eq!(
+            remainder(&state).expect("a remainder").unwalked_deletions,
+            None
+        );
     }
 
     #[test]
     fn a_deletion_no_old_side_step_claims_is_an_unwalked_deletion() {
         let mut state = loaded(Vec::new());
         state.file_hunks = vec![file_hunks("dead.rs", "gone\n", "")].into();
-        assert_eq!(remainder(&state).unwalked_deletions, Some(1));
-        assert_eq!(remainder(&state).unclaimed, 0);
+        assert_eq!(
+            remainder(&state).expect("a remainder").unwalked_deletions,
+            Some(1)
+        );
+        assert_eq!(remainder(&state).expect("a remainder").unclaimed, 0);
     }
 
     #[test]
@@ -3203,7 +3232,10 @@ from b
             vec![step("s1", site("dead.rs", Side::Old, Kind::Changed, 1, 1))],
         )]);
         state.file_hunks = vec![file_hunks("dead.rs", "gone\n", "")].into();
-        assert_eq!(remainder(&state).unwalked_deletions, Some(0));
+        assert_eq!(
+            remainder(&state).expect("a remainder").unwalked_deletions,
+            Some(0)
+        );
     }
 
     fn only_step(state: &State) -> &Step {

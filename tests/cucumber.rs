@@ -8656,7 +8656,7 @@ fn tree_has_no_filter_box(world: &mut VardeWorld) {
 
 #[then(expr = "the spine's title is {string}")]
 fn spine_title_is(world: &mut VardeWorld, expected: String) {
-    assert_eq!(story::title(&world.state), Some(expected.as_str()));
+    assert_eq!(story::title(&world.state), Some(expected));
 }
 
 #[then(expr = "the spine has no title")]
@@ -9623,7 +9623,12 @@ fn no_ai_session_started(world: &mut VardeWorld) {
 #[then(expr = "the remainder holds {int} unclaimed hunk")]
 #[then(expr = "the remainder holds {int} unclaimed hunks")]
 fn remainder_holds_unclaimed(world: &mut VardeWorld, count: usize) {
-    assert_eq!(story::remainder(&world.state).unclaimed, count);
+    assert_eq!(
+        story::remainder(&world.state)
+            .expect("a remainder")
+            .unclaimed,
+        count
+    );
 }
 
 #[then("the remainder lists:")]
@@ -9635,7 +9640,9 @@ fn remainder_lists(world: &mut VardeWorld, step: &Step) {
         .iter()
         .map(|row| row[0].clone())
         .collect();
-    let mut actual = story::remainder(&world.state).locations;
+    let mut actual = story::remainder(&world.state)
+        .expect("a remainder")
+        .locations;
     expected.sort();
     actual.sort();
     assert_eq!(actual, expected);
@@ -9645,14 +9652,26 @@ fn remainder_lists(world: &mut VardeWorld, step: &Step) {
 #[then(expr = "the remainder reports {int} unwalked deletions")]
 fn remainder_reports_unwalked_deletions(world: &mut VardeWorld, count: usize) {
     assert_eq!(
-        story::remainder(&world.state).unwalked_deletions,
+        story::remainder(&world.state)
+            .expect("a remainder")
+            .unwalked_deletions,
         Some(count)
     );
 }
 
+#[then(expr = "the spine has no remainder")]
+fn spine_has_no_remainder(world: &mut VardeWorld) {
+    assert_eq!(story::remainder(&world.state), None);
+}
+
 #[then(expr = "the remainder reports no deletions line")]
 fn remainder_reports_no_deletions_line(world: &mut VardeWorld) {
-    assert_eq!(story::remainder(&world.state).unwalked_deletions, None);
+    assert_eq!(
+        story::remainder(&world.state)
+            .expect("a remainder")
+            .unwalked_deletions,
+        None
+    );
 }
 
 #[then(expr = "the spine reports {int} stale step")]
