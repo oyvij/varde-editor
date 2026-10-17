@@ -6984,7 +6984,14 @@ fn comment(
     kind: String,
     body: String,
 ) -> Comment {
-    let revision = state.diff_revision.clone().unwrap_or_default();
+    let revision = match (&state.walking, &state.story_set) {
+        (Some(story::Walking::Story { .. }), story::Set::Loaded(artifact))
+            if artifact.range.is_none() =>
+        {
+            story::WORKTREE.to_string()
+        }
+        _ => state.diff_revision.clone().unwrap_or_default(),
+    };
     let (story, step) = walking_position(state);
     Comment {
         file,

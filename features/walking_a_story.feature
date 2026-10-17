@@ -365,6 +365,11 @@ Feature: Walking a story step by step
       | file        | from | to | type  | story                | step |
       | src/keys.rs | 2    | 2  | ISSUE | Keys reach the child | 1    |
 
+  Scenario: A comment on a step of a Story set for a Range does not claim the working tree
+    Given I am walking "Keys reach the child"
+    When I comment "ISSUE" on the current step with "the catch-all swallows the modifiers"
+    Then the comment's revision is not "worktree"
+
   Scenario: A comment made while walking stays visible under its line
     Given I am walking "Keys reach the child"
     When I comment "ISSUE" on the current step with "the catch-all swallows the modifiers"

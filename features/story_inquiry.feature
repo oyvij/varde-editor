@@ -490,3 +490,58 @@ Feature: Asking for a story set with an Inquiry
       When the AI session exits
       Then the story view state is "authoring-abandoned"
       And the spine is empty
+
+  Rule: A comment on an Inquiry Step records the working tree as its revision
+
+    A comment records the revision that was reviewed, and an Inquiry set has no Range, possibly no
+    repository at all. It records `worktree`, already a legal head naming the uncommitted change and
+    literally true here, since the comment was made against the files as they stand. It is the same
+    in a folder that is not a repository, so there is no revision-less comment.
+
+    Scenario: A comment on an Inquiry step records worktree
+      Given "src/keys.rs" holds 20 numbered lines
+      And the project is a git repository
+      And an Inquiry set on disk claims lines 4 to 6 of "src/keys.rs"
+      And I open Story view
+      And I enter the story "The keys"
+      When I comment "ISSUE" on the current step with "the catch-all swallows the modifiers"
+      Then the review holds a comment:
+        | file        | from | to | type  | story    | step | revision |
+        | src/keys.rs | 4    | 6  | ISSUE | The keys | 1    | worktree |
+
+    Scenario: A comment on an Inquiry step outside a repository records worktree too
+      Given "src/keys.rs" holds 20 numbered lines
+      And the project is not a git repository
+      And an Inquiry set on disk claims lines 4 to 6 of "src/keys.rs"
+      And I open Story view
+      And I enter the story "The keys"
+      When I comment "ISSUE" on the current step with "the catch-all swallows the modifiers"
+      Then the review holds a comment:
+        | file        | from | to | revision |
+        | src/keys.rs | 4    | 6  | worktree |
+
+    Scenario: An Inquiry step's comment stays under its line once the walk has moved past it
+      Given "src/keys.rs" holds 20 numbered lines
+      And an AI session is running
+      And I submitted the Inquiry "how does a key reach the child"
+      And an Inquiry set claims:
+        | story    | file        | from | to |
+        | The keys | src/keys.rs | 4    | 4  |
+        | The keys | src/keys.rs | 9    | 9  |
+      And I enter the story "The keys"
+      And I commented "ISSUE" on the current step with "the catch-all swallows the modifiers"
+      When I press "n"
+      Then the code shows a comment on line 4 of "src/keys.rs"
+
+    Scenario: Submitting a review holding an Inquiry step's comment sends it into the AI pane
+      Given "src/keys.rs" holds 20 numbered lines
+      And an AI session is running
+      And an Inquiry set on disk claims lines 4 to 6 of "src/keys.rs"
+      And I open Story view
+      And I enter the story "The keys"
+      And I commented "ISSUE" on the current step with "the catch-all swallows the modifiers"
+      And I submit the review
+      When I confirm the submission
+      Then the AI pane was sent a prompt containing "src/keys.rs:4-6 ISSUE — the catch-all swallows the modifiers"
+      And the prompt was submitted to the AI
+      And no new AI session was started

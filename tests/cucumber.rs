@@ -3860,6 +3860,12 @@ fn comment_revision_is_blob_oid(world: &mut VardeWorld, file: String) {
     assert_eq!(comment.revision, expected);
 }
 
+#[then(expr = "the comment's revision is not {string}")]
+fn comment_revision_is_not(world: &mut VardeWorld, revision: String) {
+    let comment = world.state.comments.last().expect("a comment");
+    assert_ne!(comment.revision, revision);
+}
+
 #[then(expr = "the two comments record different revisions")]
 fn two_comments_record_different_revisions(world: &mut VardeWorld) {
     assert_eq!(world.state.comments.len(), 2, "expected two comments");
