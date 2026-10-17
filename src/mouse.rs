@@ -475,8 +475,9 @@ fn pressed(
             return vec![Event::ShowDiagnostics(severity)];
         }
     }
-    let filter_rows = tree::filter_rows(state.view) as u16;
-    if pane == Pane::Tree && filter_rows > 0 && input.row + 1 + filter_rows >= panes.tree.bottom() {
+    let border = panes.tree.bottom().saturating_sub(1);
+    let filter_box = border.saturating_sub(tree::filter_rows(state.view) as u16)..border;
+    if pane == Pane::Tree && filter_box.contains(&input.row) {
         return vec![Event::ClickPane(Pane::Tree), Event::OpenFilter];
     }
     let row_index = row_index(state, panes, input.row);
@@ -1797,6 +1798,7 @@ mod tests {
             assert_eq!(typing.filter, "b", "row {row}");
             assert_eq!(typing.tree_selection, away.tree_selection, "row {row}");
         }
+        assert!(!click(&away, 5, tree.bottom() - 1).contains(&Event::OpenFilter));
     }
 
     #[test]
