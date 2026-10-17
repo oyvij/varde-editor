@@ -980,6 +980,7 @@ pub fn problems(artifact: &Artifact, files: &[FileHunks]) -> Vec<Problem> {
             Some(_) => true,
         };
         if placed
+            && artifact.range.is_some()
             && matches!(site.kind, Kind::Changed)
             && !files.iter().any(|entry| {
                 entry
@@ -1017,14 +1018,16 @@ const FIX_PROMPT: &str = r#"Varde checked the story set you wrote to `{OUT}` and
 
 {PROBLEMS}
 
-Rewrite only those steps. Keep the set's `title`, its `range`, its stories and every other step
-exactly as they are, and write the whole set back to `{OUT}` — the same path, replacing what is
-there. Do not re-author the walkthrough and do not renumber or drop the steps that were fine.
-
-`{CONTEXT}` still holds the range's two oids, its diff and every changed file's contents with line
-numbers; read the line numbers off it rather than guessing again.
+Rewrite only those steps. Keep the set's `title`, its stories and every other step exactly as they
+are, and write the whole set back to `{OUT}` — the same path, replacing what is there. Do not
+re-author the walkthrough and do not renumber or drop the steps that were fine.{RANGE}
 
 Write only the JSON file. Do not summarise it back."#;
+
+const FIX_RANGE: &str = r#"
+
+Keep its `range` as it is too. `{CONTEXT}` still holds the range's two oids, its diff and every
+changed file's contents with line numbers; read the line numbers off it rather than guessing again."#;
 
 pub fn fix_prompt(
     dir: &Path,
@@ -1032,9 +1035,13 @@ pub fn fix_prompt(
     problems: &[Problem],
     inquiry_ms: u64,
 ) -> String {
-    let out = match &artifact.range {
-        Some(range) => artifact_path_of(dir, range),
-        None => inquiry_path(dir, inquiry_ms),
+    let (out, range) = match &artifact.range {
+        Some(range) => {
+            let out = artifact_path_of(dir, range);
+            let context = FIX_RANGE.replace("{CONTEXT}", &context_path(&out));
+            (out, context)
+        }
+        None => (inquiry_path(dir, inquiry_ms), String::new()),
     };
     let listed = problems
         .iter()
@@ -1050,7 +1057,7 @@ pub fn fix_prompt(
         .join("\n");
     FIX_PROMPT
         .replace("{PROBLEMS}", &listed)
-        .replace("{CONTEXT}", &context_path(&out))
+        .replace("{RANGE}", &range)
         .replace("{OUT}", &out)
 }
 
@@ -2371,6 +2378,7 @@ mod tests {
         assert!(!text.contains("{RANGE}"));
         assert!(!text.contains("{OUT}"));
         assert!(!text.contains("{CONTEXT}"));
+        assert!(!text.contains("{RANGE}"));
         for placeholder in ["{STORIES}", "{KIND}", "{STEP_RULES}", "{CHECK}"] {
             assert!(!text.contains(placeholder), "{placeholder}");
         }
@@ -2831,6 +2839,49 @@ from b
     }
 
     #[test]
+    fn an_inquiry_site_claiming_a_change_is_not_checked_against_hunks() {
+        let mut artifact = artifact_of(vec![(
+            "first",
+            vec![step("1", site("b.rs", Side::New, Kind::Changed, 1, 1))],
+        )]);
+        artifact.range = None;
+        let unchanged = file_hunks("b.rs", "same\n", "same\n");
+        assert!(problems(&artifact, &[unchanged]).is_empty());
+    }
+
+    #[test]
+    fn an_inquiry_set_still_runs_the_other_three_checks() {
+        let mut steps = vec![
+            step("1", site("gone.rs", Side::New, Kind::Context, 1, 1)),
+            step("2", site("a.rs", Side::New, Kind::Context, 1, 9)),
+            step("3", site("a.rs", Side::New, Kind::Context, 1, 1)),
+        ];
+        steps[2].values = vec![Value {
+            name: "limit".to_string(),
+            value: "three".to_string(),
+            provenance: Provenance::Literal,
+            cite: Some(Cite {
+                file: "a.rs".to_string(),
+                line: 2,
+            }),
+        }];
+        let mut artifact = artifact_of(vec![("first", steps)]);
+        artifact.range = None;
+        let faults: Vec<Fault> = problems(&artifact, &[file_hunks("a.rs", "", "one\ntwo\n")])
+            .into_iter()
+            .map(|problem| problem.fault)
+            .collect();
+        assert_eq!(
+            faults,
+            [
+                Fault::FileMissing,
+                Fault::RangeOutOfBounds,
+                Fault::CitationAbsent
+            ]
+        );
+    }
+
+    #[test]
     fn a_working_tree_that_moved_under_a_committed_range_is_not_a_problem() {
         let mut moved = file_hunks("a.rs", "", "one\ntwo\n");
         moved.new_text = "one\n".to_string();
@@ -2981,6 +3032,21 @@ from b
     }
 
     #[test]
+    fn a_fix_request_for_an_inquiry_set_points_at_no_companion_file_and_no_range() {
+        let (mut artifact, problems) = one_failing_step();
+        artifact.range = None;
+        let text = fix_prompt(
+            Path::new("/w/.varde"),
+            &artifact,
+            &problems,
+            1_760_000_000_123,
+        );
+        assert!(!text.contains(".context.md"), "{text}");
+        assert!(!text.contains("`range`"), "{text}");
+        assert!(!text.contains("{CONTEXT}"), "{text}");
+    }
+
+    #[test]
     fn a_fix_request_for_a_dirty_range_names_the_worktree_set() {
         let mut artifact = artifact_of(vec![(
             "Story",
@@ -3031,6 +3097,7 @@ from b
         assert!(!text.contains("{OUT}"));
         assert!(!text.contains("{PROBLEMS}"));
         assert!(!text.contains("{CONTEXT}"));
+        assert!(!text.contains("{RANGE}"));
     }
 
     #[test]

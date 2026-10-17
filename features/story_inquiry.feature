@@ -385,3 +385,108 @@ Feature: Asking for a story set with an Inquiry
       When I enter the remainder
       Then no site mark is drawn
       And no file was opened in the editor
+
+  Rule: An Inquiry set is checked, and a failing one is handed back to the AI
+
+    Three of the four checks apply to an Inquiry set unchanged: the file a Step's Site names exists,
+    its line range fits inside that file, and a Cited value really appears on the line it cites. The
+    fourth, whether a Site claiming a change really overlaps one, cannot run: an Inquiry set has no
+    hunks to overlap. Authoring costs five to eleven minutes, so a failing set is handed back with a
+    fix request naming only the failing Steps and the same artifact path, and Varde keeps waiting.
+    Two rounds; a second failing set is refused with what failed.
+
+    Background:
+      Given "src/keys.rs" holds 20 numbered lines
+      And an AI session is running
+      And I submitted the Inquiry "how does a key reach the child"
+
+    Scenario: An Inquiry step naming a file that is not there is handed back
+      When an Inquiry set claims:
+        | story    | file           | from | to |
+        | The keys | src/nowhere.rs | 1    | 1  |
+      Then the story view state is "fixing"
+      And the fix request names step "s1" as "file-missing"
+
+    Scenario: An Inquiry site running past the end of its file is handed back
+      When an Inquiry set claims:
+        | story    | file        | from | to |
+        | The keys | src/keys.rs | 18   | 40 |
+      Then the story view state is "fixing"
+      And the fix request names step "s1" as "range-out-of-bounds"
+
+    Scenario: An Inquiry cited value that is not on the line it cites is handed back
+      When an Inquiry set claims:
+        | story    | file        | from | to | value  | cite          |
+        | The keys | src/keys.rs | 1    | 1  | line 3 | src/keys.rs:9 |
+      Then the story view state is "fixing"
+      And the fix request names step "s1" as "citation-absent"
+
+    Scenario: An Inquiry site claiming a change is not held to one
+      Given "src/mouse.rs" held:
+        """
+        fn hit(p: Point) -> Pane {
+            Pane::Editor
+        }
+        """
+      When an Inquiry set claims:
+        | story    | file         | kind    | from | to |
+        | The keys | src/mouse.rs | changed | 2    | 2  |
+      Then the story view state is "spine"
+
+    Scenario: An Inquiry set passing the checks loads and walks
+      When an Inquiry set claims:
+        | story    | file        | from | to | value  | cite          |
+        | The keys | src/keys.rs | 4    | 6  | line 9 | src/keys.rs:9 |
+      Then the story view state is "spine"
+      When I enter the story "The keys"
+      Then the band claim is "claim"
+
+    Scenario: A fix request names the failing Inquiry steps, none that passed, and the same artifact
+      When an Inquiry set claims:
+        | story    | file           | from | to |
+        | The keys | src/keys.rs    | 1    | 1  |
+        | The keys | src/nowhere.rs | 1    | 1  |
+        | The keys | src/keys.rs    | 18   | 40 |
+      Then the fix request names step "s2" as "file-missing"
+      And the fix request names step "s3" as "range-out-of-bounds"
+      And the fix request does not name step "s1"
+      And the fix request names the Inquiry artifact the first prompt named
+
+    Scenario: An Inquiry set is held back whole, so no step of it is walkable
+      When an Inquiry set claims:
+        | story    | file           | from | to |
+        | The keys | src/keys.rs    | 1    | 1  |
+        | The keys | src/nowhere.rs | 1    | 1  |
+      Then the story view state is "fixing"
+      And the spine is empty
+      And the band has no claim
+
+    Scenario: A second failing Inquiry set is refused with what failed
+      Given an Inquiry set claims:
+        | story    | file           | from | to |
+        | The keys | src/nowhere.rs | 1    | 1  |
+      When an Inquiry set claims:
+        | story    | file        | from | to |
+        | The keys | src/gone.rs | 1    | 1  |
+      Then the story view state is "story-artifact-invalid"
+      And the refusal names step "s1" as "file-missing"
+      And the spine is empty
+      And exactly 2 prompts were sent to the AI
+
+    Scenario: Cancelling during an Inquiry's fix round leaves nothing authored
+      Given the project has a ".gitignore"
+      And an Inquiry set claims:
+        | story    | file           | from | to |
+        | The keys | src/nowhere.rs | 1    | 1  |
+      When I press "Escape"
+      Then the story view state is "no-stories"
+      And the project ".gitignore" is unchanged
+      And no file was written
+
+    Scenario: The AI exiting during an Inquiry's fix round reports the set abandoned
+      Given an Inquiry set claims:
+        | story    | file           | from | to |
+        | The keys | src/nowhere.rs | 1    | 1  |
+      When the AI session exits
+      Then the story view state is "authoring-abandoned"
+      And the spine is empty

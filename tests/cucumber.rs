@@ -3676,6 +3676,19 @@ fn prompts_name_different_inquiry_artifacts(world: &mut VardeWorld) {
     assert_ne!(first, second);
 }
 
+#[then(expr = "the fix request names the Inquiry artifact the first prompt named")]
+fn fix_request_names_the_first_inquiry_artifact(world: &mut VardeWorld) {
+    let request = fix_request(world);
+    let first = ai_sends(world).first().expect("a prompt").clone();
+    let named = inquiry_artifacts(world);
+    let asked = named.first().expect("an Inquiry artifact named to the AI");
+    assert!(first.contains(asked.as_str()), "{first}");
+    assert!(
+        request.contains(&format!("/.varde/stories/{asked}")),
+        "{request}"
+    );
+}
+
 #[then(expr = "the AI pane was sent a prompt for the tag {string}")]
 fn prompt_for_the_tag(world: &mut VardeWorld, tag: String) {
     let tag = match tag.as_str() {
