@@ -3152,6 +3152,7 @@ fn on_click_row(state: &State, mut next: State, event: Event, wheeled: bool) -> 
     let effects = match event {
         Event::ClickRow(path) => {
             next.focus = Pane::Tree;
+            next.filter_keys = FilterKeys::Away;
             next.tree_selection = Some(path.clone());
             if state.view == View::Review {
                 next.focus = Pane::Editor;
