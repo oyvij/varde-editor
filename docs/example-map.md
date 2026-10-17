@@ -818,8 +818,8 @@ preview) get their own pass.
 
 ## F20 — Filtering the file tree## F20 — Filtering the file tree — **DEFINED**
 
-Scenarios live in `features/filter.feature`. `/` opens the box; Esc closes it, Enter opens the best
-match.
+Scenarios live in `features/filter.feature`. `/` opens the box; Enter, Down or Tab land on the best
+match in the filtered list, where Enter on a file opens it; Esc clears the filter.
 
 **R20.1** Matching is **fuzzy and ranked** — `ftr` finds `file_tree.rs`, closest first.
 **R20.2** **Only files match.** Folders appear when they lead to a match, and are opened, because a

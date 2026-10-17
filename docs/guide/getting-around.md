@@ -174,8 +174,8 @@ they do nothing and the keyboard stays in the box; in an empty box they close it
 the tree says so rather than going blank.
 
 In the filtered list the tree works as usual on the rows the filter shows. `↑` `↓` `j` `k` walk
-every row, folders included. `Enter` on a file opens it and the tree stays filtered, so you can open
-one match after another. On a folder, `Enter` does nothing, so the folders leading to the matches
+every row, folders included. `Enter` on a file opens it in the editor and the tree stays filtered, so
+coming back to the tree you can open the next match. On a folder, `Enter` does nothing, so the folders leading to the matches
 stay open. `n`, `N`, `d`, `c` and `-` act on the selected row; a file you create waits for the next
 filter.
 

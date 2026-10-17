@@ -322,6 +322,7 @@ Feature: Filtering the file tree
     When I press the key "Enter"
     Then "src/tree_actions.rs" was opened in the editor
     And the filter query is "treeac"
+    And the tree does not show "README.md"
 
   Scenario: Enter on a folder row in the filtered list does nothing
     Given the folder "src" is expanded
