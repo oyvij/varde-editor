@@ -301,6 +301,10 @@ pub enum Modal {
         answer: Buffer,
         anchor: Option<Place>,
     },
+    Inquiry {
+        text: Buffer,
+        tag: story::Tag,
+    },
     Stops {
         path: PathBuf,
         at: Vec<editor::Tail>,
@@ -568,6 +572,11 @@ pub enum Event {
         force: bool,
     },
     PickBranch(Option<String>),
+    OpenInquiry,
+    NextTag,
+    SubmitInquiry {
+        at_ms: u64,
+    },
     Branches(story::Branching),
     MoveBranchRow(Direction),
     FilterBranches(String),
@@ -902,8 +911,7 @@ pub enum Effect {
     },
     ReadStoryFiles {
         repo: PathBuf,
-        base: String,
-        head: Option<String>,
+        range: Option<(String, String)>,
         files: Vec<String>,
     },
     WriteStoryContext {
@@ -1121,6 +1129,8 @@ pub struct State {
     pub ai_paste: keys::Paste,
     pub ai_spoken: bool,
     pub pending_prompt: Option<(String, Enter)>,
+    pub launched_ms: u64,
+    pub last_inquiry_ms: u64,
     pub selection: Option<Selection>,
     pub occurrences: Vec<Place>,
     pub revealing: Option<Place>,
@@ -1377,6 +1387,8 @@ impl Default for State {
             ai_paste: keys::Paste::Bare,
             ai_spoken: false,
             pending_prompt: None,
+            launched_ms: 0,
+            last_inquiry_ms: 0,
             selection: None,
             occurrences: Vec::new(),
             revealing: None,
@@ -1907,11 +1919,11 @@ fn erase(state: &State, next: &mut State) {
     }
 }
 
-fn on_comment_body(mut next: State, event: Event, wheeled: bool) -> Answered {
-    if next.comment.is_none() {
-        return Err((next, event));
-    }
-    let body = next.comment.as_mut().expect("checked just above");
+fn on_multiline_body(mut next: State, event: Event, wheeled: bool) -> Answered {
+    let body = match (&mut next.comment, &mut next.modal) {
+        (Some(body), _) | (None, Modal::Inquiry { text: body, .. }) => body,
+        _ => return Err((next, event)),
+    };
     match event {
         Event::EditorKey(key) => _ = body.key(key),
         Event::EditorBackspace => body.backspace(),
@@ -2018,6 +2030,46 @@ fn on_question(state: &State, mut next: State, event: Event, wheeled: bool) -> A
             vec![]
         }
         other => return Err((next, other)),
+    };
+    Ok(settle(next, effects, wheeled))
+}
+
+fn on_inquiry(mut next: State, event: Event, wheeled: bool) -> Answered {
+    let effects = match (&mut next.modal, event) {
+        (_, Event::OpenInquiry) => {
+            next.modal = Modal::Inquiry {
+                text: Buffer::text_box(""),
+                tag: story::Tag::default(),
+            };
+            vec![]
+        }
+        (Modal::Inquiry { .. }, Event::Cancel) => {
+            next.modal = Modal::None;
+            vec![]
+        }
+        (Modal::Inquiry { tag, .. }, Event::NextTag) => {
+            *tag = tag.next();
+            vec![]
+        }
+        (Modal::Inquiry { text, tag }, Event::SubmitInquiry { at_ms }) => {
+            let (inquiry, tag) = (text.shown().to_string(), *tag);
+            next.modal = Modal::None;
+            next.last_inquiry_ms = (next.launched_ms + at_ms).max(next.last_inquiry_ms + 1);
+            let out = story::inquiry_path(
+                &varde_dir(&next.root, next.sidecar.as_deref()),
+                next.last_inquiry_ms,
+            );
+            move_to_view(&mut next, View::Story);
+            next.story_set = story::Set::Authoring { spelling: None };
+            let mut effects = vec![Effect::RenderView(View::Story)];
+            effects.extend(queue_for_ai(
+                &mut next,
+                Enter::Pressed,
+                story::inquiry_prompt(&inquiry, tag, &out),
+            ));
+            effects
+        }
+        (_, other) => return Err((next, other)),
     };
     Ok(settle(next, effects, wheeled))
 }
@@ -2137,11 +2189,15 @@ fn route_trigger(state: &State, next: State, event: Event, wheeled: bool) -> Ans
         Ok(answer) => return Ok(answer),
         Err(declined) => declined,
     };
-    let declined = match on_comment_body(declined.0, declined.1, wheeled) {
+    let declined = match on_multiline_body(declined.0, declined.1, wheeled) {
         Ok(answer) => return Ok(answer),
         Err(declined) => declined,
     };
     let declined = match on_question(state, declined.0, declined.1, wheeled) {
+        Ok(answer) => return Ok(answer),
+        Err(declined) => declined,
+    };
+    let declined = match on_inquiry(declined.0, declined.1, wheeled) {
         Ok(answer) => return Ok(answer),
         Err(declined) => declined,
     };
@@ -2527,6 +2583,7 @@ fn on_enter_name(state: &State, mut next: State, event: Event, wheeled: bool) ->
                 )
             {
                 next.story_set = story::Set::None;
+                next.pending_prompt = None;
             }
             vec![]
         }
@@ -5859,14 +5916,15 @@ fn on_drag_row(state: &State, mut next: State, event: Event, wheeled: bool) -> A
                     vec![]
                 }
                 (Ok(artifact), story::RangeStatus::Resolves) => {
-                    let head = match story::inventory_of(&artifact) {
-                        story::Inventory::Committed { head, .. } => Some(head.to_string()),
+                    let range = match story::inventory_of(&artifact) {
+                        story::Inventory::Committed { base, head } => {
+                            Some((base.to_string(), head.to_string()))
+                        }
                         story::Inventory::Worktree => None,
                     };
                     let effects = vec![Effect::ReadStoryFiles {
                         repo: next.repo_root().to_path_buf(),
-                        base: artifact.range.base.clone(),
-                        head,
+                        range,
                         files: story::story_files(&artifact),
                     }];
                     let attempt = match &state.story_set {
@@ -5898,6 +5956,7 @@ fn on_drag_row(state: &State, mut next: State, event: Event, wheeled: bool) -> A
                             &varde_dir(&next.root, next.sidecar.as_deref()),
                             &artifact,
                             &problems,
+                            next.last_inquiry_ms,
                         );
                         next.story_set = story::Set::Fixing {
                             artifact,
@@ -5952,7 +6011,7 @@ fn on_story_resolved(state: &State, mut next: State, event: Event, wheeled: bool
                 next.modal = Modal::None;
                 move_to_view(&mut next, View::Story);
                 next.story_set = story::Set::Authoring {
-                    spelling: spelling.clone(),
+                    spelling: Some(spelling.clone()),
                 };
                 let context = story::context_path(&out);
                 let mut effects = vec![
@@ -6925,8 +6984,13 @@ fn comment(
     kind: String,
     body: String,
 ) -> Comment {
-    let revision = state.diff_revision.clone().unwrap_or_default();
-    let (story, step) = walking_position(state);
+    let (walked, step) = walking_position(state);
+    let revision = match &state.story_set {
+        story::Set::Loaded(artifact) if walked.is_some() && artifact.range.is_none() => {
+            story::WORKTREE.to_string()
+        }
+        _ => state.diff_revision.clone().unwrap_or_default(),
+    };
     Comment {
         file,
         from_line,
@@ -6934,7 +6998,7 @@ fn comment(
         kind,
         body,
         revision,
-        story,
+        story: walked,
         step,
     }
 }
@@ -9611,8 +9675,7 @@ mod tests {
             asked("bbbb"),
             vec![Effect::ReadStoryFiles {
                 repo: PathBuf::new(),
-                base: "aaaa".to_string(),
-                head: Some("bbbb".to_string()),
+                range: Some(("aaaa".to_string(), "bbbb".to_string())),
                 files: vec!["keys.rs".to_string()],
             }]
         );
@@ -9620,8 +9683,7 @@ mod tests {
             asked("worktree"),
             vec![Effect::ReadStoryFiles {
                 repo: PathBuf::new(),
-                base: "aaaa".to_string(),
-                head: None,
+                range: None,
                 files: vec!["keys.rs".to_string()],
             }]
         );
@@ -10731,7 +10793,7 @@ mod tests {
         let mut state = State {
             view: View::Story,
             story_set: story::Set::Authoring {
-                spelling: "HEAD".to_string(),
+                spelling: Some("HEAD".to_string()),
             },
             ..hovering(3)
         };

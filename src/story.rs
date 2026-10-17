@@ -8,7 +8,8 @@ pub struct Artifact {
     #[serde(rename = "protocolVersion")]
     pub protocol_version: u32,
     pub title: String,
-    pub range: Range,
+    #[serde(default)]
+    pub range: Option<Range>,
     pub stories: Vec<Story>,
 }
 
@@ -169,7 +170,7 @@ pub enum Set {
         status: Option<String>,
     },
     Authoring {
-        spelling: String,
+        spelling: Option<String>,
     },
     AuthoringAbandoned,
     Fixing {
@@ -180,6 +181,43 @@ pub enum Set {
 }
 
 pub const ATTEMPTS: u8 = 2;
+
+const INQUIRY_VERSION: u32 = 3;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Tag {
+    Bug,
+    Feature,
+    Architecture,
+    #[default]
+    FeelingLucky,
+}
+
+pub const TAGS: [(Tag, &str); 4] = [
+    (Tag::Bug, "Bug"),
+    (Tag::Feature, "Feature"),
+    (Tag::Architecture, "Architecture"),
+    (Tag::FeelingLucky, "Feeling lucky"),
+];
+
+impl Tag {
+    pub fn next(self) -> Tag {
+        let at = TAGS.iter().position(|(tag, _)| *tag == self).unwrap_or(0);
+        TAGS[(at + 1) % TAGS.len()].0
+    }
+}
+
+pub fn inquiry_chip() -> crate::Chip {
+    crate::Chip {
+        action: "ask-inquiry",
+        name: "ask",
+        glyph: "\u{25b6}".to_string(),
+        keys: "C-s",
+        word: "AI Ask",
+        hue: crate::Hue::Plain,
+        tone: crate::Tone::Plain,
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Resolution {
@@ -234,7 +272,50 @@ A complete set, with one story and one step filled in:
     "head": "0fedcba9876543210fedcba9876543210fedcba9",
     "spelling": "{RANGE}"
   },
-  "stories": [
+{STORIES}
+}
+```
+
+## Rules, field by field
+
+**`title`** names what the whole range accomplishes — a feature added, a bug fixed, an improvement
+made — never a list of the stories under it. **`name`** on a story and on a step states its concrete
+subject; a step's is about 18 characters, because it sits in a fixed-width menu.
+
+**`range`** carries the two full oids the range resolved to and the `spelling` exactly as given
+above. Do not abbreviate an oid and do not resolve the range yourself against a different `HEAD`.
+
+**`id`** is a short slug on a story and `"<story-id>.<n>"` on a step. **`premise`** is one line: what
+the story is about, so a reader can choose it from a list.
+
+**`claim`** is one sentence — what this code does. **`why`** is why it exists, or why it is done this
+way and not the obvious other way.
+
+**`site`** is where the step points.
+- `file` is a path relative to the repository root.
+- `side` is `"new"` for a line as it is after the change, `"old"` for a line the change removed.
+- `kind` is `"changed"` when the change touched those lines, `"context"` when it did not — a step
+  that walks into untouched code to follow the flow is expected and useful.
+- **A deletion is `side: "old"` with `kind: "changed"`, always.** When the change only *removed*
+  lines, point at them on the old side, where they can still be read, and give the line numbers they
+  had before the change. Never file a removal as `side: "new"` with `kind: "context"`: that says
+  "unchanged code", and removed code is not unchanged code — it is the part of the change nobody
+  will see if it is filed under context.
+- `from`/`to` are line numbers at the revision `side` names, not at any other revision.
+- Do not write the lines themselves. A site is the file, the side, the kind and the range, and
+  nothing else — Varde reads what those lines hold off its own copy of the file.
+- A site may point at prose — a design document that argues the change is a legitimate step, and
+  often the most valuable one.
+
+{STEP_RULES}
+
+**Coverage.** Every changed hunk should be claimed by some step. Do not add a list of what you left
+out and do not guess at line numbers you have not read — what no story reaches is worked out from git
+and reported separately. Leaving something out is allowed; misreporting it is not.
+
+{CHECK}"#;
+
+const EXAMPLE_STORIES: &str = r#"  "stories": [
     {
       "id": "wheel-scroll",
       "name": "A wheel event moves the tree",
@@ -248,7 +329,7 @@ A complete set, with one story and one step filled in:
           "site": {
             "file": "src/lib.rs",
             "side": "new",
-            "kind": "changed",
+            "kind": "{KIND}",
             "from": 412,
             "to": 415
           },
@@ -293,42 +374,9 @@ A complete set, with one story and one step filled in:
         }
       ]
     }
-  ]
-}
-```
+  ]"#;
 
-## Rules, field by field
-
-**`title`** names what the whole range accomplishes — a feature added, a bug fixed, an improvement
-made — never a list of the stories under it. **`name`** on a story and on a step states its concrete
-subject; a step's is about 18 characters, because it sits in a fixed-width menu.
-
-**`range`** carries the two full oids the range resolved to and the `spelling` exactly as given
-above. Do not abbreviate an oid and do not resolve the range yourself against a different `HEAD`.
-
-**`id`** is a short slug on a story and `"<story-id>.<n>"` on a step. **`premise`** is one line: what
-the story is about, so a reader can choose it from a list.
-
-**`claim`** is one sentence — what this code does. **`why`** is why it exists, or why it is done this
-way and not the obvious other way.
-
-**`site`** is where the step points.
-- `file` is a path relative to the repository root.
-- `side` is `"new"` for a line as it is after the change, `"old"` for a line the change removed.
-- `kind` is `"changed"` when the change touched those lines, `"context"` when it did not — a step
-  that walks into untouched code to follow the flow is expected and useful.
-- **A deletion is `side: "old"` with `kind: "changed"`, always.** When the change only *removed*
-  lines, point at them on the old side, where they can still be read, and give the line numbers they
-  had before the change. Never file a removal as `side: "new"` with `kind: "context"`: that says
-  "unchanged code", and removed code is not unchanged code — it is the part of the change nobody
-  will see if it is filed under context.
-- `from`/`to` are line numbers at the revision `side` names, not at any other revision.
-- Do not write the lines themselves. A site is the file, the side, the kind and the range, and
-  nothing else — Varde reads what those lines hold off its own copy of the file.
-- A site may point at prose — a design document that argues the change is a legitimate step, and
-  often the most valuable one.
-
-**`flow`** is what arrives at the site and what leaves it. Omit `flow` entirely when the step is
+const STEP_RULES: &str = r#"**`flow`** is what arrives at the site and what leaves it. Omit `flow` entirely when the step is
 about a decision or an argument rather than data passing through. Do not invent an in and an out to
 fill the field.
 
@@ -356,13 +404,9 @@ refused whole, and nothing in it is walkable. Exactly one choice is `correct`. A
 plausible reasons a competent developer might give, and their `feedback` must explain why they are
 wrong; that explanation is the most valuable text in the file. Never invent a function, file or
 behaviour that does not exist in order to make a wrong choice: draw wrong choices from real
-alternatives.
+alternatives."#;
 
-**Coverage.** Every changed hunk should be claimed by some step. Do not add a list of what you left
-out and do not guess at line numbers you have not read — what no story reaches is worked out from git
-and reported separately. Leaving something out is allowed; misreporting it is not.
-
-## Before you write the file
+const CHECK: &str = r#"## Before you write the file
 
 Check your own work with a script rather than by eye: open every `cite` and confirm the line contains
 that value, confirm every prediction has exactly one `correct: true` and names nothing that does not
@@ -373,9 +417,112 @@ whole output."#;
 
 pub fn prompt(spelling: &str, out: &str, context: &str) -> String {
     AUTHORING_PROMPT
+        .replace("{STORIES}", EXAMPLE_STORIES)
+        .replace("{KIND}", "changed")
+        .replace("{STEP_RULES}", STEP_RULES)
+        .replace("{CHECK}", CHECK)
         .replace("{RANGE}", spelling)
         .replace("{OUT}", out)
         .replace("{CONTEXT}", context)
+}
+
+const INQUIRY_PROMPT: &str = r#"Write a guided walkthrough of this repository's code as JSON (protocolVersion 3), to the file `{OUT}`, answering what the developer asked below.
+
+You are writing for a developer who will walk it step by step, one screen at a time, to build a
+mental model of the code. Nothing has changed: describe the code as it stands on disk now, working
+tree included, and read the files themselves rather than asking git about them. Follow how the code
+runs, not how the files are arranged: start where control enters, and go where it goes. A
+file-by-file summary is not a walkthrough.
+
+## What the developer asked
+
+{SCOPE}
+
+```text
+{INQUIRY}
+```
+
+Choose the code worth walking yourself. Give the whole set a `title` naming what it answers, so a
+reader who has forgotten the question knows what the set is about before reading a single story.
+
+Split it into one or more stories, each with a name and a one-line premise. A question about a whole
+repository is expected to need several. A story's `name` must state its concrete subject, never stand
+alone as a metaphor or narrative flourish; the `premise` is where the why goes. Aim for three to six
+steps per story — a reader gets lost past five, so prefer more short stories over one long one. Give
+each step a short `name` too, next to its claim: the name is what sits in a menu, the claim is the
+full sentence the narration reads aloud. Keep a step's `name` to about 18 characters.
+
+## The shape
+
+A complete set, with one story and one step filled in. It has no `range`: there is no change.
+
+```json
+{
+  "protocolVersion": 3,
+  "title": "The wheel scrolls the tree without waiting for a redraw",
+{STORIES}
+}
+```
+
+## Rules, field by field
+
+**`title`** names what the whole set answers, never a list of the stories under it. **`name`** on a
+story and on a step states its concrete subject; a step's is about 18 characters, because it sits in
+a fixed-width menu. Do not write a `range`.
+
+**`id`** is a short slug on a story and `"<story-id>.<n>"` on a step. **`premise`** is one line: what
+the story is about, so a reader can choose it from a list.
+
+**`claim`** is one sentence — what this code does. **`why`** is why it exists, or why it is done this
+way and not the obvious other way.
+
+**`site`** is where the step points.
+- `file` is a path relative to the repository root.
+- Every site is `side: "new"` and `kind: "context"`: there is no old side and nothing changed.
+- `from`/`to` are line numbers in the file as it is on disk now.
+- Do not write the lines themselves. A site is the file, the side, the kind and the range, and
+  nothing else — Varde reads what those lines hold off its own copy of the file.
+- A site may point at prose — a design document that explains the code is a legitimate step, and
+  often the most valuable one.
+
+{STEP_RULES}
+
+{CHECK}"#;
+
+pub fn scope(tag: Tag) -> &'static str {
+    match tag {
+        Tag::Bug => {
+            "It is about a defect. Find the path by which the failure arises and walk it to the point \
+             where it goes wrong, rather than describing the design around it."
+        }
+        Tag::Feature => {
+            "It is about a capability. Follow how that capability runs, from where it is triggered \
+             to what it finally does."
+        }
+        Tag::Architecture => {
+            "It is about the repository as a whole. Give the major parts and how they meet, a story \
+             for each, rather than one narrow path through them."
+        }
+        Tag::FeelingLucky => {
+            "It may be a loose wondering. Where it does not name a subject, choose the one you think \
+             most worth walking."
+        }
+    }
+}
+
+pub fn inquiry_path(dir: &Path, unix_ms: u64) -> String {
+    format!("{}/stories/inquiry-{unix_ms}.json", dir.display())
+}
+
+pub fn inquiry_prompt(inquiry: &str, tag: Tag, out: &str) -> String {
+    INQUIRY_PROMPT
+        .replace("{STORIES}", EXAMPLE_STORIES)
+        .replace("{KIND}", "context")
+        .replace("{STEP_RULES}", STEP_RULES)
+        .replace("{CHECK}", CHECK)
+        .replace("{SCOPE}", scope(tag))
+        .replace("{OUT}", out)
+        .replace("{INQUIRY}", inquiry)
 }
 
 pub fn context_path(artifact: &str) -> String {
@@ -692,6 +839,12 @@ pub fn staleness(state: &State, step: &Step) -> Staleness {
 
 pub fn parse(text: &str) -> Result<Artifact, String> {
     let artifact: Artifact = serde_json::from_str(text).map_err(|error| error.to_string())?;
+    if artifact.range.is_none() && artifact.protocol_version < INQUIRY_VERSION {
+        return Err(format!(
+            "a story set at protocolVersion {} must name its range",
+            artifact.protocol_version
+        ));
+    }
     for story in &artifact.stories {
         for step in &story.steps {
             if let Some(prediction) = &step.prediction {
@@ -827,6 +980,7 @@ pub fn problems(artifact: &Artifact, files: &[FileHunks]) -> Vec<Problem> {
             Some(_) => true,
         };
         if placed
+            && artifact.range.is_some()
             && matches!(site.kind, Kind::Changed)
             && !files.iter().any(|entry| {
                 entry
@@ -864,17 +1018,31 @@ const FIX_PROMPT: &str = r#"Varde checked the story set you wrote to `{OUT}` and
 
 {PROBLEMS}
 
-Rewrite only those steps. Keep the set's `title`, its `range`, its stories and every other step
-exactly as they are, and write the whole set back to `{OUT}` — the same path, replacing what is
-there. Do not re-author the walkthrough and do not renumber or drop the steps that were fine.
-
-`{CONTEXT}` still holds the range's two oids, its diff and every changed file's contents with line
-numbers; read the line numbers off it rather than guessing again.
+Rewrite only those steps. Keep the set's `title`, its stories and every other step exactly as they
+are, and write the whole set back to `{OUT}` — the same path, replacing what is there. Do not
+re-author the walkthrough and do not renumber or drop the steps that were fine.{KEEP_RANGE}
 
 Write only the JSON file. Do not summarise it back."#;
 
-pub fn fix_prompt(dir: &Path, artifact: &Artifact, problems: &[Problem]) -> String {
-    let out = artifact_path_of(dir, artifact);
+const FIX_KEEP_RANGE: &str = r#"
+
+Keep its `range` as it is too. `{CONTEXT}` still holds the range's two oids, its diff and every
+changed file's contents with line numbers; read the line numbers off it rather than guessing again."#;
+
+pub fn fix_prompt(
+    dir: &Path,
+    artifact: &Artifact,
+    problems: &[Problem],
+    inquiry_ms: u64,
+) -> String {
+    let (out, keep_range) = match &artifact.range {
+        Some(range) => {
+            let out = artifact_path_of(dir, range);
+            let keep_range = FIX_KEEP_RANGE.replace("{CONTEXT}", &context_path(&out));
+            (out, keep_range)
+        }
+        None => (inquiry_path(dir, inquiry_ms), String::new()),
+    };
     let listed = problems
         .iter()
         .map(|problem| {
@@ -889,18 +1057,18 @@ pub fn fix_prompt(dir: &Path, artifact: &Artifact, problems: &[Problem]) -> Stri
         .join("\n");
     FIX_PROMPT
         .replace("{PROBLEMS}", &listed)
-        .replace("{CONTEXT}", &context_path(&out))
+        .replace("{KEEP_RANGE}", &keep_range)
         .replace("{OUT}", &out)
 }
 
-fn artifact_path_of(dir: &Path, artifact: &Artifact) -> String {
+fn artifact_path_of(dir: &Path, range: &Range) -> String {
     let short = |oid: &str| oid.chars().take(12).collect::<String>();
-    let head = if artifact.range.head == WORKTREE {
+    let head = if range.head == WORKTREE {
         WORKTREE.to_string()
     } else {
-        short(&artifact.range.head)
+        short(&range.head)
     };
-    artifact_path(dir, &short(&artifact.range.base), &head)
+    artifact_path(dir, &short(&range.base), &head)
 }
 
 pub fn same_set(loaded: &Artifact, arrived: &Artifact) -> bool {
@@ -1082,8 +1250,11 @@ pub fn spine(state: &State) -> Vec<SpineRow> {
         .collect()
 }
 
-pub fn title(state: &State) -> Option<&str> {
-    loaded(state).map(|artifact| artifact.title.as_str())
+pub fn title(state: &State) -> Option<String> {
+    loaded(state).map(|artifact| match artifact.range {
+        Some(_) => artifact.title.clone(),
+        None => format!("Inquiry: {}", artifact.title),
+    })
 }
 
 pub fn spine_row_count(state: &State) -> usize {
@@ -1141,6 +1312,12 @@ pub fn range_status(file: &Path, resolves: impl Fn(&str) -> bool) -> RangeStatus
         .file_stem()
         .and_then(|name| name.to_str())
         .unwrap_or("");
+    if stem
+        .strip_prefix("inquiry-")
+        .is_some_and(|ms| ms.parse::<u64>().is_ok())
+    {
+        return RangeStatus::Resolves;
+    }
     match stem.split_once('-') {
         Some((base, head)) if resolves(base) && (head == WORKTREE || resolves(head)) => {
             RangeStatus::Resolves
@@ -1204,12 +1381,12 @@ pub fn named_files(set: &Set) -> Vec<String> {
 }
 
 pub fn inventory_of(artifact: &Artifact) -> Inventory<'_> {
-    if artifact.range.head == WORKTREE {
-        return Inventory::Worktree;
-    }
-    Inventory::Committed {
-        base: &artifact.range.base,
-        head: &artifact.range.head,
+    match &artifact.range {
+        Some(range) if range.head != WORKTREE => Inventory::Committed {
+            base: &range.base,
+            head: &range.head,
+        },
+        _ => Inventory::Worktree,
     }
 }
 
@@ -1267,29 +1444,15 @@ fn overlaps(from: u32, to: u32, start: u32, lines: u32) -> bool {
     lines > 0 && from < start + lines && start <= to
 }
 
-fn claim_sites(state: &State) -> Vec<&Site> {
-    match &state.story_set {
-        Set::Loaded(artifact) => artifact
+fn claim_sites(state: &State) -> Option<Vec<&Site>> {
+    let artifact = loaded(state).filter(|artifact| artifact.range.is_some())?;
+    Some(
+        artifact
             .stories
             .iter()
             .flat_map(|story| story.steps.iter().map(|step| &step.site))
             .collect(),
-        Set::None
-        | Set::Filling { .. }
-        | Set::Refused { .. }
-        | Set::RangeGone
-        | Set::NoDefaultBranch
-        | Set::BadRange
-        | Set::NotARepository
-        | Set::WorkingTreeDirty
-        | Set::GuestNeedsBareWorkspace
-        | Set::NoGit
-        | Set::Downloading { .. }
-        | Set::DownloadFailed { .. }
-        | Set::Authoring { .. }
-        | Set::AuthoringAbandoned
-        | Set::Fixing { .. } => Vec::new(),
-    }
+    )
 }
 
 fn claims(site: &Site, file: &str, hunk: &Hunk) -> bool {
@@ -1305,8 +1468,8 @@ fn is_claimed(sites: &[&Site], file: &str, hunk: &Hunk) -> bool {
     sites.iter().any(|site| claims(site, file, hunk))
 }
 
-pub fn remainder(state: &State) -> Remainder {
-    let sites = claim_sites(state);
+pub fn remainder(state: &State) -> Option<Remainder> {
+    let sites = claim_sites(state)?;
     let mut result = Remainder::default();
     let mut deletions_total = 0usize;
     let mut deletions_unwalked = 0usize;
@@ -1327,7 +1490,7 @@ pub fn remainder(state: &State) -> Remainder {
     }
 
     result.unwalked_deletions = (deletions_total > 0).then_some(deletions_unwalked);
-    result
+    Some(result)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1338,7 +1501,9 @@ pub struct RemainderLocation {
 }
 
 pub fn remainder_locations(state: &State) -> Vec<RemainderLocation> {
-    let sites = claim_sites(state);
+    let Some(sites) = claim_sites(state) else {
+        return Vec::new();
+    };
     let mut locations = Vec::new();
     for file in state.file_hunks.iter() {
         for hunk in &file.hunks {
@@ -1612,6 +1777,104 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_inquiry_chip_names_ctrl_s_and_is_not_dimmed_now_it_submits() {
+        let chip = inquiry_chip();
+        assert_eq!(chip.keys, "C-s");
+        assert_eq!(chip.word, "AI Ask");
+        assert_eq!(chip.tone, crate::Tone::Plain);
+    }
+
+    #[test]
+    fn an_inquiry_set_is_named_for_the_unix_millisecond_it_was_asked() {
+        assert_eq!(
+            inquiry_path(Path::new("/w/.varde"), 1_760_000_000_123),
+            "/w/.varde/stories/inquiry-1760000000123.json"
+        );
+    }
+
+    #[test]
+    fn the_inquiry_prompt_names_the_inquiry_the_tag_and_the_artifact() {
+        let text = inquiry_prompt(
+            "how does a key\nreach the child",
+            Tag::Architecture,
+            "/w/.varde/stories/inquiry-7.json",
+        );
+        assert!(text.contains("how does a key\nreach the child"));
+        assert!(text.contains(scope(Tag::Architecture)));
+        assert!(text.contains("`/w/.varde/stories/inquiry-7.json`"));
+    }
+
+    #[test]
+    fn each_tag_scopes_the_inquiry_in_its_own_words() {
+        let scopes: BTreeSet<&str> = TAGS.iter().map(|(tag, _)| scope(*tag)).collect();
+        assert_eq!(scopes.len(), TAGS.len());
+        let text = inquiry_prompt("why", Tag::Bug, "out.json");
+        for (tag, _) in TAGS.iter().filter(|(tag, _)| *tag != Tag::Bug) {
+            assert!(!text.contains(scope(*tag)), "{tag:?}");
+        }
+    }
+
+    #[test]
+    fn the_inquiry_prompt_asks_for_a_set_with_no_range_at_version_3() {
+        let text = inquiry_prompt("why", Tag::Feature, "out.json");
+        assert!(text.contains("\"protocolVersion\": 3"));
+        assert!(!text.contains("\"range\""));
+        assert!(!text.contains("context.md"));
+        assert!(!text.contains("\"side\": \"old\""));
+        assert!(!text.contains("\"kind\": \"changed\""));
+        assert!(text.contains("`side: \"new\"`"));
+        assert!(text.contains("`kind: \"context\"`"));
+    }
+
+    #[test]
+    fn the_inquiry_prompt_leaves_no_substitution_unfilled() {
+        let text = inquiry_prompt("why", Tag::FeelingLucky, "out.json");
+        for placeholder in [
+            "{INQUIRY}",
+            "{OUT}",
+            "{SCOPE}",
+            "{STORIES}",
+            "{KIND}",
+            "{STEP_RULES}",
+            "{CHECK}",
+        ] {
+            assert!(!text.contains(placeholder), "{placeholder}");
+        }
+    }
+
+    #[test]
+    fn the_inquiry_prompt_names_every_field_the_schema_reads() {
+        let text = inquiry_prompt("why", Tag::Bug, "out.json");
+        for field in SCHEMA_FIELDS
+            .iter()
+            .filter(|field| !["range", "base", "head", "spelling"].contains(field))
+        {
+            assert!(
+                text.contains(&format!("\"{field}\":")),
+                "the prompt never names `{field}`"
+            );
+        }
+    }
+
+    #[test]
+    fn tab_walks_the_four_tags_and_wraps() {
+        let mut walked = vec![Tag::default()];
+        for _ in 0..4 {
+            walked.push(walked.last().copied().unwrap_or_default().next());
+        }
+        assert_eq!(
+            walked,
+            [
+                Tag::FeelingLucky,
+                Tag::Bug,
+                Tag::Feature,
+                Tag::Architecture,
+                Tag::FeelingLucky
+            ]
+        );
+    }
+
+    #[test]
     fn rows_are_worked_out_only_as_far_as_they_are_read() {
         let state = State::default();
         assert_eq!(rows(&state, u32::MAX as usize).nth(2), Some(Row::Code(3)));
@@ -1716,6 +1979,50 @@ mod tests {
             }]
         }"#;
         assert!(parse(text).is_ok());
+    }
+
+    fn set_with_no_range(version: u32) -> String {
+        format!(
+            r#"{{
+            "protocolVersion": {version},
+            "title": "How a key reaches the child",
+            "stories": [{{ "id": "s1", "name": "n", "premise": "p", "steps": [{{
+                "id": "s1e1", "name": "n", "claim": "c", "why": "w",
+                "site": {{ "file": "src/keys.rs", "side": "new", "kind": "context",
+                          "from": 1, "to": 2 }}
+            }}] }}]
+        }}"#
+        )
+    }
+
+    #[test]
+    fn a_version_3_set_with_no_range_parses_as_an_inquiry_set() {
+        let artifact = parse(&set_with_no_range(3)).expect("parses");
+        assert_eq!(artifact.range, None);
+        assert_eq!(artifact.stories.len(), 1);
+    }
+
+    #[test]
+    fn a_version_2_set_with_no_range_is_refused_whole() {
+        assert!(parse(&set_with_no_range(2)).is_err());
+    }
+
+    #[test]
+    fn an_inquiry_set_resolves_by_its_name_without_asking_git() {
+        let file = Path::new("/w/.varde/stories/inquiry-1760000000123.json");
+        assert_eq!(range_status(file, |_| false), RangeStatus::Resolves);
+    }
+
+    #[test]
+    fn a_name_that_only_starts_like_an_inquiry_is_gone() {
+        let file = Path::new("/w/.varde/stories/inquiry-latest.json");
+        assert_eq!(range_status(file, |_| false), RangeStatus::Gone);
+    }
+
+    #[test]
+    fn an_inquiry_set_is_read_against_the_working_tree() {
+        let artifact = parse(&set_with_no_range(3)).expect("parses");
+        assert_eq!(inventory_of(&artifact), Inventory::Worktree);
     }
 
     #[test]
@@ -2071,6 +2378,9 @@ mod tests {
         assert!(!text.contains("{RANGE}"));
         assert!(!text.contains("{OUT}"));
         assert!(!text.contains("{CONTEXT}"));
+        for placeholder in ["{STORIES}", "{KIND}", "{STEP_RULES}", "{CHECK}"] {
+            assert!(!text.contains(placeholder), "{placeholder}");
+        }
     }
 
     #[test]
@@ -2153,7 +2463,10 @@ mod tests {
         )))
         .expect("the worked example parses");
         assert_eq!(artifact.protocol_version, 2);
-        assert_eq!(artifact.range.spelling, "main..HEAD");
+        assert_eq!(
+            artifact.range.as_ref().expect("a range").spelling,
+            "main..HEAD"
+        );
         let step = &artifact.stories[0].steps[0];
         assert!(step.flow.is_some());
         assert!(step.nudge.is_some());
@@ -2234,7 +2547,7 @@ mod tests {
     fn authoring_reports_its_own_view_state() {
         let state = State {
             story_set: Set::Authoring {
-                spelling: "main..HEAD".to_string(),
+                spelling: Some("main..HEAD".to_string()),
             },
             ..State::default()
         };
@@ -2428,11 +2741,11 @@ from b
         let artifact = Artifact {
             protocol_version: 2,
             title: "Title".to_string(),
-            range: Range {
+            range: Some(Range {
                 base: "a".to_string(),
                 head: head.to_string(),
                 spelling: "main..HEAD".to_string(),
-            },
+            }),
             stories: stories
                 .into_iter()
                 .enumerate()
@@ -2522,6 +2835,49 @@ from b
         )]);
         let unchanged = file_hunks("b.rs", "same\n", "same\n");
         assert!(problems(&artifact, &[unchanged]).is_empty());
+    }
+
+    #[test]
+    fn an_inquiry_site_claiming_a_change_is_not_checked_against_hunks() {
+        let mut artifact = artifact_of(vec![(
+            "first",
+            vec![step("1", site("b.rs", Side::New, Kind::Changed, 1, 1))],
+        )]);
+        artifact.range = None;
+        let unchanged = file_hunks("b.rs", "same\n", "same\n");
+        assert!(problems(&artifact, &[unchanged]).is_empty());
+    }
+
+    #[test]
+    fn an_inquiry_set_still_runs_the_other_three_checks() {
+        let mut steps = vec![
+            step("1", site("gone.rs", Side::New, Kind::Context, 1, 1)),
+            step("2", site("a.rs", Side::New, Kind::Context, 1, 9)),
+            step("3", site("a.rs", Side::New, Kind::Context, 1, 1)),
+        ];
+        steps[2].values = vec![Value {
+            name: "limit".to_string(),
+            value: "three".to_string(),
+            provenance: Provenance::Literal,
+            cite: Some(Cite {
+                file: "a.rs".to_string(),
+                line: 2,
+            }),
+        }];
+        let mut artifact = artifact_of(vec![("first", steps)]);
+        artifact.range = None;
+        let faults: Vec<Fault> = problems(&artifact, &[file_hunks("a.rs", "", "one\ntwo\n")])
+            .into_iter()
+            .map(|problem| problem.fault)
+            .collect();
+        assert_eq!(
+            faults,
+            [
+                Fault::FileMissing,
+                Fault::RangeOutOfBounds,
+                Fault::CitationAbsent
+            ]
+        );
     }
 
     #[test]
@@ -2617,7 +2973,7 @@ from b
     #[test]
     fn a_fix_request_names_the_failing_step_and_no_other() {
         let (artifact, problems) = one_failing_step();
-        let text = fix_prompt(Path::new("/w/.varde"), &artifact, &problems);
+        let text = fix_prompt(Path::new("/w/.varde"), &artifact, &problems, 0);
         assert!(text.contains("`s2`: claims-no-change"), "{text}");
         assert!(!text.contains("`s1`"), "{text}");
     }
@@ -2635,7 +2991,7 @@ from b
                 fault: Fault::RangeOutOfBounds,
             },
         ];
-        let text = fix_prompt(Path::new("/w/.varde"), &artifact, &problems);
+        let text = fix_prompt(Path::new("/w/.varde"), &artifact, &problems, 0);
         assert!(text.contains("`s1`: file-missing"), "{text}");
         assert!(text.contains("`s2`: range-out-of-bounds"), "{text}");
     }
@@ -2643,7 +2999,7 @@ from b
     #[test]
     fn a_fix_request_asks_for_the_path_the_artifact_came_from() {
         let (artifact, problems) = one_failing_step();
-        let text = fix_prompt(Path::new("/w/.varde"), &artifact, &problems);
+        let text = fix_prompt(Path::new("/w/.varde"), &artifact, &problems, 0);
         assert!(
             text.contains(&artifact_path(Path::new("/w/.varde"), "a", "b")),
             "{text}"
@@ -2659,18 +3015,49 @@ from b
     }
 
     #[test]
+    fn a_fix_request_for_an_inquiry_set_names_the_artifact_it_asked_for() {
+        let (mut artifact, problems) = one_failing_step();
+        artifact.range = None;
+        let text = fix_prompt(
+            Path::new("/w/.varde"),
+            &artifact,
+            &problems,
+            1_760_000_000_123,
+        );
+        assert!(
+            text.contains("`/w/.varde/stories/inquiry-1760000000123.json`"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn a_fix_request_for_an_inquiry_set_points_at_no_companion_file_and_no_range() {
+        let (mut artifact, problems) = one_failing_step();
+        artifact.range = None;
+        let text = fix_prompt(
+            Path::new("/w/.varde"),
+            &artifact,
+            &problems,
+            1_760_000_000_123,
+        );
+        assert!(!text.contains(".context.md"), "{text}");
+        assert!(!text.contains("`range`"), "{text}");
+        assert!(!text.contains("{CONTEXT}"), "{text}");
+    }
+
+    #[test]
     fn a_fix_request_for_a_dirty_range_names_the_worktree_set() {
         let mut artifact = artifact_of(vec![(
             "Story",
             vec![step("s1", site("a.rs", Side::New, Kind::Changed, 1, 1))],
         )]);
-        artifact.range.head = WORKTREE.to_string();
+        artifact.range.as_mut().expect("a range").head = WORKTREE.to_string();
         let problems = vec![Problem {
             step: "s1".to_string(),
             fault: Fault::FileMissing,
         }];
         assert!(
-            fix_prompt(Path::new("/w/.varde"), &artifact, &problems).contains(&artifact_path(
+            fix_prompt(Path::new("/w/.varde"), &artifact, &problems, 0).contains(&artifact_path(
                 Path::new("/w/.varde"),
                 "a",
                 WORKTREE
@@ -2685,14 +3072,15 @@ from b
             "Story",
             vec![step("s1", site("a.rs", Side::New, Kind::Changed, 1, 1))],
         )]);
-        artifact.range.base = "ab".to_string();
-        artifact.range.head = "cd".to_string();
+        let range = artifact.range.as_mut().expect("a range");
+        range.base = "ab".to_string();
+        range.head = "cd".to_string();
         let problems = vec![Problem {
             step: "s1".to_string(),
             fault: Fault::FileMissing,
         }];
         assert!(
-            fix_prompt(Path::new("/w/.varde"), &artifact, &problems).contains(&artifact_path(
+            fix_prompt(Path::new("/w/.varde"), &artifact, &problems, 0).contains(&artifact_path(
                 Path::new("/w/.varde"),
                 "ab",
                 "cd"
@@ -2704,10 +3092,11 @@ from b
     #[test]
     fn a_fix_request_leaves_no_substitution_unfilled() {
         let (artifact, problems) = one_failing_step();
-        let text = fix_prompt(Path::new("/w/.varde"), &artifact, &problems);
+        let text = fix_prompt(Path::new("/w/.varde"), &artifact, &problems, 0);
         assert!(!text.contains("{OUT}"));
         assert!(!text.contains("{PROBLEMS}"));
         assert!(!text.contains("{CONTEXT}"));
+        assert!(!text.contains("{KEEP_RANGE}"));
     }
 
     #[test]
@@ -2723,7 +3112,7 @@ from b
                 step: "s2".to_string(),
                 fault,
             }];
-            let text = fix_prompt(Path::new("/w/.varde"), &artifact, &problems);
+            let text = fix_prompt(Path::new("/w/.varde"), &artifact, &problems, 0);
             assert!(text.contains(fault.complaint()), "{fault:?}");
         }
     }
@@ -2749,6 +3138,38 @@ from b
         assert!(current_step(&state).is_none());
     }
 
+    fn inquiry(stories: Vec<(&str, Vec<Step>)>) -> State {
+        let mut state = loaded(stories);
+        if let Set::Loaded(artifact) = &mut state.story_set {
+            artifact.range = None;
+        }
+        state
+    }
+
+    #[test]
+    fn an_inquiry_sets_title_is_prefixed_as_an_inquiry() {
+        let state = inquiry(vec![("Story", vec![])]);
+        assert_eq!(title(&state).as_deref(), Some("Inquiry: Title"));
+    }
+
+    #[test]
+    fn a_story_set_for_a_range_is_titled_with_no_prefix() {
+        let state = loaded(vec![("Story", vec![])]);
+        assert_eq!(title(&state).as_deref(), Some("Title"));
+    }
+
+    #[test]
+    fn an_inquiry_set_has_no_remainder_even_over_uncommitted_hunks() {
+        let mut state = inquiry(vec![(
+            "Story",
+            vec![step("s1", site("keys.rs", Side::New, Kind::Context, 1, 1))],
+        )]);
+        state.file_hunks = vec![file_hunks("keys.rs", "a\n", "a\nX\n")].into();
+        assert_eq!(remainder(&state), None);
+        assert!(remainder_locations(&state).is_empty());
+        assert_eq!(spine_row_count(&state), 1);
+    }
+
     #[test]
     fn a_hunk_no_step_claims_is_the_remainder() {
         let mut state = loaded(vec![(
@@ -2760,7 +3181,7 @@ from b
             file_hunks("mouse.rs", "a\nb\nc\n", "a\nX\nc\n"),
         ]
         .into();
-        let found = remainder(&state);
+        let found = remainder(&state).expect("a remainder");
         assert_eq!(found.unclaimed, 1);
         assert_eq!(found.locations, vec!["mouse.rs".to_string()]);
     }
@@ -2806,7 +3227,7 @@ from b
             vec![step("s1", site("keys.rs", Side::New, Kind::Changed, 1, 2))],
         )]);
         state.file_hunks = vec![file_hunks("keys.rs", "a\nb\nc\nd\ne\n", "a\nb\nc\nX\ne\n")].into();
-        assert_eq!(remainder(&state).unclaimed, 0);
+        assert_eq!(remainder(&state).expect("a remainder").unclaimed, 0);
     }
 
     #[test]
@@ -2816,7 +3237,7 @@ from b
             vec![step("s1", site("keys.rs", Side::New, Kind::Context, 4, 4))],
         )]);
         state.file_hunks = vec![file_hunks("keys.rs", "a\nb\nc\nd\ne\n", "a\nb\nc\nX\ne\n")].into();
-        assert_eq!(remainder(&state).unclaimed, 1);
+        assert_eq!(remainder(&state).expect("a remainder").unclaimed, 1);
     }
 
     #[test]
@@ -2832,21 +3253,27 @@ from b
             ),
         ]);
         state.file_hunks = vec![file_hunks("keys.rs", "a\nb\nc\nd\ne\n", "a\nb\nc\nX\ne\n")].into();
-        assert_eq!(remainder(&state).unclaimed, 0);
+        assert_eq!(remainder(&state).expect("a remainder").unclaimed, 0);
     }
 
     #[test]
     fn a_range_that_deletes_nothing_has_no_deletions_line() {
         let state = loaded(Vec::new());
-        assert_eq!(remainder(&state).unwalked_deletions, None);
+        assert_eq!(
+            remainder(&state).expect("a remainder").unwalked_deletions,
+            None
+        );
     }
 
     #[test]
     fn a_deletion_no_old_side_step_claims_is_an_unwalked_deletion() {
         let mut state = loaded(Vec::new());
         state.file_hunks = vec![file_hunks("dead.rs", "gone\n", "")].into();
-        assert_eq!(remainder(&state).unwalked_deletions, Some(1));
-        assert_eq!(remainder(&state).unclaimed, 0);
+        assert_eq!(
+            remainder(&state).expect("a remainder").unwalked_deletions,
+            Some(1)
+        );
+        assert_eq!(remainder(&state).expect("a remainder").unclaimed, 0);
     }
 
     #[test]
@@ -2871,7 +3298,10 @@ from b
             vec![step("s1", site("dead.rs", Side::Old, Kind::Changed, 1, 1))],
         )]);
         state.file_hunks = vec![file_hunks("dead.rs", "gone\n", "")].into();
-        assert_eq!(remainder(&state).unwalked_deletions, Some(0));
+        assert_eq!(
+            remainder(&state).expect("a remainder").unwalked_deletions,
+            Some(0)
+        );
     }
 
     fn only_step(state: &State) -> &Step {
@@ -3093,7 +3523,7 @@ from b
                 status: Some("128".to_string()),
             },
             Set::Authoring {
-                spelling: "main..HEAD".to_string(),
+                spelling: Some("main..HEAD".to_string()),
             },
             Set::AuthoringAbandoned,
         ] {

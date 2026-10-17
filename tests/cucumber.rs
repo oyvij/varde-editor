@@ -1033,8 +1033,7 @@ impl VardeWorld {
             fetch @ Effect::ReplaceBinary { .. } => self.replacing.push(fetch),
             Effect::ReadStoryFiles {
                 repo,
-                base: _,
-                head: _,
+                range: _,
                 files,
             } => {
                 if self.hold_site_texts {
@@ -3607,6 +3606,122 @@ fn arrow_in_comment_body(world: &mut VardeWorld, direction: String) {
     route_key(world, &direction, 0);
 }
 
+#[given(expr = "I type {string} in the inquiry box")]
+#[when(expr = "I type {string} in the inquiry box")]
+fn type_in_inquiry_box(world: &mut VardeWorld, text: String) {
+    for key in text.chars() {
+        route_key(world, &key.to_string(), 0);
+    }
+}
+
+#[given(expr = "I press {word} in the inquiry box")]
+#[when(expr = "I press {word} in the inquiry box")]
+fn press_in_inquiry_box(world: &mut VardeWorld, key: String) {
+    route_key(world, &key, 0);
+}
+
+#[given(expr = "I submitted the Inquiry {string}")]
+#[when(expr = "I submit the Inquiry {string}")]
+fn submit_inquiry(world: &mut VardeWorld, text: String) {
+    run_story_command(world, ":story*".to_string());
+    type_in_inquiry_box(world, text);
+    route_key(world, "Ctrl+s", 0);
+}
+
+#[when(expr = "I click the Inquiry box's Ask Chip")]
+fn click_inquiry_chip(world: &mut VardeWorld) {
+    let (width, height) = world.screen();
+    let area = layout::inquiry_box(width, height);
+    let labels = layout::chip_labels(&[story::inquiry_chip()], area.width, 0);
+    let column = (area.x..area.right())
+        .find(|&column| layout::strip_at(area, &labels, column) == Some(0))
+        .expect("the Chip on screen");
+    world.pointer = mouse::Pointer::default();
+    world.report(mouse::Kind::LeftDown, column, area.y);
+    world.report(mouse::Kind::LeftUp, column, area.y);
+}
+
+fn inquiry_artifacts(world: &VardeWorld) -> Vec<String> {
+    ai_sends(world)
+        .iter()
+        .flat_map(|prompt| {
+            prompt
+                .split(|c: char| c.is_whitespace() || c == '`' || c == '/')
+                .filter(|word| {
+                    word.strip_prefix("inquiry-")
+                        .and_then(|rest| rest.strip_suffix(".json"))
+                        .is_some_and(|ms| !ms.is_empty() && ms.chars().all(|c| c.is_ascii_digit()))
+                })
+                .map(str::to_string)
+                .collect::<BTreeSet<_>>()
+        })
+        .collect()
+}
+
+#[then(expr = "the AI pane was sent a prompt naming an Inquiry artifact")]
+fn prompt_names_an_inquiry_artifact(world: &mut VardeWorld) {
+    assert!(
+        !inquiry_artifacts(world).is_empty(),
+        "{:?}",
+        ai_sends(world)
+    );
+}
+
+#[then(expr = "the two prompts name different Inquiry artifacts")]
+fn prompts_name_different_inquiry_artifacts(world: &mut VardeWorld) {
+    let named = inquiry_artifacts(world);
+    let [first, second] = named.as_slice() else {
+        panic!("expected two named artifacts, got {named:?}");
+    };
+    assert_ne!(first, second);
+}
+
+#[then(expr = "the fix request names the Inquiry artifact the first prompt named")]
+fn fix_request_names_the_first_inquiry_artifact(world: &mut VardeWorld) {
+    let request = fix_request(world);
+    let named = inquiry_artifacts(world);
+    let asked = named.first().expect("an Inquiry artifact named to the AI");
+    assert!(
+        request.contains(&format!("/.varde/stories/{asked}")),
+        "{request}"
+    );
+}
+
+#[then(expr = "the AI pane was sent a prompt for the tag {string}")]
+fn prompt_for_the_tag(world: &mut VardeWorld, tag: String) {
+    let tag = match tag.as_str() {
+        "bug" => story::Tag::Bug,
+        "feature" => story::Tag::Feature,
+        "architecture" => story::Tag::Architecture,
+        "feeling-lucky" => story::Tag::FeelingLucky,
+        other => panic!("no Tag {other:?}"),
+    };
+    prompt_contains(world, story::scope(tag).to_string());
+}
+
+fn inquiry(world: &VardeWorld) -> (&Buffer, story::Tag) {
+    match &world.state.modal {
+        Modal::Inquiry { text, tag } => (text, *tag),
+        other => panic!("the Inquiry box is not open: {other:?}"),
+    }
+}
+
+#[then(expr = "the inquiry reads {string}")]
+fn inquiry_reads(world: &mut VardeWorld, expected: String) {
+    assert_eq!(inquiry(world).0.shown(), expected.replace("\\n", "\n"));
+}
+
+#[then(expr = "the inquiry tag is {string}")]
+fn inquiry_tag_is(world: &mut VardeWorld, expected: String) {
+    let actual = match inquiry(world).1 {
+        story::Tag::Bug => "bug",
+        story::Tag::Feature => "feature",
+        story::Tag::Architecture => "architecture",
+        story::Tag::FeelingLucky => "feeling-lucky",
+    };
+    assert_eq!(actual, expected);
+}
+
 #[given(expr = "I move a word left in the comment body")]
 #[when(expr = "I move a word left in the comment body")]
 fn word_left_in_comment_body(world: &mut VardeWorld) {
@@ -3743,6 +3858,12 @@ fn comment_revision_is_blob_oid(world: &mut VardeWorld, file: String) {
     let expected = blob_oid(content);
     let comment = world.state.comments.last().expect("a comment");
     assert_eq!(comment.revision, expected);
+}
+
+#[then(expr = "the comment's revision is not {string}")]
+fn comment_revision_is_not(world: &mut VardeWorld, revision: String) {
+    let comment = world.state.comments.last().expect("a comment");
+    assert_ne!(comment.revision, revision);
 }
 
 #[then(expr = "the two comments record different revisions")]
@@ -7437,6 +7558,13 @@ fn build_story(
     .to_string()
 }
 
+fn build_inquiry(stories: Vec<(String, Vec<Value>)>) -> String {
+    let mut set: Value = serde_json::from_str(&build_story("", "", "", stories)).expect("json");
+    set["protocolVersion"] = json!(3);
+    set.as_object_mut().expect("an object").remove("range");
+    set.to_string()
+}
+
 fn build_step(
     id: &str,
     file: &str,
@@ -7463,11 +7591,11 @@ fn artifact_to_json(artifact: &story::Artifact) -> Value {
     json!({
         "protocolVersion": artifact.protocol_version,
         "title": artifact.title,
-        "range": {
-            "base": artifact.range.base,
-            "head": artifact.range.head,
-            "spelling": artifact.range.spelling,
-        },
+        "range": artifact.range.as_ref().map(|range| json!({
+            "base": range.base,
+            "head": range.head,
+            "spelling": range.spelling,
+        })),
         "stories": artifact.stories.iter().map(|story| json!({
             "id": story.id,
             "name": story.name,
@@ -7825,14 +7953,63 @@ fn step_asks(world: &mut VardeWorld, claim: String, question: String, step: &Ste
 #[given("a story set for this change claims:")]
 #[when("a story set for this change claims:")]
 fn story_set_claims(world: &mut VardeWorld, step: &Step) {
+    let contents = build_story(
+        "aaaaaaaaaaaa",
+        "bbbbbbbbbbbb",
+        "main..HEAD",
+        claimed_stories(step),
+    );
+    world.send(Event::StoryArtifact {
+        contents,
+        range: story::RangeStatus::Resolves,
+    });
+}
+
+#[given("an Inquiry set claims:")]
+#[when("an Inquiry set claims:")]
+fn inquiry_set_claims(world: &mut VardeWorld, step: &Step) {
+    inquiry_arrives(world, build_inquiry(claimed_stories(step)));
+}
+
+#[when(expr = "the Inquiry artifact arrives:")]
+fn inquiry_artifact_arrives(world: &mut VardeWorld, step: &Step) {
+    let contents = step
+        .docstring()
+        .expect("docstring")
+        .trim_matches('\n')
+        .to_string();
+    inquiry_arrives(world, contents);
+}
+
+fn inquiry_arrives(world: &mut VardeWorld, contents: String) {
+    let name = inquiry_artifacts(world)
+        .pop()
+        .expect("an Inquiry artifact named to the AI");
+    let path = world.state.root.join(".varde/stories").join(name);
+    let range = story::range_status(&path, |revision| !world.unresolvable.contains(revision));
+    world.files.insert(path, contents.clone());
+    world.send(Event::StoryArtifact { contents, range });
+}
+
+#[given(expr = "an Inquiry set on disk claims lines {int} to {int} of {string}")]
+fn inquiry_set_on_disk_claims(world: &mut VardeWorld, from: u32, to: u32, path: String) {
+    let claimed = build_step("s1e1", &path, "new", "context", from, to, "");
+    let contents = build_inquiry(vec![("The keys".to_string(), vec![claimed])]);
+    let dir = world.state.root.join(".varde/stories");
+    world
+        .files
+        .insert(dir.join("inquiry-1760000000000.json"), contents);
+}
+
+fn claimed_stories(step: &Step) -> Vec<(String, Vec<Value>)> {
     let table = step.table().expect("table");
     let headers = &table.rows[0];
     let mut stories: Vec<(String, Vec<Value>)> = Vec::new();
     for (index, row) in table.rows.iter().enumerate().skip(1) {
         let name = column(headers, row, "story").unwrap_or("Story").to_string();
         let file = column(headers, row, "file").expect("file column");
-        let side = column(headers, row, "side").expect("side column");
-        let kind = column(headers, row, "kind").expect("kind column");
+        let side = column(headers, row, "side").unwrap_or("new");
+        let kind = column(headers, row, "kind").unwrap_or("context");
         let from: u32 = column(headers, row, "from")
             .expect("from column")
             .parse()
@@ -7859,11 +8036,7 @@ fn story_set_claims(world: &mut VardeWorld, step: &Step) {
             None => stories.push((name, vec![claimed])),
         }
     }
-    let contents = build_story("aaaaaaaaaaaa", "bbbbbbbbbbbb", "main..HEAD", stories);
-    world.send(Event::StoryArtifact {
-        contents,
-        range: story::RangeStatus::Resolves,
-    });
+    stories
 }
 
 #[given("a story set for this change holds:")]
@@ -8342,11 +8515,11 @@ fn story_set_range_is(world: &mut VardeWorld, spelling: String) {
     let story::Set::Loaded(artifact) = &mut world.state.story_set else {
         panic!("no story set loaded");
     };
-    artifact.range = story::Range {
+    artifact.range = Some(story::Range {
         base: base.to_string(),
         head: head.to_string(),
         spelling,
-    };
+    });
 }
 
 #[given(expr = "the working tree is committed")]
@@ -8500,7 +8673,7 @@ fn tree_has_no_filter_box(world: &mut VardeWorld) {
 
 #[then(expr = "the spine's title is {string}")]
 fn spine_title_is(world: &mut VardeWorld, expected: String) {
-    assert_eq!(story::title(&world.state), Some(expected.as_str()));
+    assert_eq!(story::title(&world.state), Some(expected));
 }
 
 #[then(expr = "the spine has no title")]
@@ -9227,6 +9400,7 @@ fn modal_is(world: &mut VardeWorld, expected: String) {
         Modal::Branches { .. } => "branches",
         Modal::Skills { .. } => "skills",
         Modal::SkillQuestion { .. } => "skill-question",
+        Modal::Inquiry { .. } => "inquiry",
         Modal::Comment => "comment",
         Modal::NameBox { .. } => "name-box",
         Modal::StepDetail => "step-detail",
@@ -9380,6 +9554,48 @@ fn a_new_story_set_is_written(world: &mut VardeWorld) {
     world.send(Event::StoryFileWritten(name));
 }
 
+const INQUIRY_SET: &str = "inquiry-1700000000000.json";
+
+#[given(expr = "an Inquiry set is written")]
+#[when(expr = "an Inquiry set is written")]
+fn an_inquiry_set_is_written(world: &mut VardeWorld) {
+    write_inquiry_set(world, INQUIRY_SET.to_string());
+}
+
+#[given(expr = "the Inquiry set that prompt named is written")]
+fn the_named_inquiry_set_is_written(world: &mut VardeWorld) {
+    let named = inquiry_artifacts(world);
+    let [name] = named.as_slice() else {
+        panic!("expected one named artifact, got {named:?}");
+    };
+    write_inquiry_set(world, name.clone());
+}
+
+fn write_inquiry_set(world: &mut VardeWorld, name: String) {
+    let dir = world.state.root.join(".varde/stories");
+    let contents = json!({
+        "protocolVersion": 3,
+        "title": "Title",
+        "stories": [],
+    })
+    .to_string();
+    world.files.insert(dir.join(&name), contents);
+    world.send(Event::StoryFileWritten(name));
+}
+
+#[then(expr = "the Inquiry set is kept")]
+fn the_inquiry_set_is_kept(world: &mut VardeWorld) {
+    let dir = world.state.root.join(".varde/stories");
+    assert!(world.files.contains_key(&dir.join(INQUIRY_SET)));
+}
+
+#[then(expr = "the Inquiry set was pruned ahead of the oldest story set")]
+fn the_inquiry_set_was_pruned(world: &mut VardeWorld) {
+    let dir = world.state.root.join(".varde/stories");
+    assert!(!world.files.contains_key(&dir.join(INQUIRY_SET)));
+    assert!(world.files.contains_key(&dir.join("story-00.json")));
+}
+
 #[then(expr = "{int} story sets remain")]
 fn story_sets_remain(world: &mut VardeWorld, expected: usize) {
     let dir = world.state.root.join(".varde/stories");
@@ -9424,7 +9640,12 @@ fn no_ai_session_started(world: &mut VardeWorld) {
 #[then(expr = "the remainder holds {int} unclaimed hunk")]
 #[then(expr = "the remainder holds {int} unclaimed hunks")]
 fn remainder_holds_unclaimed(world: &mut VardeWorld, count: usize) {
-    assert_eq!(story::remainder(&world.state).unclaimed, count);
+    assert_eq!(
+        story::remainder(&world.state)
+            .expect("a remainder")
+            .unclaimed,
+        count
+    );
 }
 
 #[then("the remainder lists:")]
@@ -9436,7 +9657,9 @@ fn remainder_lists(world: &mut VardeWorld, step: &Step) {
         .iter()
         .map(|row| row[0].clone())
         .collect();
-    let mut actual = story::remainder(&world.state).locations;
+    let mut actual = story::remainder(&world.state)
+        .expect("a remainder")
+        .locations;
     expected.sort();
     actual.sort();
     assert_eq!(actual, expected);
@@ -9446,14 +9669,26 @@ fn remainder_lists(world: &mut VardeWorld, step: &Step) {
 #[then(expr = "the remainder reports {int} unwalked deletions")]
 fn remainder_reports_unwalked_deletions(world: &mut VardeWorld, count: usize) {
     assert_eq!(
-        story::remainder(&world.state).unwalked_deletions,
+        story::remainder(&world.state)
+            .expect("a remainder")
+            .unwalked_deletions,
         Some(count)
     );
 }
 
+#[then(expr = "the spine has no remainder")]
+fn spine_has_no_remainder(world: &mut VardeWorld) {
+    assert_eq!(story::remainder(&world.state), None);
+}
+
 #[then(expr = "the remainder reports no deletions line")]
 fn remainder_reports_no_deletions_line(world: &mut VardeWorld) {
-    assert_eq!(story::remainder(&world.state).unwalked_deletions, None);
+    assert_eq!(
+        story::remainder(&world.state)
+            .expect("a remainder")
+            .unwalked_deletions,
+        None
+    );
 }
 
 #[then(expr = "the spine reports {int} stale step")]

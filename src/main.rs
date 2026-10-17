@@ -293,7 +293,22 @@ fn unmerged(root: &Path, files: &[GitFile]) -> BTreeMap<PathBuf, Vec<varde::conf
 
 fn file_hunks(root: &Path, inventory: story::Inventory, named: &[String]) -> Vec<story::FileHunks> {
     let Ok(repository) = git2::Repository::open(root) else {
-        return Vec::new();
+        return named
+            .iter()
+            .map(|file| {
+                let text = std::fs::read_to_string(root.join(file)).ok();
+                story::FileHunks {
+                    file: file.clone(),
+                    hunks: Vec::new(),
+                    old_exists: false,
+                    old_text: String::new(),
+                    new_exists: text.is_some(),
+                    head_exists: text.is_some(),
+                    head_text: text.clone().unwrap_or_default(),
+                    new_text: text.unwrap_or_default(),
+                }
+            })
+            .collect();
     };
     let tree = |revision: &str| {
         repository
@@ -706,6 +721,10 @@ fn run(
     });
 
     let started = Instant::now();
+    state.launched_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .inspect_err(|error| eprintln!("varde: the clock reads before 1970: {error}"))
+        .map_or(0, |since| since.as_millis() as u64);
     let mut last_git = Instant::now();
     let mut last_tick = Instant::now();
     let mut last_drag = Instant::now();
@@ -2799,14 +2818,9 @@ fn perform_jobs(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>) {
             Ok(left) => Event::CheckedOut { left },
             Err(because) => Event::CheckoutFailed(because),
         }),
-        Effect::ReadStoryFiles {
-            repo,
-            base,
-            head,
-            files,
-        } => {
-            let inventory = match &head {
-                Some(head) => story::Inventory::Committed { base: &base, head },
+        Effect::ReadStoryFiles { repo, range, files } => {
+            let inventory = match &range {
+                Some((base, head)) => story::Inventory::Committed { base, head },
                 None => story::Inventory::Worktree,
             };
             let read = file_hunks(&repo, inventory, &files);
@@ -4091,8 +4105,9 @@ fn queue_story_file(path: &Path, state: &State, queue: &mut VecDeque<Event>) {
 #[cfg(test)]
 mod tests {
     use super::{
-        alive, authorship, checkout, committed, flatten, found, notice_text, pid_of, range_ends,
-        read_branches, rewrite, samples, short_date, sidecar, space, stitch, watched_path,
+        alive, authorship, checkout, committed, file_hunks, flatten, found, notice_text, pid_of,
+        range_ends, read_branches, rewrite, samples, short_date, sidecar, space, stitch,
+        watched_path,
     };
     use notify::event::{CreateKind, DataChange, ModifyKind, RenameMode};
     use std::collections::BTreeMap;
@@ -4104,6 +4119,23 @@ mod tests {
     use varde::startup::{Fact, FactValue};
     use varde::story;
     use varde::{tree, Event, State};
+
+    #[test]
+    fn a_folder_that_is_not_a_repository_still_reads_the_files_a_set_names() {
+        let root = tempfile::tempdir().expect("a temp directory");
+        fs::write(root.path().join("keys.rs"), "one\ntwo\n").expect("a file");
+        let named = ["keys.rs".to_string(), "gone.rs".to_string()];
+
+        let read = file_hunks(root.path(), story::Inventory::Worktree, &named);
+
+        let keys = read.iter().find(|entry| entry.file == "keys.rs");
+        assert_eq!(
+            keys.map(|entry| (entry.new_exists, entry.new_text.as_str(), entry.hunks.len())),
+            Some((true, "one\ntwo\n", 0))
+        );
+        let gone = read.iter().find(|entry| entry.file == "gone.rs");
+        assert_eq!(gone.map(|entry| entry.new_exists), Some(false));
+    }
 
     #[test]
     fn a_gap_is_counted_in_samples_and_not_in_frames() {

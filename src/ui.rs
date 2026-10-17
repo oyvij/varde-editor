@@ -452,6 +452,7 @@ fn draw_modal(frame: &mut Frame, state: &State, chrome: &Chrome) {
         ),
         Modal::SetValue | Modal::NewWatch => {}
         Modal::Comment => overlay(frame, "COMMENT", comment_lines(state, chrome)),
+        Modal::Inquiry { text, tag } => inquiry_box(frame, state, text, *tag),
         Modal::ConfirmSubmit => overlay(
             frame,
             "SUBMIT",
@@ -1453,7 +1454,7 @@ fn spine_widget(state: &State) -> Paragraph<'static> {
         let mut lines: Vec<Line> = Vec::new();
         if let Some(title) = story::title(state) {
             lines.push(Line::from(Span::styled(
-                title.to_string(),
+                title,
                 Style::default().add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
             )));
         }
@@ -1470,13 +1471,12 @@ fn spine_widget(state: &State) -> Paragraph<'static> {
             };
             Line::from(Span::styled(text, style))
         }));
-        lines.push(Line::from(""));
-        let remainder_selected =
-            !story::remainder_locations(state).is_empty() && state.story_selection >= rows.len();
-        lines.extend(remainder_lines(
-            &story::remainder(state),
-            remainder_selected,
-        ));
+        if let Some(remainder) = story::remainder(state) {
+            lines.push(Line::from(""));
+            let remainder_selected = !story::remainder_locations(state).is_empty()
+                && state.story_selection >= rows.len();
+            lines.extend(remainder_lines(&remainder, remainder_selected));
+        }
         return Paragraph::new(lines)
             .scroll((state.spine_scroll as u16, 0))
             .block(pane_block(story_title(state), state, Pane::Tree));
@@ -1534,7 +1534,12 @@ fn spine_widget(state: &State) -> Paragraph<'static> {
         }
         story::Set::Refused { because } => format!("The story set could not be read:\n{because}"),
         story::Set::Loaded(_) => "The story set holds no stories.".to_string(),
-        story::Set::Authoring { spelling } => format!("Authoring a story for \"{spelling}\"…"),
+        story::Set::Authoring {
+            spelling: Some(spelling),
+        } => format!("Authoring a story for \"{spelling}\"…"),
+        story::Set::Authoring { spelling: None } => {
+            "Authoring a story for your Inquiry — five to eleven minutes is expected…".to_string()
+        }
         story::Set::Filling { .. } => "Reading what the story's sites hold…".to_string(),
         story::Set::Fixing {
             attempt, problems, ..
@@ -3958,6 +3963,82 @@ fn comment_lines(state: &State, chrome: &Chrome) -> Vec<Line<'static>> {
         )));
     }
     lines
+}
+
+fn inquiry_box(
+    frame: &mut Frame,
+    state: &State,
+    text: &varde::editor::Buffer,
+    picked: varde::story::Tag,
+) {
+    let screen = frame.area();
+    let area = layout::inquiry_box(screen.width, screen.height);
+    let mut tags = vec![Span::raw("  ")];
+    for (tag, word) in varde::story::TAGS {
+        tags.push(match tag == picked {
+            true => Span::styled(
+                format!(" {word} "),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::REVERSED),
+            ),
+            false => Span::styled(format!(" {word} "), Style::default().fg(Color::DarkGray)),
+        });
+    }
+    let caret_row = text.line.saturating_sub(1);
+    let typed: Vec<Line<'static>> = text
+        .shown()
+        .split('\n')
+        .take(caret_row + 1)
+        .enumerate()
+        .map(|(number, line)| {
+            let mut spans = vec![Span::raw("  ")];
+            match number == caret_row {
+                true => spans.extend(with_caret(line, text.column)),
+                false => spans.push(Span::raw(line.to_string())),
+            }
+            Line::from(spans)
+        })
+        .collect();
+    let typed = wrapped(typed, area.width.saturating_sub(2) as usize);
+    let room = area.height.saturating_sub(6) as usize;
+    let mut lines = vec![Line::from(tags), Line::from("")];
+    lines.extend(typed.into_iter().rev().take(room).rev());
+    lines.resize(room + 2, Line::from(""));
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        format!(
+            "  {}",
+            keys::INQUIRY_BOX_KEYS
+                .iter()
+                .map(|(key, word)| format!("{key} {word}"))
+                .collect::<Vec<_>>()
+                .join(" · ")
+        ),
+        Style::default().fg(Color::DarkGray),
+    )));
+    let box_area = rect(area);
+    frame.render_widget(Clear, box_area);
+    frame.render_widget(
+        Paragraph::new(lines).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Thick)
+                .title("INQUIRY"),
+        ),
+        box_area,
+    );
+    let chip = varde::story::inquiry_chip();
+    let mut labels = layout::chip_labels(std::slice::from_ref(&chip), area.width, 0);
+    let x = (area.x + area.width.saturating_sub(1)).checked_sub(layout::strip_width(&labels));
+    let (Some(x), Some(label)) = (x, labels.pop()) else {
+        return;
+    };
+    let columns = label.width() as u16;
+    frame.render_widget(
+        Line::from(chip_spans(state, &chip, label).to_vec()),
+        Rect::new(x, area.y, columns, 1),
+    );
 }
 
 fn question_lines(
