@@ -5104,6 +5104,7 @@ mod tests {
             "submit",
             "hotswap",
             "help",
+            "e notes.txt",
         ] {
             assert_eq!(command(&single_file, name), vec![], "{name}");
         }

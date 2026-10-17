@@ -13282,34 +13282,22 @@ fn open_the_palette(world: &mut VardeWorld) {
     world.send(Event::FallbackBinding);
 }
 
-fn palette_lists(world: &VardeWorld) -> Vec<(char, String)> {
-    assert_eq!(world.state.modal, Modal::Palette);
-    varde::palette_rows(&world.state, 40)
-        .into_iter()
-        .flatten()
-        .filter_map(|(key, row)| {
-            let key = key?;
-            let label = row.trim().strip_prefix(&format!("({key})"))?.trim();
-            Some((key, label.to_string()))
-        })
-        .collect()
-}
-
 #[then(expr = "the palette lists {string} under the key {string}")]
 fn palette_lists_entry(world: &mut VardeWorld, entry: String, key: String) {
-    let listed = palette_lists(world);
-    assert!(
-        listed.contains(&(parse_char(&key), entry.clone())),
-        "{key}/{entry} is not listed: {listed:?}"
+    assert_eq!(world.state.modal, Modal::Palette);
+    assert_eq!(
+        varde::palette_entry(&world.state, parse_char(&key)),
+        Some(entry.as_str())
     );
 }
 
 #[then(expr = "the palette does not list {string}")]
 fn palette_does_not_list(world: &mut VardeWorld, entry: String) {
-    let listed = palette_lists(world);
-    assert!(
-        listed.iter().all(|(_, label)| *label != entry),
-        "{entry} is listed: {listed:?}"
+    assert_eq!(world.state.modal, Modal::Palette);
+    assert_eq!(
+        varde::palette_entry(&world.state, palette_key(&entry)),
+        None,
+        "{entry} is listed"
     );
 }
 
