@@ -353,13 +353,10 @@ Feature: Asking for a story set with an Inquiry
       Then the story view state is "spine"
       And the site text of step 1 is "the second line"
 
-  Rule: An Inquiry set is titled as one, and has no Coverage
+  Rule: An Inquiry set has no Coverage and no Remainder
 
-    Varde prefixes `Inquiry: ` to the set's own title, derived from the absent `range`. The AI is
-    never asked for the prefix: title rules are prompt wording only and cannot be validated, so a
-    prefix the AI owns is one it can silently forget
-    (`docs/adr/0008-a-story-set-is-titled-a-step-is-named.md`). Coverage and the Remainder are not
-    shown, not even as zero: there are no hunks to divide, uncommitted work included.
+    Coverage and the Remainder are not shown, not even as zero: there are no hunks to divide, and
+    uncommitted work in the tree is no change an Inquiry set claims to describe.
 
     Background:
       Given the project is a git repository
@@ -375,12 +372,6 @@ Feature: Asking for a story set with an Inquiry
       And an AI session is running
       And I submitted the Inquiry "what am I in the middle of"
 
-    Scenario: An Inquiry set's title is prefixed as an Inquiry
-      When an Inquiry set claims:
-        | story    | file        | from | to |
-        | The keys | src/keys.rs | 1    | 1  |
-      Then the spine's title is "Inquiry: Title"
-
     Scenario: An Inquiry set has no remainder, even over uncommitted work
       When an Inquiry set claims:
         | story    | file        | from | to |
@@ -393,3 +384,4 @@ Feature: Asking for a story set with an Inquiry
         | The keys | src/keys.rs | 1    | 1  |
       When I enter the remainder
       Then no site mark is drawn
+      And no file was opened in the editor
