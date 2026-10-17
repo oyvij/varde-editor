@@ -259,12 +259,21 @@ Feature: Filtering the file tree
     And the filter query is "tree"
 
   Scenario: Escape in the box removes the filter and leaves the tree as it was
-    Given the tree selection is "README.md"
+    Given the folder "src" is collapsed
+    And the tree selection is "src/main.rs"
     And I filter by "main"
     When I press the key "Escape"
     Then the tree is not filtered
     And the filter box is closed
-    And the tree selection is "/home/me/projects/varde/README.md"
+    And the tree selection is "/home/me/projects/varde/src/main.rs"
+    And "src" is collapsed
+
+  Scenario: Escape in an empty box closes it and leaves the tree as it was
+    Given the folder "src" is collapsed
+    And the tree selection is "src/main.rs"
+    And I filter by ""
+    When I press the key "Escape"
+    Then the filter box is closed
     And "src" is collapsed
 
   Scenario: Escape in the filtered tree removes the filter and opens the way to the selection

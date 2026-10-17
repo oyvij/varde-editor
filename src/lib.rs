@@ -3911,11 +3911,12 @@ fn on_complete_search(state: &State, mut next: State, event: Event, wheeled: boo
         }
 
         Event::CloseFilter => {
+            let moved = !state.filter.is_empty() && state.tree_selection != state.index.opened_on;
             filter::narrow(&mut next, String::new());
             next.filter_keys = FilterKeys::Away;
             match next.tree_selection.clone() {
-                Some(selected) => unfold(&mut next, &selected),
-                None => vec![],
+                Some(selected) if moved => unfold(&mut next, &selected),
+                _ => vec![],
             }
         }
 

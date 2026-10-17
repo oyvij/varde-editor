@@ -1323,7 +1323,7 @@ fn filter_box(frame: &mut Frame, state: &State, area: Rect) {
         return;
     }
     let active = state.filter_keys == FilterKeys::Box;
-    let draft = &state.filter;
+    let query = &state.filter;
     let inner = area.width.saturating_sub(2);
     let rule = Rect {
         x: area.x + 1,
@@ -1347,13 +1347,13 @@ fn filter_box(frame: &mut Frame, state: &State, area: Rect) {
     let completion = filter::chosen(state)
         .map(|chosen| chosen.rsplit('/').next().unwrap_or(chosen).to_string())
         .filter(|name| {
-            name.to_lowercase().starts_with(&draft.to_lowercase()) && name.len() > draft.len()
+            name.to_lowercase().starts_with(&query.to_lowercase()) && name.len() > query.len()
         })
-        .map(|name| name[draft.len()..].to_string())
+        .map(|name| name[query.len()..].to_string())
         .unwrap_or_default();
     let hint = if state.index.walking {
         format!(" {}", varde::spinner(state.tick))
-    } else if active || !draft.is_empty() {
+    } else if active || !query.is_empty() {
         String::new()
     } else {
         "filter files".to_string()
@@ -1364,14 +1364,14 @@ fn filter_box(frame: &mut Frame, state: &State, area: Rect) {
                 "/",
                 Style::default().fg(if active { Color::Cyan } else { Color::DarkGray }),
             ),
-            Span::raw(draft.to_string()),
+            Span::raw(query.to_string()),
             Span::styled(completion, Style::default().fg(Color::DarkGray)),
             Span::styled(hint, Style::default().fg(Color::DarkGray)),
         ])),
         field,
     );
     if active {
-        frame.set_cursor_position((field.x + 1 + draft.chars().count() as u16, field.y));
+        frame.set_cursor_position((field.x + 1 + query.chars().count() as u16, field.y));
     }
 }
 

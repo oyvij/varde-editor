@@ -1,4 +1,5 @@
 use crate::{Direction, Effect, State};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 pub fn score(needle: &str, haystack: &str) -> Option<i32> {
@@ -40,6 +41,7 @@ pub struct Index {
     pub files: Arc<Vec<String>>,
     pub ranked: Arc<Vec<Ranked>>,
     pub pick: Option<String>,
+    pub opened_on: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -61,7 +63,9 @@ pub fn narrow(next: &mut State, text: String) -> Vec<Effect> {
         return vec![];
     }
     if opening {
-        return reindex(next);
+        let effects = reindex(next);
+        next.index.opened_on = next.tree_selection.clone();
+        return effects;
     }
     next.index.ranked = Arc::new(ranked(&next.filter, &next.index.files));
     next.index.pick = None;
