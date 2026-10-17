@@ -19,8 +19,8 @@ use varde::tools;
 use varde::tree::{self, Entry};
 use varde::tree_actions::{Action, Target};
 use varde::{
-    layout, mouse, reading, update, DiffLine, Direction, Effect, Event, FilterKeys, Modal, Pane,
-    Place, ReplaceFailed, Selection, State, Tap, View, PALETTE,
+    layout, mouse, reading, update, DiffLine, Direction, Effect, Event, FilterKeys, Modal, Opened,
+    Pane, Place, ReplaceFailed, Selection, State, Tap, View, PALETTE,
 };
 
 const POINTER: Place = Place { line: 3, column: 7 };
@@ -2368,7 +2368,18 @@ fn path_missing(world: &mut VardeWorld, path: String) {
 }
 
 #[given(expr = "{string} is a file")]
+#[given(expr = "{string} is a read-only file")]
 fn path_is_file(world: &mut VardeWorld, _path: String) {
+    world.startup.path_status = PathStatus::File;
+}
+
+#[given(expr = "the file {string} cannot be read")]
+fn file_unreadable(world: &mut VardeWorld, _path: String) {
+    world.startup.path_status = PathStatus::UnreadableFile;
+}
+
+#[given(expr = "{string} is neither a file nor a folder")]
+fn path_is_neither(world: &mut VardeWorld, _path: String) {
     world.startup.path_status = PathStatus::NotAFolder;
 }
 
@@ -2377,8 +2388,12 @@ fn path_unreadable(world: &mut VardeWorld, _path: String) {
     world.startup.path_status = PathStatus::Unreadable;
 }
 
+#[given(expr = "Varde opened {string}")]
 #[when(expr = "Varde opens {string}")]
 fn varde_opens(world: &mut VardeWorld, path: String) {
+    if world.startup.path_status == PathStatus::File {
+        world.startup.sidecar = Some(PathBuf::from(SIDECAR));
+    }
     world.startup.root = PathBuf::from(&path);
     let entries = world
         .disk
@@ -2493,6 +2508,41 @@ fn is_scratch(world: &VardeWorld, path: &Path) -> bool {
 #[then(expr = "no state was saved")]
 fn no_state_saved(world: &mut VardeWorld) {
     assert_eq!(world.startup.state_json, None);
+}
+
+#[then(expr = "Varde is the Single-file editor")]
+fn is_single_file_editor(world: &mut VardeWorld) {
+    assert_eq!(world.state.opened, Opened::SingleFile);
+}
+
+#[then(expr = "no config file was seeded")]
+fn no_config_seeded(world: &mut VardeWorld) {
+    let seeded: Vec<&PathBuf> = world
+        .wrote
+        .iter()
+        .filter(|path| path.file_name() == Some(startup::CONFIG_FILE.as_ref()))
+        .collect();
+    assert!(seeded.is_empty(), "seeded: {seeded:?}");
+}
+
+#[then(expr = "no file was written next to the file")]
+fn nothing_written_next_to_file(world: &mut VardeWorld) {
+    let beside: Vec<&PathBuf> = world
+        .wrote
+        .iter()
+        .filter(|path| path.starts_with(&world.state.root))
+        .collect();
+    assert!(beside.is_empty(), "written: {beside:?}");
+}
+
+#[then(expr = "no directory was created next to the file")]
+fn no_directory_next_to_file(world: &mut VardeWorld) {
+    let beside: Vec<&PathBuf> = world
+        .dirs
+        .iter()
+        .filter(|dir| dir.starts_with(&world.state.root))
+        .collect();
+    assert!(beside.is_empty(), "created: {beside:?}");
 }
 
 #[then(expr = "Varde's own directory is the Sidecar")]

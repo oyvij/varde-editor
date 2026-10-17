@@ -1,9 +1,9 @@
 Feature: Opening Varde on a folder
 
-  Varde opens on exactly one folder and that folder is the workspace. A path it cannot use
-  as a workspace stops it before the TUI appears, and each way a path can be unusable gets
-  its own explanation — a typo, a file, and a permissions problem are three different
-  problems for the user to fix.
+  Varde opens on exactly one folder and that folder is the workspace; a file opens the
+  Single-file editor instead. A path it cannot use stops it before the TUI appears, and each
+  way a path can be unusable gets its own explanation — a typo and a permissions problem are
+  different problems for the user to fix.
 
   An empty folder is not one of them. Starting Varde in a fresh directory is how a project
   begins.
@@ -26,11 +26,11 @@ Feature: Opening Varde on a folder
     Then Varde refuses to start
     And the reason is "no-such-folder"
 
-  Scenario: A path that is a file stops Varde
+  Scenario: A path that is a file opens the Single-file editor
     Given "/home/me/projects/varde/README.md" is a file
     When Varde opens "/home/me/projects/varde/README.md"
-    Then Varde refuses to start
-    And the reason is "not-a-folder"
+    Then Varde is the Single-file editor
+    And "README.md" is open in the editor
 
   Scenario: A folder that cannot be read stops Varde
     Given the folder "/home/me/projects/locked" cannot be read

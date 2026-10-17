@@ -243,6 +243,12 @@ pub enum PreviewWidth {
     Widened,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Opened {
+    Workspace,
+    SingleFile,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum Modal {
     #[default]
@@ -1063,6 +1069,7 @@ impl Selection {
 pub struct State {
     pub root: PathBuf,
     pub sidecar: Option<PathBuf>,
+    pub opened: Opened,
     pub varde_home: PathBuf,
     pub modal: Modal,
     pub view: View,
@@ -1299,6 +1306,7 @@ impl Default for State {
         Self {
             root: PathBuf::new(),
             sidecar: None,
+            opened: Opened::Workspace,
             varde_home: PathBuf::new(),
             modal: Modal::None,
             view: View::Edit,

@@ -44,10 +44,10 @@ const HINT: &str = " Ctrl+Space or Esc Esc commands (e/r view · f find · a AI 
     about = "A terminal IDE that reviews, tests and ships your work"
 )]
 struct Args {
-    folder: Option<PathBuf>,
-    #[arg(long, conflicts_with = "folder")]
+    path: Option<PathBuf>,
+    #[arg(long, conflicts_with = "path")]
     deps: bool,
-    #[arg(long, conflicts_with_all = ["folder", "deps"])]
+    #[arg(long, conflicts_with_all = ["path", "deps"])]
     default_config: bool,
 }
 
@@ -73,9 +73,14 @@ fn main() -> Result<()> {
         print!("{}", startup::template());
         return Ok(());
     }
-    let folder = args.folder.as_deref().unwrap_or(Path::new("."));
-    let root = std::fs::canonicalize(folder).unwrap_or_else(|_| folder.to_path_buf());
-    let sidecar = args.folder.is_none().then(|| sidecar(&root));
+    let named = args.path.as_deref().unwrap_or(Path::new("."));
+    let path_status = path_status(named);
+    let path = std::fs::canonicalize(named).unwrap_or_else(|_| named.to_path_buf());
+    let root = match path_status {
+        PathStatus::File => path.parent().unwrap_or(&path).to_path_buf(),
+        _ => path.clone(),
+    };
+    let sidecar = (args.path.is_none() || path_status == PathStatus::File).then(|| sidecar(&root));
     sweep();
 
     // Canonicalize: macOS current_exe may not resolve symlinks; resolved once since :update replaces it
@@ -85,7 +90,7 @@ fn main() -> Result<()> {
         .and_then(|exe| exe.ancestors().nth(3).map(Path::to_path_buf));
 
     let input = Startup {
-        path_status: path_status(folder),
+        path_status,
         global_config,
         project_config: config_layer(
             &varde_dir(&root, sidecar.as_deref()).join(startup::CONFIG_FILE),
@@ -102,7 +107,7 @@ fn main() -> Result<()> {
         head: head_commit(&root),
         repo: git_status(&root),
         reviews: numbered(&varde::reviews_dir(&root, sidecar.as_deref(), &varde_home)),
-        root: root.clone(),
+        root: path,
         sidecar,
         varde_home,
         checkout_manifest: checkout
@@ -117,7 +122,7 @@ fn main() -> Result<()> {
     let (state, _config, startup_effects) = match startup::start(&input) {
         Ok(started) => started,
         Err(error) => {
-            eprintln!("{}", describe(&error, folder));
+            eprintln!("{}", describe(&error, named));
             std::process::exit(1);
         }
     };
@@ -169,6 +174,10 @@ fn path_status(path: &Path) -> PathStatus {
     match std::fs::metadata(path) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => PathStatus::Missing,
         Err(_) => PathStatus::Unreadable,
+        Ok(meta) if meta.is_file() => match std::fs::File::open(path) {
+            Ok(_) => PathStatus::File,
+            Err(_) => PathStatus::UnreadableFile,
+        },
         Ok(meta) if !meta.is_dir() => PathStatus::NotAFolder,
         Ok(_) => match std::fs::read_dir(path) {
             Ok(_) => PathStatus::Folder,
@@ -181,6 +190,7 @@ fn describe(error: &StartupError, path: &Path) -> String {
     match error {
         StartupError::Path("no-such-folder") => format!("No such folder: {}", path.display()),
         StartupError::Path("not-a-folder") => format!("Not a folder: {}", path.display()),
+        StartupError::Path("file-not-readable") => format!("Cannot read file: {}", path.display()),
         StartupError::Path(_) => format!("Cannot read folder: {}", path.display()),
         StartupError::Config(problem) => problem.to_string(),
     }
@@ -4104,18 +4114,19 @@ fn queue_story_file(path: &Path, state: &State, queue: &mut VecDeque<Event>) {
 #[cfg(test)]
 mod tests {
     use super::{
-        alive, authorship, checkout, committed, file_hunks, flatten, found, notice_text, pid_of,
-        range_ends, read_branches, rewrite, samples, short_date, sidecar, space, stitch,
-        watched_path,
+        alive, authorship, checkout, committed, describe, file_hunks, flatten, found, notice_text,
+        path_status, pid_of, range_ends, read_branches, rewrite, samples, short_date, sidecar,
+        space, stitch, watched_path, Args, ClapParser,
     };
     use notify::event::{CreateKind, DataChange, ModifyKind, RenameMode};
     use std::collections::BTreeMap;
     use std::collections::BTreeSet;
     use std::collections::VecDeque;
     use std::fs;
+    use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
     use varde::risk;
-    use varde::startup::{Fact, FactValue};
+    use varde::startup::{Fact, FactValue, PathStatus, StartupError};
     use varde::story;
     use varde::{tree, Event, State};
 
@@ -4233,6 +4244,52 @@ mod tests {
             .to_string_lossy();
         assert_eq!(pid_of(&name), Some(std::process::id()));
         assert!(alive(std::process::id()));
+    }
+
+    #[test]
+    fn a_file_that_can_be_read_opens_even_when_it_is_read_only() {
+        let dir = tempfile::tempdir().expect("a temporary directory");
+        let file = dir.path().join("notes.txt");
+        fs::write(&file, "one").expect("the fixture file");
+        assert_eq!(path_status(&file), PathStatus::File);
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o444)).expect("read-only");
+        assert_eq!(path_status(&file), PathStatus::File);
+    }
+
+    #[test]
+    fn a_file_that_cannot_be_read_is_told_apart_from_a_folder() {
+        let dir = tempfile::tempdir().expect("a temporary directory");
+        let file = dir.path().join("secret.txt");
+        fs::write(&file, "one").expect("the fixture file");
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o000)).expect("unreadable");
+        assert_eq!(path_status(&file), PathStatus::UnreadableFile);
+    }
+
+    #[test]
+    fn folders_missing_paths_and_devices_keep_their_classification() {
+        let dir = tempfile::tempdir().expect("a temporary directory");
+        assert_eq!(path_status(dir.path()), PathStatus::Folder);
+        assert_eq!(path_status(&dir.path().join("nope")), PathStatus::Missing);
+        assert_eq!(path_status(Path::new("/dev/null")), PathStatus::NotAFolder);
+    }
+
+    #[test]
+    fn a_file_that_cannot_be_read_is_described_as_a_file() {
+        assert_eq!(
+            describe(
+                &StartupError::Path("file-not-readable"),
+                Path::new("/etc/shadow")
+            ),
+            "Cannot read file: /etc/shadow"
+        );
+    }
+
+    #[test]
+    fn varde_takes_exactly_one_path() {
+        assert!(Args::try_parse_from(["varde", "notes.txt"]).is_ok());
+        assert!(Args::try_parse_from(["varde", "a.txt", "b.txt"]).is_err());
+        assert!(Args::try_parse_from(["varde", "--deps", "notes.txt"]).is_err());
+        assert!(Args::try_parse_from(["varde", "--default-config", "notes.txt"]).is_err());
     }
 
     #[test]
