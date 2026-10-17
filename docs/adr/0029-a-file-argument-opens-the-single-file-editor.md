@@ -45,7 +45,7 @@ tree:
   `.varde/config.toml` beside the file has no effect, so how Varde behaves doesn't depend on where
   the file sits.
 - **No global-config seeding.** Unlike a Bare workspace, a missing `~/.varde/config.toml` is not
-  written. A quick edit doesn't write into the home folder; the shipped template still applies in
+  written. A quick edit leaves nothing in the home folder; the shipped template still applies in
   memory, so Program rows work.
 - **No `state.json`.** Nothing is read or saved, so no cursor, Buffer or Breakpoint survives a run.
 - **No Risk, Story, Review or Debug.** None is measured, set or offered.
@@ -71,13 +71,14 @@ one.
 ## Consequences
 
 **A mistyped folder no longer refuses.** `varde <missing-path>` used to stop with `no-such-folder`.
-Now it opens an empty Buffer whenever the parent folder exists, so `varde ~/projets/varde` opens an
-empty Single-file Buffer named `varde` instead of an error. Quitting without `:w` leaves nothing
+Now it opens an empty Buffer whenever the parent folder exists, so `varde ~/projects/vrade` opens an
+empty Single-file Buffer named `vrade` instead of an error. Quitting without `:w` leaves nothing
 behind, which is why this is accepted. `no-such-folder` now means the parent folder is missing.
 
 **The shipped-Skill refresh and the Update check are left out by inference.** Nobody decided them
 directly. They follow from "seeds nothing" — the refresh writes into `~/.varde/ai/skills/` — and from
-a palette that offers no AI pane and no Update. The Spec asks the user to confirm both.
+a palette that offers no AI pane and no Update. Both wait on the user's confirmation; if either is
+reversed, this section is what changes.
 
 **Every Varde-owned write still routes through one accessor.** The Single-file editor sets the
 Sidecar as a Bare workspace does, so the next feature that writes to `.varde` writes into the

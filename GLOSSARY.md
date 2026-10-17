@@ -392,7 +392,7 @@ and gives a Language server the file's own folder. Not a workspace — there is 
 _Avoid_: file mode, lite mode, bare file, scratch editor
 
 **Sidecar**:
-Where a Bare workspace's own state lives — under `~/.varde/paths/`, named for the folder and the
+Where a Bare workspace's or a Single-file editor's own state lives — under `~/.varde/paths/`, named for the folder and the
 process, deleted when Varde exits and swept on start when a crash escaped that. It holds what belongs
 to Varde, never what belongs to the user: a Guest repo, a story set, a session's `state.json`. A
 submitted review is the one thing that does not go here, because an output destroyed at exit is a
