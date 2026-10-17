@@ -7119,29 +7119,9 @@ fn tree_not_filtered(world: &mut VardeWorld) {
     assert!(world.state.filter.is_empty());
 }
 
-#[given(expr = "I step {word} through the matches")]
-#[when(expr = "I step {word} through the matches")]
-fn step_through_matches(world: &mut VardeWorld, way: String) {
-    world.send(Event::StepFilter(match way.as_str() {
-        "down" => Direction::Down,
-        "up" => Direction::Up,
-        other => panic!("no way {other:?}"),
-    }));
-}
-
-#[then(expr = "no row is highlighted")]
-fn no_row_highlighted(world: &mut VardeWorld) {
-    assert_eq!(tree::highlighted(&world.state), None);
-}
-
 #[then(expr = "the highlighted row is {string}")]
 fn highlighted_row_is(world: &mut VardeWorld, path: String) {
     assert_eq!(tree::highlighted(&world.state), Some(abs(world, &path)));
-}
-
-#[when(expr = "I accept the filter")]
-fn accept_filter(world: &mut VardeWorld) {
-    world.send(Event::AcceptFilter);
 }
 
 #[then(expr = "the tree filter state is {string}")]

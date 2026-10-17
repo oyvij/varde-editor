@@ -1812,9 +1812,7 @@ fn start_ai_box(drafts: &mut Drafts, event: KeyEvent) -> Vec<Event> {
 fn filter_box(state: &State, event: KeyEvent) -> Vec<Event> {
     match event.code {
         KeyCode::Esc => vec![Event::CloseFilter],
-        KeyCode::Enter => vec![Event::AcceptFilter],
-        KeyCode::Down => vec![Event::StepFilter(Direction::Down)],
-        KeyCode::Up => vec![Event::StepFilter(Direction::Up)],
+        KeyCode::Enter | KeyCode::Down | KeyCode::Tab => vec![Event::AcceptFilter],
         KeyCode::Backspace => {
             let mut text = state.filter.clone();
             text.pop();
@@ -2808,21 +2806,19 @@ mod tests {
     }
 
     #[test]
-    fn the_arrows_step_through_the_filter_and_leave_the_box_open() {
+    fn enter_down_and_tab_in_the_box_accept_the_filter_and_up_does_nothing() {
         let typing = State {
             filter: "n".to_string(),
             filter_keys: FilterKeys::Box,
             ..focused(Pane::Tree)
         };
-        for (code, direction) in [
-            (KeyCode::Down, Direction::Down),
-            (KeyCode::Up, Direction::Up),
-        ] {
+        for code in [KeyCode::Enter, KeyCode::Down, KeyCode::Tab] {
             assert_eq!(
                 press(&typing, KeyEvent::new(code)),
-                vec![Event::StepFilter(direction)]
+                vec![Event::AcceptFilter]
             );
         }
+        assert_eq!(press(&typing, KeyEvent::new(KeyCode::Up)), vec![]);
     }
 
     #[test]

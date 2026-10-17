@@ -167,9 +167,10 @@ until you open it. Varde remembers which folders are expanded per project.
 only those. Only files match. Folders appear when they lead to a match, opened so the match is
 visible, and the tree goes back to how it was when the filter clears. The filter searches the whole
 project, not only the folders you have opened, and skips `.git`. The box shows the best match
-completed ahead of what you typed, and narrows as you type. `Enter` selects that match in the tree,
-opens the folders down to it, and clears the filter. It does not open the file, so you decide what
-to do with it. With no match, the tree says so rather than going blank.
+completed ahead of what you typed, and narrows as you type. `Enter`, `↓` or `Tab` selects that match
+in the tree, opens the folders down to it and moves the keyboard into the filtered tree, leaving the
+filter on. It does not open the file, so you decide what to do with it. With no match, the tree
+says so rather than going blank, and these keys leave the keyboard in the box.
 
 The box has the keyboard only while you type in it. Click another pane, press a focus key or open
 the palette, and your keys go there while the tree stays filtered. Coming back to the tree puts

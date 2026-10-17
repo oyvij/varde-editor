@@ -437,7 +437,6 @@ pub enum Event {
     MoveFocus(Direction),
     MoveSelection(Direction),
     MoveAction(Direction),
-    StepFilter(Direction),
     Activate,
     Bytes(Vec<u8>),
     Pasted(String),
@@ -3927,25 +3926,25 @@ fn on_complete_search(state: &State, mut next: State, event: Event, wheeled: boo
 
 fn on_accept_filter(state: &State, mut next: State, event: Event, wheeled: bool) -> Answered {
     let effects = match event {
-        Event::AcceptFilter => {
-            let chosen = filter::chosen(state).map(str::to_string);
-            filter::narrow(&mut next, String::new());
-            next.filter_keys = FilterKeys::Away;
-            match chosen {
-                Some(relative) => {
-                    next.tree_selection = Some(state.shown_root().join(&relative));
-                    let parts: Vec<&str> = relative.split('/').collect();
-                    let mut folder = state.shown_root().to_path_buf();
-                    let mut reads = Vec::new();
-                    for part in &parts[..parts.len() - 1] {
-                        folder = folder.join(part);
-                        reads.push(Effect::ReadFolder(folder.clone()));
-                    }
-                    reads
+        Event::AcceptFilter => match filter::chosen(state) {
+            Some(relative) => {
+                next.filter_keys = FilterKeys::Away;
+                next.tree_selection = Some(state.shown_root().join(relative));
+                let parts: Vec<&str> = relative.split('/').collect();
+                let mut folder = state.shown_root().to_path_buf();
+                let mut reads = Vec::new();
+                for part in &parts[..parts.len() - 1] {
+                    folder = folder.join(part);
+                    reads.push(Effect::ReadFolder(folder.clone()));
                 }
-                None => vec![],
+                reads
             }
-        }
+            None if state.filter.is_empty() => {
+                next.filter_keys = FilterKeys::Away;
+                vec![]
+            }
+            None => vec![],
+        },
 
         Event::EditorBackspace => {
             if state.diff.is_none() && state.walking.is_none() {
@@ -6523,10 +6522,6 @@ fn on_move_selection_2(state: &State, mut next: State, event: Event, wheeled: bo
 
 fn on_move_selection_3(state: &State, mut next: State, event: Event, wheeled: bool) -> Answered {
     let effects = match event {
-        Event::StepFilter(direction) => {
-            filter::step(state, &mut next, direction);
-            vec![]
-        }
         Event::MoveSelection(direction) => {
             let rows = tree::visible_rows(state);
             if rows.is_empty() {
