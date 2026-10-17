@@ -304,6 +304,36 @@ Feature: Filtering the file tree
     And the tree selection is "/home/me/projects/varde/src/main.rs"
     And "src" is expanded
 
+  Scenario: j in the filtered list walks to the next visible row, folders included
+    Given I filter by "tree"
+    And I click in the editor pane
+    And I click in the tree pane
+    And the tree selection is "features/tree.feature"
+    When I press the key "j"
+    Then the tree selection is "/home/me/projects/varde/src"
+    And the filter query is "tree"
+
+  Scenario: Enter on a file in the filtered list opens it and the tree stays filtered
+    Given the folder "src" is collapsed
+    And I filter by "treeac"
+    And I click in the editor pane
+    And I click in the tree pane
+    And the tree selection is "src/tree_actions.rs"
+    When I press the key "Enter"
+    Then "src/tree_actions.rs" was opened in the editor
+    And the filter query is "treeac"
+
+  Scenario: Enter on a folder row in the filtered list does nothing
+    Given the folder "src" is expanded
+    And I filter by "main"
+    And I click in the editor pane
+    And I click in the tree pane
+    And the tree selection is "src"
+    When I press the key "Enter"
+    Then no file was opened in the editor
+    And the filter query is "main"
+    And "src" is expanded
+
   Scenario: A file created while the filter is open waits for the next one
     Given I filter by "ke"
     And the project gains "src/keys.rs"

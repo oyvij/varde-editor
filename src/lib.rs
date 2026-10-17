@@ -2797,6 +2797,8 @@ fn on_key_4(state: &State, next: State, event: Event, _wheeled: bool) -> Answere
             let action = match key {
                 '-' => return Ok(update(state, Event::Trigger(Action::BackToRoot, None))),
                 'c' => return Ok(update(state, Event::CollapseTree)),
+                'j' => return Ok(update(state, Event::MoveSelection(Direction::Down))),
+                'k' => return Ok(update(state, Event::MoveSelection(Direction::Up))),
                 'n' => "new-file",
                 'N' => "new-directory",
                 'd' => "delete",
@@ -6794,6 +6796,7 @@ fn on_activate_3(state: &State, next: State, event: Event, _wheeled: bool) -> An
 fn on_activate_4(state: &State, mut next: State, event: Event, wheeled: bool) -> Answered {
     let effects = match event {
         Event::Activate => match selected_row(state) {
+            Some(row) if row.is_dir && !state.filter.is_empty() => vec![],
             Some(row) if row.is_dir && row.expanded => {
                 next.expanded.remove(&row.path);
                 vec![]
@@ -8432,7 +8435,7 @@ pub(crate) fn editor_inserting(state: &State) -> bool {
 
 fn selected_row(state: &State) -> Option<tree::Row> {
     let selection = state.tree_selection.as_ref()?;
-    tree::rows(state)
+    tree::visible_rows(state)
         .into_iter()
         .find(|row| &row.path == selection)
 }
@@ -8512,6 +8515,36 @@ mod tests {
             walk: filtering.index.walk + 2,
             root: PathBuf::from("/w"),
         }));
+    }
+
+    #[test]
+    fn l_and_h_on_a_folder_in_the_filtered_list_leave_the_folders_as_they_are() {
+        let tree = State {
+            focus: Pane::Tree,
+            ..workspace()
+        };
+        let filtering = update(&tree, Event::Filter("main".to_string())).0;
+        let indexed = update(
+            &filtering,
+            Event::Indexed {
+                walk: filtering.index.walk,
+                files: vec!["src/main.rs".to_string()],
+                done: true,
+            },
+        )
+        .0;
+        let listed = State {
+            filter_keys: FilterKeys::Away,
+            tree_selection: Some(PathBuf::from("/w/src")),
+            ..indexed
+        };
+        for key in ['l', 'h'] {
+            let (next, effects) = update(&listed, Event::Key(key));
+            assert_eq!(effects, vec![]);
+            assert_eq!(next.expanded, listed.expanded);
+            assert_eq!(next.filter, "main");
+            assert_eq!(next.tree_selection, listed.tree_selection);
+        }
     }
 
     #[test]
