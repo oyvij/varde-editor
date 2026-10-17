@@ -241,6 +241,17 @@ Feature: The Single-file editor
     Then the editor shows the version on disk
     And "notes.txt" is not flagged as changed on disk
 
+  Scenario: The Cheatsheet lists the editor's keys and no pane's
+    Given "/home/me/projects/theirs/notes.txt" is a file
+    And Varde opened "/home/me/projects/theirs/notes.txt"
+    And I open the palette
+    When I press "h" in the palette
+    Then the Cheatsheet lists "buffer" under the keys "gt gT"
+    And the Cheatsheet lists "tools" under the keys "C-space v"
+    And the Cheatsheet lists no keys for "focus"
+    And the Cheatsheet lists no keys for "knowledge"
+    And the Cheatsheet lists no keys for "skills"
+
   # Closing
 
   Scenario: Closing the only Buffer exits Varde and deletes the Sidecar

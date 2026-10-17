@@ -410,14 +410,46 @@ fn chords(
     debug.iter().chain(evaluator.iter()).chain(CHORDS.iter())
 }
 
+const SINGLE_FILE_CHEATSHEET: [&str; 23] = [
+    "i a o O x",
+    "w b e",
+    "gg G",
+    "S-arr W B",
+    "dd dG db yy p",
+    "V",
+    "C-c D-c C-v D-v",
+    "/ n N Tab",
+    "gt gT",
+    "C-p C-n gp gn",
+    "u U C-z C-S-z",
+    "K K",
+    "gd",
+    "C-space Esc Esc",
+    ":",
+    "Enter Esc",
+    "Tab",
+    "C-d D-d gm",
+    "0 $",
+    "D",
+    "C-s D-s",
+    "C-space v",
+    "cc ci cb",
+];
+
 pub fn cheatsheet(
     state: &State,
-) -> impl Iterator<Item = &'static (&'static str, &'static str, &'static [View])> {
+) -> impl Iterator<Item = &'static (&'static str, &'static str, &'static [View])> + '_ {
     let debug: &'static [(&str, &str, &[View])] = match state.debug {
         Some(_) => &DEBUG_KEYS,
         None => &[],
     };
-    debug.iter().chain(CHEATSHEET.iter()).chain(chords(state))
+    debug
+        .iter()
+        .chain(CHEATSHEET.iter())
+        .chain(chords(state))
+        .filter(|(keys, _, _)| {
+            state.opened == Opened::Workspace || SINGLE_FILE_CHEATSHEET.contains(keys)
+        })
 }
 
 pub fn cheatsheet_rows(state: &State) -> Vec<(&'static str, &'static str)> {
@@ -5284,6 +5316,23 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn every_key_the_single_file_cheatsheet_keeps_is_an_edit_view_row() {
+        let single_file = State {
+            opened: Opened::SingleFile,
+            view: View::Edit,
+            ..State::default()
+        };
+        let listed: Vec<&str> = super::cheatsheet_rows(&single_file)
+            .into_iter()
+            .map(|(keys, _)| keys)
+            .collect();
+        for keys in super::SINGLE_FILE_CHEATSHEET {
+            assert!(listed.contains(&keys), "{keys:?} is not an Edit view row");
+        }
+        assert_eq!(listed.len(), super::SINGLE_FILE_CHEATSHEET.len());
     }
 
     #[test]

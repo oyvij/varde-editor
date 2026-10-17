@@ -2067,6 +2067,24 @@ fn cheatsheet_at_its_end(world: &mut VardeWorld) {
     assert_eq!(world.state.cheatsheet_scroll, rows - fits);
 }
 
+#[then(expr = "the Cheatsheet lists {string} under the keys {string}")]
+fn cheatsheet_lists_under(world: &mut VardeWorld, what: String, keys: String) {
+    let rows = keys::cheatsheet_rows(&world.state);
+    assert!(
+        rows.contains(&(keys.as_str(), what.as_str())),
+        "{keys}/{what} is not listed: {rows:?}"
+    );
+}
+
+#[then(expr = "the Cheatsheet lists no keys for {string}")]
+fn cheatsheet_lists_nothing_for(world: &mut VardeWorld, what: String) {
+    let rows = keys::cheatsheet_rows(&world.state);
+    assert!(
+        rows.iter().all(|(_, listed)| *listed != what),
+        "{what} is listed: {rows:?}"
+    );
+}
+
 #[then(expr = "the Cheatsheet lists the keys of the view on screen")]
 fn cheatsheet_lists_the_view(world: &mut VardeWorld) {
     assert_eq!(world.state.ai_slot, layout::Slot::Cheatsheet);
