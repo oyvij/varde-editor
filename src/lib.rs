@@ -5663,7 +5663,7 @@ fn on_close_buffer(_state: &State, mut next: State, event: Event, wheeled: bool)
             if !survived {
                 next.current_buffer = None;
                 let (next, mut effects) = update(&next, Event::CloseBuffer { force: true });
-                effects.push(told);
+                effects.insert(0, told);
                 return Ok((next, effects));
             }
             vec![told]
@@ -9425,6 +9425,27 @@ mod tests {
         let kept = previewed(Some("my edits"));
         assert!(kept.buffers.contains_key(&path));
         assert_eq!(kept.preview, Some(path));
+    }
+
+    #[test]
+    fn closing_every_buffer_in_the_single_file_editor_ends_on_exit() {
+        let path = PathBuf::from("/home/me/projects/theirs/notes.txt");
+        let (state, _) = update(
+            &State {
+                root: PathBuf::from("/home/me/projects/theirs"),
+                opened: Opened::SingleFile,
+                sidecar: Some(PathBuf::from("/tmp/varde-sidecar")),
+                ..State::default()
+            },
+            Event::BufferOpened {
+                path,
+                contents: "notes".to_string(),
+                preview: false,
+                at: None,
+            },
+        );
+        let (_, effects) = update(&state, Event::CloseAllBuffers { force: false });
+        assert_eq!(effects.last(), Some(&Effect::Exit));
     }
 
     #[test]

@@ -222,6 +222,7 @@ Feature: The Single-file editor
     When I run ":q!"
     Then Varde exits
     And the Sidecar was deleted
+    And no state was saved
     And no file was written next to the file
 
   Scenario: Writing and closing the only Buffer writes the file and exits
@@ -237,6 +238,7 @@ Feature: The Single-file editor
       """
     And Varde exits
     And the Sidecar was deleted
+    And no state was saved
 
   Scenario: Closing every Buffer exits Varde
     Given "/home/me/projects/theirs/notes.txt" is a file
@@ -254,6 +256,8 @@ Feature: The Single-file editor
     And the editor mode is normal
     When I run ":qa!"
     Then Varde exits
+    And the Sidecar was deleted
+    And no state was saved
     And no file was written next to the file
 
   # Language intelligence and more Buffers
