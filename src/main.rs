@@ -33,10 +33,19 @@ use varde::startup::{self, Fact, FactValue, PathStatus, Startup, StartupError};
 use varde::story;
 use varde::tree::Entry;
 use varde::{
-    tmp_dir, tree, update, varde_dir, Direction, Effect, Event, Modal, Pane, ReplaceFailed, State,
+    tmp_dir, tree, update, varde_dir, Direction, Effect, Event, Modal, Opened, Pane, ReplaceFailed,
+    State,
 };
 
 const HINT: &str = " Ctrl+Space or Esc Esc commands (e/r view · f find · a AI · t terminal · w knowledge · s submit · q quit) · ^F search · / filter · gt/gT buffers · :q close · :qa quit · Alt+hjkl focus · Enter open · → row actions · n/N/d shortcuts";
+const SINGLE_FILE_HINT: &str = " Ctrl+Space or Esc Esc commands (h keys · v tools · q quit) · / find · gt/gT buffers · :w write · :q close · :qa quit";
+
+fn hint(opened: Opened) -> &'static str {
+    match opened {
+        Opened::Workspace => HINT,
+        Opened::SingleFile => SINGLE_FILE_HINT,
+    }
+}
 
 #[derive(ClapParser)]
 #[command(
@@ -1640,7 +1649,7 @@ fn render(terminal: &mut Screen, state: &State, edge: &mut Edge) -> Result<()> {
     terminal.draw(|frame| {
         edge.area = frame.area();
         let (status, tone) = if edge.status.text.is_empty() {
-            (HINT.to_string(), ui::Tone::Hint)
+            (hint(state.opened).to_string(), ui::Tone::Hint)
         } else {
             (edge.status.text.clone(), edge.status.tone)
         };
@@ -4145,8 +4154,9 @@ fn queue_story_file(path: &Path, state: &State, queue: &mut VecDeque<Event>) {
 mod tests {
     use super::{
         alive, authorship, canonical, checkout, committed, describe, file_hunks, flatten, found,
-        notice_text, path_status, pid_of, range_ends, read_branches, rewrite, root_and_sidecar,
-        samples, short_date, sidecar, space, stitch, watched_path, Args, ClapParser,
+        hint, notice_text, path_status, pid_of, range_ends, read_branches, rewrite,
+        root_and_sidecar, samples, short_date, sidecar, space, stitch, watched_path, Args,
+        ClapParser,
     };
     use notify::event::{CreateKind, DataChange, ModifyKind, RenameMode};
     use std::collections::BTreeMap;
@@ -4158,7 +4168,29 @@ mod tests {
     use varde::risk;
     use varde::startup::{Fact, FactValue, PathStatus, StartupError};
     use varde::story;
-    use varde::{tree, Event, State};
+    use varde::{tree, Event, Opened, State};
+
+    #[test]
+    fn the_single_file_hint_names_only_the_keys_that_work_there() {
+        let single_file = hint(Opened::SingleFile);
+        for gone in [
+            "view",
+            "AI",
+            "terminal",
+            "knowledge",
+            "submit",
+            "^F",
+            "filter",
+            "focus",
+            "row actions",
+        ] {
+            assert!(!single_file.contains(gone), "{gone:?} in {single_file:?}");
+        }
+        for kept in ["Ctrl+Space", "Esc Esc", "gt/gT", ":w", ":q", ":qa"] {
+            assert!(single_file.contains(kept), "{kept:?} missing");
+        }
+        assert!(hint(Opened::Workspace).contains("a AI"));
+    }
 
     #[test]
     fn a_folder_that_is_not_a_repository_still_reads_the_files_a_set_names() {
