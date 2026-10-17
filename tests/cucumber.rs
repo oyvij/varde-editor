@@ -9491,6 +9491,19 @@ const INQUIRY_SET: &str = "inquiry-1700000000000.json";
 #[given(expr = "an Inquiry set is written")]
 #[when(expr = "an Inquiry set is written")]
 fn an_inquiry_set_is_written(world: &mut VardeWorld) {
+    write_inquiry_set(world, INQUIRY_SET.to_string());
+}
+
+#[given(expr = "the Inquiry set that prompt named is written")]
+fn the_named_inquiry_set_is_written(world: &mut VardeWorld) {
+    let named = inquiry_artifacts(world);
+    let [name] = named.as_slice() else {
+        panic!("expected one named artifact, got {named:?}");
+    };
+    write_inquiry_set(world, name.clone());
+}
+
+fn write_inquiry_set(world: &mut VardeWorld, name: String) {
     let dir = world.state.root.join(".varde/stories");
     let contents = json!({
         "protocolVersion": 3,
@@ -9498,8 +9511,8 @@ fn an_inquiry_set_is_written(world: &mut VardeWorld) {
         "stories": [],
     })
     .to_string();
-    world.files.insert(dir.join(INQUIRY_SET), contents);
-    world.send(Event::StoryFileWritten(INQUIRY_SET.to_string()));
+    world.files.insert(dir.join(&name), contents);
+    world.send(Event::StoryFileWritten(name));
 }
 
 #[then(expr = "the Inquiry set is kept")]
@@ -9508,7 +9521,7 @@ fn the_inquiry_set_is_kept(world: &mut VardeWorld) {
     assert!(world.files.contains_key(&dir.join(INQUIRY_SET)));
 }
 
-#[then(expr = "the Inquiry set was pruned")]
+#[then(expr = "the Inquiry set was pruned ahead of the oldest story set")]
 fn the_inquiry_set_was_pruned(world: &mut VardeWorld) {
     let dir = world.state.root.join(".varde/stories");
     assert!(!world.files.contains_key(&dir.join(INQUIRY_SET)));

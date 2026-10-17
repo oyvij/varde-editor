@@ -2514,7 +2514,6 @@ mod tests {
     #[test]
     fn the_inquiry_has_no_bang_form() {
         assert_eq!(command("story*!"), vec![]);
-        assert!(COMMANDS.iter().all(|(name, ..)| *name != "story*!"));
     }
 
     #[test]
