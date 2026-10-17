@@ -1020,11 +1020,11 @@ const FIX_PROMPT: &str = r#"Varde checked the story set you wrote to `{OUT}` and
 
 Rewrite only those steps. Keep the set's `title`, its stories and every other step exactly as they
 are, and write the whole set back to `{OUT}` — the same path, replacing what is there. Do not
-re-author the walkthrough and do not renumber or drop the steps that were fine.{RANGE}
+re-author the walkthrough and do not renumber or drop the steps that were fine.{KEEP_RANGE}
 
 Write only the JSON file. Do not summarise it back."#;
 
-const FIX_RANGE: &str = r#"
+const FIX_KEEP_RANGE: &str = r#"
 
 Keep its `range` as it is too. `{CONTEXT}` still holds the range's two oids, its diff and every
 changed file's contents with line numbers; read the line numbers off it rather than guessing again."#;
@@ -1035,11 +1035,11 @@ pub fn fix_prompt(
     problems: &[Problem],
     inquiry_ms: u64,
 ) -> String {
-    let (out, range) = match &artifact.range {
+    let (out, keep_range) = match &artifact.range {
         Some(range) => {
             let out = artifact_path_of(dir, range);
-            let context = FIX_RANGE.replace("{CONTEXT}", &context_path(&out));
-            (out, context)
+            let keep_range = FIX_KEEP_RANGE.replace("{CONTEXT}", &context_path(&out));
+            (out, keep_range)
         }
         None => (inquiry_path(dir, inquiry_ms), String::new()),
     };
@@ -1057,7 +1057,7 @@ pub fn fix_prompt(
         .join("\n");
     FIX_PROMPT
         .replace("{PROBLEMS}", &listed)
-        .replace("{RANGE}", &range)
+        .replace("{KEEP_RANGE}", &keep_range)
         .replace("{OUT}", &out)
 }
 
@@ -2378,7 +2378,6 @@ mod tests {
         assert!(!text.contains("{RANGE}"));
         assert!(!text.contains("{OUT}"));
         assert!(!text.contains("{CONTEXT}"));
-        assert!(!text.contains("{RANGE}"));
         for placeholder in ["{STORIES}", "{KIND}", "{STEP_RULES}", "{CHECK}"] {
             assert!(!text.contains(placeholder), "{placeholder}");
         }
@@ -3097,7 +3096,7 @@ from b
         assert!(!text.contains("{OUT}"));
         assert!(!text.contains("{PROBLEMS}"));
         assert!(!text.contains("{CONTEXT}"));
-        assert!(!text.contains("{RANGE}"));
+        assert!(!text.contains("{KEEP_RANGE}"));
     }
 
     #[test]
