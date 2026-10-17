@@ -9486,6 +9486,35 @@ fn a_new_story_set_is_written(world: &mut VardeWorld) {
     world.send(Event::StoryFileWritten(name));
 }
 
+const INQUIRY_SET: &str = "inquiry-1700000000000.json";
+
+#[given(expr = "an Inquiry set is written")]
+#[when(expr = "an Inquiry set is written")]
+fn an_inquiry_set_is_written(world: &mut VardeWorld) {
+    let dir = world.state.root.join(".varde/stories");
+    let contents = json!({
+        "protocolVersion": 3,
+        "title": "Title",
+        "stories": [],
+    })
+    .to_string();
+    world.files.insert(dir.join(INQUIRY_SET), contents);
+    world.send(Event::StoryFileWritten(INQUIRY_SET.to_string()));
+}
+
+#[then(expr = "the Inquiry set is kept")]
+fn the_inquiry_set_is_kept(world: &mut VardeWorld) {
+    let dir = world.state.root.join(".varde/stories");
+    assert!(world.files.contains_key(&dir.join(INQUIRY_SET)));
+}
+
+#[then(expr = "the Inquiry set was pruned")]
+fn the_inquiry_set_was_pruned(world: &mut VardeWorld) {
+    let dir = world.state.root.join(".varde/stories");
+    assert!(!world.files.contains_key(&dir.join(INQUIRY_SET)));
+    assert!(world.files.contains_key(&dir.join("story-00.json")));
+}
+
 #[then(expr = "{int} story sets remain")]
 fn story_sets_remain(world: &mut VardeWorld, expected: usize) {
     let dir = world.state.root.join(".varde/stories");

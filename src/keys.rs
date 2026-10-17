@@ -2512,6 +2512,12 @@ mod tests {
     }
 
     #[test]
+    fn the_inquiry_has_no_bang_form() {
+        assert_eq!(command("story*!"), vec![]);
+        assert!(COMMANDS.iter().all(|(name, ..)| *name != "story*!"));
+    }
+
+    #[test]
     fn the_inquiry_is_on_the_cheatsheet_of_the_views_it_opens_from() {
         for (view, shown) in [
             (View::Edit, true),

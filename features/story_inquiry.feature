@@ -181,3 +181,47 @@ Feature: Asking for a story set with an Inquiry
       And an AI session is running
       When I submit the Inquiry "what is this"
       Then the authoring prompt names the story set in the Sidecar
+
+  Rule: Inquiry sets share the one pool of ten with Story sets
+
+    An Inquiry set is kept and pruned like any other, and the oldest set of either kind falls out
+    when the eleventh arrives. One pool was chosen over two: authoring Inquiry sets can evict the
+    Story set for a review in flight, and that is the cheaper one to get back, since Varde resolves a
+    Range for the developer while an Inquiry is only re-askable by whoever remembers it. An Inquiry
+    has no key to look it up by, so it always authors fresh, and there is no `:story*!`.
+
+    Scenario: A new Inquiry set is kept alongside the Story sets
+      Given the project holds 9 story sets
+      When an Inquiry set is written
+      Then 10 story sets remain
+      And the Inquiry set is kept
+
+    Scenario: An Inquiry set arriving at a full pool prunes the oldest set and its companion file
+      Given the project holds 10 story sets
+      When an Inquiry set is written
+      Then 10 story sets remain
+      And the oldest story set was pruned
+      And the oldest story set's companion file was pruned
+      And the Inquiry set is kept
+
+    Scenario: An Inquiry set falls out of the pool by the same recency as a Story set
+      Given an Inquiry set is written
+      And the project holds 9 story sets
+      When a new story set is written
+      Then 10 story sets remain
+      And the Inquiry set was pruned
+
+    Scenario: Asking the same Inquiry again authors again rather than loading the earlier set
+      Given an AI session is running
+      And I submitted the Inquiry "where does a key go"
+      And an Inquiry set is written
+      When I submit the Inquiry "where does a key go"
+      Then the story view state is "authoring"
+      And the two prompts name different Inquiry artifacts
+
+    Scenario: There is no bang form of the Inquiry
+      Given an AI session is running
+      When I run ":story*!"
+      Then the modal is "none"
+      And no keys were sent to the AI pane
+      And the story view state is "no-stories"
