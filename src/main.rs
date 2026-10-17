@@ -4105,8 +4105,9 @@ fn queue_story_file(path: &Path, state: &State, queue: &mut VecDeque<Event>) {
 #[cfg(test)]
 mod tests {
     use super::{
-        alive, authorship, checkout, committed, flatten, found, notice_text, pid_of, range_ends,
-        read_branches, rewrite, samples, short_date, sidecar, space, stitch, watched_path,
+        alive, authorship, checkout, committed, file_hunks, flatten, found, notice_text, pid_of,
+        range_ends, read_branches, rewrite, samples, short_date, sidecar, space, stitch,
+        watched_path,
     };
     use notify::event::{CreateKind, DataChange, ModifyKind, RenameMode};
     use std::collections::BTreeMap;
@@ -4118,6 +4119,23 @@ mod tests {
     use varde::startup::{Fact, FactValue};
     use varde::story;
     use varde::{tree, Event, State};
+
+    #[test]
+    fn a_folder_that_is_not_a_repository_still_reads_the_files_a_set_names() {
+        let root = tempfile::tempdir().expect("a temp directory");
+        fs::write(root.path().join("keys.rs"), "one\ntwo\n").expect("a file");
+        let named = ["keys.rs".to_string(), "gone.rs".to_string()];
+
+        let read = file_hunks(root.path(), story::Inventory::Worktree, &named);
+
+        let keys = read.iter().find(|entry| entry.file == "keys.rs");
+        assert_eq!(
+            keys.map(|entry| (entry.new_exists, entry.new_text.as_str(), entry.hunks.len())),
+            Some((true, "one\ntwo\n", 0))
+        );
+        let gone = read.iter().find(|entry| entry.file == "gone.rs");
+        assert_eq!(gone.map(|entry| entry.new_exists), Some(false));
+    }
 
     #[test]
     fn a_gap_is_counted_in_samples_and_not_in_frames() {
