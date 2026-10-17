@@ -1033,8 +1033,7 @@ impl VardeWorld {
             fetch @ Effect::ReplaceBinary { .. } => self.replacing.push(fetch),
             Effect::ReadStoryFiles {
                 repo,
-                base: _,
-                head: _,
+                range: _,
                 files,
             } => {
                 if self.hold_site_texts {
@@ -7542,6 +7541,13 @@ fn build_story(
     .to_string()
 }
 
+fn build_inquiry(stories: Vec<(String, Vec<Value>)>) -> String {
+    let mut set: Value = serde_json::from_str(&build_story("", "", "", stories)).expect("json");
+    set["protocolVersion"] = json!(3);
+    set.as_object_mut().expect("an object").remove("range");
+    set.to_string()
+}
+
 fn build_step(
     id: &str,
     file: &str,
@@ -7568,11 +7574,11 @@ fn artifact_to_json(artifact: &story::Artifact) -> Value {
     json!({
         "protocolVersion": artifact.protocol_version,
         "title": artifact.title,
-        "range": {
-            "base": artifact.range.base,
-            "head": artifact.range.head,
-            "spelling": artifact.range.spelling,
-        },
+        "range": artifact.range.as_ref().map(|range| json!({
+            "base": range.base,
+            "head": range.head,
+            "spelling": range.spelling,
+        })),
         "stories": artifact.stories.iter().map(|story| json!({
             "id": story.id,
             "name": story.name,
@@ -7930,14 +7936,63 @@ fn step_asks(world: &mut VardeWorld, claim: String, question: String, step: &Ste
 #[given("a story set for this change claims:")]
 #[when("a story set for this change claims:")]
 fn story_set_claims(world: &mut VardeWorld, step: &Step) {
+    let contents = build_story(
+        "aaaaaaaaaaaa",
+        "bbbbbbbbbbbb",
+        "main..HEAD",
+        claimed_stories(step),
+    );
+    world.send(Event::StoryArtifact {
+        contents,
+        range: story::RangeStatus::Resolves,
+    });
+}
+
+#[given("an Inquiry set claims:")]
+#[when("an Inquiry set claims:")]
+fn inquiry_set_claims(world: &mut VardeWorld, step: &Step) {
+    inquiry_arrives(world, build_inquiry(claimed_stories(step)));
+}
+
+#[when(expr = "the Inquiry artifact arrives:")]
+fn inquiry_artifact_arrives(world: &mut VardeWorld, step: &Step) {
+    let contents = step
+        .docstring()
+        .expect("docstring")
+        .trim_matches('\n')
+        .to_string();
+    inquiry_arrives(world, contents);
+}
+
+fn inquiry_arrives(world: &mut VardeWorld, contents: String) {
+    let name = inquiry_artifacts(world)
+        .pop()
+        .expect("an Inquiry artifact named to the AI");
+    let path = world.state.root.join(".varde/stories").join(name);
+    let range = story::range_status(&path, |revision| !world.unresolvable.contains(revision));
+    world.files.insert(path, contents.clone());
+    world.send(Event::StoryArtifact { contents, range });
+}
+
+#[given(expr = "an Inquiry set on disk claims lines {int} to {int} of {string}")]
+fn inquiry_set_on_disk_claims(world: &mut VardeWorld, from: u32, to: u32, path: String) {
+    let claimed = build_step("s1e1", &path, "new", "context", from, to, "");
+    let contents = build_inquiry(vec![("The keys".to_string(), vec![claimed])]);
+    let dir = world.state.root.join(".varde/stories");
+    world
+        .files
+        .insert(dir.join("inquiry-1760000000000.json"), contents);
+}
+
+fn claimed_stories(step: &Step) -> Vec<(String, Vec<Value>)> {
     let table = step.table().expect("table");
     let headers = &table.rows[0];
     let mut stories: Vec<(String, Vec<Value>)> = Vec::new();
     for (index, row) in table.rows.iter().enumerate().skip(1) {
         let name = column(headers, row, "story").unwrap_or("Story").to_string();
         let file = column(headers, row, "file").expect("file column");
-        let side = column(headers, row, "side").expect("side column");
-        let kind = column(headers, row, "kind").expect("kind column");
+        let side = column(headers, row, "side").unwrap_or("new");
+        let kind = column(headers, row, "kind").unwrap_or("context");
         let from: u32 = column(headers, row, "from")
             .expect("from column")
             .parse()
@@ -7964,11 +8019,7 @@ fn story_set_claims(world: &mut VardeWorld, step: &Step) {
             None => stories.push((name, vec![claimed])),
         }
     }
-    let contents = build_story("aaaaaaaaaaaa", "bbbbbbbbbbbb", "main..HEAD", stories);
-    world.send(Event::StoryArtifact {
-        contents,
-        range: story::RangeStatus::Resolves,
-    });
+    stories
 }
 
 #[given("a story set for this change holds:")]
@@ -8447,11 +8498,11 @@ fn story_set_range_is(world: &mut VardeWorld, spelling: String) {
     let story::Set::Loaded(artifact) = &mut world.state.story_set else {
         panic!("no story set loaded");
     };
-    artifact.range = story::Range {
+    artifact.range = Some(story::Range {
         base: base.to_string(),
         head: head.to_string(),
         spelling,
-    };
+    });
 }
 
 #[given(expr = "the working tree is committed")]

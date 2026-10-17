@@ -219,3 +219,136 @@ Feature: Asking for a story set with an Inquiry
       Then the modal is "none"
       And no keys were sent to the AI pane
       And the story view state is "no-stories"
+
+  Rule: An Inquiry set loads and walks as a Story set for a Range does
+
+    At `protocolVersion` 3 a Story set may have no `range`, and such a set answers an Inquiry. Under
+    version 2 a missing `range` is still a malformed file, refused whole, so a version 2 set that
+    lost its range is never walked as an Inquiry. Everything walked needs no Range, so the Spine, the
+    Step-menu, the Site mark and Stale steps come as they are for a Range; this does not re-prove
+    them, it proves only that an Inquiry set reaches them.
+
+    Scenario: A version 3 set with no range lists its stories in the spine
+      Given "src/keys.rs" holds 20 numbered lines
+      And an AI session is running
+      And I submitted the Inquiry "how does a key reach the child"
+      When the Inquiry artifact arrives:
+        """
+        {
+          "protocolVersion": 3,
+          "title": "How a key reaches the child",
+          "stories": [
+            { "id": "s1", "name": "The key is read", "premise": "…",
+              "steps": [
+                { "id": "s1e1", "name": "Read", "claim": "…", "why": "…",
+                  "site": { "file": "src/keys.rs", "side": "new", "kind": "context",
+                            "from": 1, "to": 2 } }
+              ] },
+            { "id": "s2", "name": "The key is routed", "premise": "…",
+              "steps": [
+                { "id": "s2e1", "name": "Route", "claim": "…", "why": "…",
+                  "site": { "file": "src/keys.rs", "side": "new", "kind": "context",
+                            "from": 5, "to": 6 } },
+                { "id": "s2e2", "name": "Send", "claim": "…", "why": "…",
+                  "site": { "file": "src/keys.rs", "side": "new", "kind": "context",
+                            "from": 9, "to": 9 } }
+              ] }
+          ]
+        }
+        """
+      Then the story view state is "spine"
+      And the spine lists:
+        | name              | steps |
+        | The key is read   | 1     |
+        | The key is routed | 2     |
+
+    Scenario: A version 2 set with no range is still refused whole
+      Given "src/keys.rs" holds 20 numbered lines
+      And an AI session is running
+      And I submitted the Inquiry "how does a key reach the child"
+      When the Inquiry artifact arrives:
+        """
+        {
+          "protocolVersion": 2,
+          "title": "How a key reaches the child",
+          "stories": [
+            { "id": "s1", "name": "The key is read", "premise": "…",
+              "steps": [
+                { "id": "s1e1", "name": "Read", "claim": "…", "why": "…",
+                  "site": { "file": "src/keys.rs", "side": "new", "kind": "context",
+                            "from": 1, "to": 2 } }
+              ] }
+          ]
+        }
+        """
+      Then the story view state is "story-artifact-invalid"
+      And the spine is empty
+
+    Scenario: Entering an Inquiry story puts its claim in the band and marks its site
+      Given "src/keys.rs" holds 20 numbered lines
+      And an AI session is running
+      And I submitted the Inquiry "how does a key reach the child"
+      And an Inquiry set claims:
+        | story    | file        | from | to |
+        | The keys | src/keys.rs | 4    | 6  |
+      When I enter the story "The keys"
+      Then the band claim is "claim"
+      And the site mark covers lines 4 to 6 of "src/keys.rs"
+
+    Scenario: An Inquiry step is filled in from the file itself when the set arrives
+      Given "src/keys.rs" holds:
+        """
+        the first line
+        the second line
+        the third line
+        """
+      And an AI session is running
+      And I submitted the Inquiry "what does the second line do"
+      When an Inquiry set claims:
+        | story    | file        | from | to |
+        | The keys | src/keys.rs | 2    | 2  |
+      Then the story view state is "spine"
+      And the site text of step 1 is "the second line"
+
+    Scenario: An Inquiry step whose code moved is stale and still says what its site held
+      Given "src/keys.rs" holds:
+        """
+        the first line
+        the second line
+        the third line
+        """
+      And an AI session is running
+      And I submitted the Inquiry "what does the second line do"
+      And an Inquiry set claims:
+        | story    | file        | from | to |
+        | The keys | src/keys.rs | 2    | 2  |
+      And I enter the story "The keys"
+      When "src/keys.rs" now holds:
+        """
+        the first line
+        something else entirely
+        the third line
+        """
+      Then step 1 is stale as "text-changed"
+      And the overlay shows what the site holds now
+      And the site text of step 1 is "the second line"
+
+    Scenario: An Inquiry set read off disk is not refilled against the code as it reads now
+      Given "src/keys.rs" holds:
+        """
+        the first line
+        the second line
+        the third line
+        """
+      And an Inquiry set on disk claims lines 2 to 2 of "src/keys.rs"
+      And I open Story view
+      And "src/keys.rs" now holds:
+        """
+        the first line
+        something else entirely
+        the third line
+        """
+      And I leave Story view
+      When I open Story view
+      Then the story view state is "spine"
+      And the site text of step 1 is "the second line"

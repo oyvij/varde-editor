@@ -293,7 +293,22 @@ fn unmerged(root: &Path, files: &[GitFile]) -> BTreeMap<PathBuf, Vec<varde::conf
 
 fn file_hunks(root: &Path, inventory: story::Inventory, named: &[String]) -> Vec<story::FileHunks> {
     let Ok(repository) = git2::Repository::open(root) else {
-        return Vec::new();
+        return named
+            .iter()
+            .map(|file| {
+                let text = std::fs::read_to_string(root.join(file)).ok();
+                story::FileHunks {
+                    file: file.clone(),
+                    hunks: Vec::new(),
+                    old_exists: false,
+                    old_text: String::new(),
+                    new_exists: text.is_some(),
+                    head_exists: text.is_some(),
+                    head_text: text.clone().unwrap_or_default(),
+                    new_text: text.unwrap_or_default(),
+                }
+            })
+            .collect();
     };
     let tree = |revision: &str| {
         repository
@@ -2803,14 +2818,9 @@ fn perform_jobs(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>) {
             Ok(left) => Event::CheckedOut { left },
             Err(because) => Event::CheckoutFailed(because),
         }),
-        Effect::ReadStoryFiles {
-            repo,
-            base,
-            head,
-            files,
-        } => {
-            let inventory = match &head {
-                Some(head) => story::Inventory::Committed { base: &base, head },
+        Effect::ReadStoryFiles { repo, range, files } => {
+            let inventory = match &range {
+                Some((base, head)) => story::Inventory::Committed { base, head },
                 None => story::Inventory::Worktree,
             };
             let read = file_hunks(&repo, inventory, &files);

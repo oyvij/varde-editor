@@ -8,7 +8,8 @@ pub struct Artifact {
     #[serde(rename = "protocolVersion")]
     pub protocol_version: u32,
     pub title: String,
-    pub range: Range,
+    #[serde(default)]
+    pub range: Option<Range>,
     pub stories: Vec<Story>,
 }
 
@@ -180,6 +181,8 @@ pub enum Set {
 }
 
 pub const ATTEMPTS: u8 = 2;
+
+const INQUIRY_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Tag {
@@ -836,6 +839,12 @@ pub fn staleness(state: &State, step: &Step) -> Staleness {
 
 pub fn parse(text: &str) -> Result<Artifact, String> {
     let artifact: Artifact = serde_json::from_str(text).map_err(|error| error.to_string())?;
+    if artifact.range.is_none() && artifact.protocol_version < INQUIRY_VERSION {
+        return Err(format!(
+            "a story set at protocolVersion {} must name its range",
+            artifact.protocol_version
+        ));
+    }
     for story in &artifact.stories {
         for step in &story.steps {
             if let Some(prediction) = &step.prediction {
@@ -1017,8 +1026,16 @@ numbers; read the line numbers off it rather than guessing again.
 
 Write only the JSON file. Do not summarise it back."#;
 
-pub fn fix_prompt(dir: &Path, artifact: &Artifact, problems: &[Problem]) -> String {
-    let out = artifact_path_of(dir, artifact);
+pub fn fix_prompt(
+    dir: &Path,
+    artifact: &Artifact,
+    problems: &[Problem],
+    inquiry_ms: u64,
+) -> String {
+    let out = match &artifact.range {
+        Some(range) => artifact_path_of(dir, range),
+        None => inquiry_path(dir, inquiry_ms),
+    };
     let listed = problems
         .iter()
         .map(|problem| {
@@ -1037,14 +1054,14 @@ pub fn fix_prompt(dir: &Path, artifact: &Artifact, problems: &[Problem]) -> Stri
         .replace("{OUT}", &out)
 }
 
-fn artifact_path_of(dir: &Path, artifact: &Artifact) -> String {
+fn artifact_path_of(dir: &Path, range: &Range) -> String {
     let short = |oid: &str| oid.chars().take(12).collect::<String>();
-    let head = if artifact.range.head == WORKTREE {
+    let head = if range.head == WORKTREE {
         WORKTREE.to_string()
     } else {
-        short(&artifact.range.head)
+        short(&range.head)
     };
-    artifact_path(dir, &short(&artifact.range.base), &head)
+    artifact_path(dir, &short(&range.base), &head)
 }
 
 pub fn same_set(loaded: &Artifact, arrived: &Artifact) -> bool {
@@ -1285,6 +1302,12 @@ pub fn range_status(file: &Path, resolves: impl Fn(&str) -> bool) -> RangeStatus
         .file_stem()
         .and_then(|name| name.to_str())
         .unwrap_or("");
+    if stem
+        .strip_prefix("inquiry-")
+        .is_some_and(|ms| ms.parse::<u64>().is_ok())
+    {
+        return RangeStatus::Resolves;
+    }
     match stem.split_once('-') {
         Some((base, head)) if resolves(base) && (head == WORKTREE || resolves(head)) => {
             RangeStatus::Resolves
@@ -1348,12 +1371,12 @@ pub fn named_files(set: &Set) -> Vec<String> {
 }
 
 pub fn inventory_of(artifact: &Artifact) -> Inventory<'_> {
-    if artifact.range.head == WORKTREE {
-        return Inventory::Worktree;
-    }
-    Inventory::Committed {
-        base: &artifact.range.base,
-        head: &artifact.range.head,
+    match &artifact.range {
+        Some(range) if range.head != WORKTREE => Inventory::Committed {
+            base: &range.base,
+            head: &range.head,
+        },
+        _ => Inventory::Worktree,
     }
 }
 
@@ -1960,6 +1983,50 @@ mod tests {
         assert!(parse(text).is_ok());
     }
 
+    fn set_with_no_range(version: u32) -> String {
+        format!(
+            r#"{{
+            "protocolVersion": {version},
+            "title": "How a key reaches the child",
+            "stories": [{{ "id": "s1", "name": "n", "premise": "p", "steps": [{{
+                "id": "s1e1", "name": "n", "claim": "c", "why": "w",
+                "site": {{ "file": "src/keys.rs", "side": "new", "kind": "context",
+                          "from": 1, "to": 2 }}
+            }}] }}]
+        }}"#
+        )
+    }
+
+    #[test]
+    fn a_version_3_set_with_no_range_parses_as_an_inquiry_set() {
+        let artifact = parse(&set_with_no_range(3)).expect("parses");
+        assert_eq!(artifact.range, None);
+        assert_eq!(artifact.stories.len(), 1);
+    }
+
+    #[test]
+    fn a_version_2_set_with_no_range_is_refused_whole() {
+        assert!(parse(&set_with_no_range(2)).is_err());
+    }
+
+    #[test]
+    fn an_inquiry_set_resolves_by_its_name_without_asking_git() {
+        let file = Path::new("/w/.varde/stories/inquiry-1760000000123.json");
+        assert_eq!(range_status(file, |_| false), RangeStatus::Resolves);
+    }
+
+    #[test]
+    fn a_name_that_only_starts_like_an_inquiry_is_gone() {
+        let file = Path::new("/w/.varde/stories/inquiry-latest.json");
+        assert_eq!(range_status(file, |_| false), RangeStatus::Gone);
+    }
+
+    #[test]
+    fn an_inquiry_set_is_read_against_the_working_tree() {
+        let artifact = parse(&set_with_no_range(3)).expect("parses");
+        assert_eq!(inventory_of(&artifact), Inventory::Worktree);
+    }
+
     #[test]
     fn a_missing_required_field_refuses_the_whole_artifact() {
         let text =
@@ -2398,7 +2465,10 @@ mod tests {
         )))
         .expect("the worked example parses");
         assert_eq!(artifact.protocol_version, 2);
-        assert_eq!(artifact.range.spelling, "main..HEAD");
+        assert_eq!(
+            artifact.range.as_ref().expect("a range").spelling,
+            "main..HEAD"
+        );
         let step = &artifact.stories[0].steps[0];
         assert!(step.flow.is_some());
         assert!(step.nudge.is_some());
@@ -2673,11 +2743,11 @@ from b
         let artifact = Artifact {
             protocol_version: 2,
             title: "Title".to_string(),
-            range: Range {
+            range: Some(Range {
                 base: "a".to_string(),
                 head: head.to_string(),
                 spelling: "main..HEAD".to_string(),
-            },
+            }),
             stories: stories
                 .into_iter()
                 .enumerate()
@@ -2862,7 +2932,7 @@ from b
     #[test]
     fn a_fix_request_names_the_failing_step_and_no_other() {
         let (artifact, problems) = one_failing_step();
-        let text = fix_prompt(Path::new("/w/.varde"), &artifact, &problems);
+        let text = fix_prompt(Path::new("/w/.varde"), &artifact, &problems, 0);
         assert!(text.contains("`s2`: claims-no-change"), "{text}");
         assert!(!text.contains("`s1`"), "{text}");
     }
@@ -2880,7 +2950,7 @@ from b
                 fault: Fault::RangeOutOfBounds,
             },
         ];
-        let text = fix_prompt(Path::new("/w/.varde"), &artifact, &problems);
+        let text = fix_prompt(Path::new("/w/.varde"), &artifact, &problems, 0);
         assert!(text.contains("`s1`: file-missing"), "{text}");
         assert!(text.contains("`s2`: range-out-of-bounds"), "{text}");
     }
@@ -2888,7 +2958,7 @@ from b
     #[test]
     fn a_fix_request_asks_for_the_path_the_artifact_came_from() {
         let (artifact, problems) = one_failing_step();
-        let text = fix_prompt(Path::new("/w/.varde"), &artifact, &problems);
+        let text = fix_prompt(Path::new("/w/.varde"), &artifact, &problems, 0);
         assert!(
             text.contains(&artifact_path(Path::new("/w/.varde"), "a", "b")),
             "{text}"
@@ -2904,18 +2974,34 @@ from b
     }
 
     #[test]
+    fn a_fix_request_for_an_inquiry_set_names_the_artifact_it_asked_for() {
+        let (mut artifact, problems) = one_failing_step();
+        artifact.range = None;
+        let text = fix_prompt(
+            Path::new("/w/.varde"),
+            &artifact,
+            &problems,
+            1_760_000_000_123,
+        );
+        assert!(
+            text.contains("`/w/.varde/stories/inquiry-1760000000123.json`"),
+            "{text}"
+        );
+    }
+
+    #[test]
     fn a_fix_request_for_a_dirty_range_names_the_worktree_set() {
         let mut artifact = artifact_of(vec![(
             "Story",
             vec![step("s1", site("a.rs", Side::New, Kind::Changed, 1, 1))],
         )]);
-        artifact.range.head = WORKTREE.to_string();
+        artifact.range.as_mut().expect("a range").head = WORKTREE.to_string();
         let problems = vec![Problem {
             step: "s1".to_string(),
             fault: Fault::FileMissing,
         }];
         assert!(
-            fix_prompt(Path::new("/w/.varde"), &artifact, &problems).contains(&artifact_path(
+            fix_prompt(Path::new("/w/.varde"), &artifact, &problems, 0).contains(&artifact_path(
                 Path::new("/w/.varde"),
                 "a",
                 WORKTREE
@@ -2930,14 +3016,15 @@ from b
             "Story",
             vec![step("s1", site("a.rs", Side::New, Kind::Changed, 1, 1))],
         )]);
-        artifact.range.base = "ab".to_string();
-        artifact.range.head = "cd".to_string();
+        let range = artifact.range.as_mut().expect("a range");
+        range.base = "ab".to_string();
+        range.head = "cd".to_string();
         let problems = vec![Problem {
             step: "s1".to_string(),
             fault: Fault::FileMissing,
         }];
         assert!(
-            fix_prompt(Path::new("/w/.varde"), &artifact, &problems).contains(&artifact_path(
+            fix_prompt(Path::new("/w/.varde"), &artifact, &problems, 0).contains(&artifact_path(
                 Path::new("/w/.varde"),
                 "ab",
                 "cd"
@@ -2949,7 +3036,7 @@ from b
     #[test]
     fn a_fix_request_leaves_no_substitution_unfilled() {
         let (artifact, problems) = one_failing_step();
-        let text = fix_prompt(Path::new("/w/.varde"), &artifact, &problems);
+        let text = fix_prompt(Path::new("/w/.varde"), &artifact, &problems, 0);
         assert!(!text.contains("{OUT}"));
         assert!(!text.contains("{PROBLEMS}"));
         assert!(!text.contains("{CONTEXT}"));
@@ -2968,7 +3055,7 @@ from b
                 step: "s2".to_string(),
                 fault,
             }];
-            let text = fix_prompt(Path::new("/w/.varde"), &artifact, &problems);
+            let text = fix_prompt(Path::new("/w/.varde"), &artifact, &problems, 0);
             assert!(text.contains(fault.complaint()), "{fault:?}");
         }
     }

@@ -3976,11 +3976,11 @@ mod tests {
         let artifact = story::Artifact {
             protocol_version: 2,
             title: "Story set".to_string(),
-            range: story::Range {
+            range: Some(story::Range {
                 base: "a".to_string(),
                 head: "b".to_string(),
                 spelling: "main..HEAD".to_string(),
-            },
+            }),
             stories: vec![story::Story {
                 id: "s1".to_string(),
                 name: "Story".to_string(),

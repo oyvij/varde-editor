@@ -911,8 +911,7 @@ pub enum Effect {
     },
     ReadStoryFiles {
         repo: PathBuf,
-        base: String,
-        head: Option<String>,
+        range: Option<(String, String)>,
         files: Vec<String>,
     },
     WriteStoryContext {
@@ -5917,14 +5916,15 @@ fn on_drag_row(state: &State, mut next: State, event: Event, wheeled: bool) -> A
                     vec![]
                 }
                 (Ok(artifact), story::RangeStatus::Resolves) => {
-                    let head = match story::inventory_of(&artifact) {
-                        story::Inventory::Committed { head, .. } => Some(head.to_string()),
+                    let range = match story::inventory_of(&artifact) {
+                        story::Inventory::Committed { base, head } => {
+                            Some((base.to_string(), head.to_string()))
+                        }
                         story::Inventory::Worktree => None,
                     };
                     let effects = vec![Effect::ReadStoryFiles {
                         repo: next.repo_root().to_path_buf(),
-                        base: artifact.range.base.clone(),
-                        head,
+                        range,
                         files: story::story_files(&artifact),
                     }];
                     let attempt = match &state.story_set {
@@ -5956,6 +5956,7 @@ fn on_drag_row(state: &State, mut next: State, event: Event, wheeled: bool) -> A
                             &varde_dir(&next.root, next.sidecar.as_deref()),
                             &artifact,
                             &problems,
+                            next.last_inquiry_ms,
                         );
                         next.story_set = story::Set::Fixing {
                             artifact,
@@ -9669,8 +9670,7 @@ mod tests {
             asked("bbbb"),
             vec![Effect::ReadStoryFiles {
                 repo: PathBuf::new(),
-                base: "aaaa".to_string(),
-                head: Some("bbbb".to_string()),
+                range: Some(("aaaa".to_string(), "bbbb".to_string())),
                 files: vec!["keys.rs".to_string()],
             }]
         );
@@ -9678,8 +9678,7 @@ mod tests {
             asked("worktree"),
             vec![Effect::ReadStoryFiles {
                 repo: PathBuf::new(),
-                base: "aaaa".to_string(),
-                head: None,
+                range: None,
                 files: vec!["keys.rs".to_string()],
             }]
         );
