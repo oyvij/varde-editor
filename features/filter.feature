@@ -304,11 +304,9 @@ Feature: Filtering the file tree
     And the tree selection is "/home/me/projects/varde/src/main.rs"
     And "src" is expanded
 
-  Scenario: j in the filtered list walks to the next visible row, folders included
+  Scenario: Down moves into the filtered list, where j walks to the next visible row
     Given I filter by "tree"
-    And I click in the editor pane
-    And I click in the tree pane
-    And the tree selection is "features/tree.feature"
+    And I press the key "Down"
     When I press the key "j"
     Then the tree selection is "/home/me/projects/varde/src"
     And the filter query is "tree"
