@@ -2371,6 +2371,7 @@ fn path_missing(world: &mut VardeWorld, path: String) {
 #[given(expr = "{string} is a read-only file")]
 fn path_is_file(world: &mut VardeWorld, _path: String) {
     world.startup.path_status = PathStatus::File;
+    world.startup.sidecar = Some(PathBuf::from(SIDECAR));
 }
 
 #[given(expr = "the file {string} cannot be read")]
@@ -2391,9 +2392,6 @@ fn path_unreadable(world: &mut VardeWorld, _path: String) {
 #[given(expr = "Varde opened {string}")]
 #[when(expr = "Varde opens {string}")]
 fn varde_opens(world: &mut VardeWorld, path: String) {
-    if world.startup.path_status == PathStatus::File {
-        world.startup.sidecar = Some(PathBuf::from(SIDECAR));
-    }
     world.startup.root = PathBuf::from(&path);
     let entries = world
         .disk

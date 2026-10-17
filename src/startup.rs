@@ -1533,15 +1533,16 @@ fn initial_state(
     checkout: Option<PathBuf>,
     update: Option<String>,
 ) -> State {
+    let opened = match input.path_status {
+        PathStatus::File => Opened::SingleFile,
+        _ => Opened::Workspace,
+    };
     let mut state = State {
-        root: match input.path_status {
-            PathStatus::File => input.root.parent().unwrap_or(&input.root).to_path_buf(),
-            _ => input.root.clone(),
+        root: match opened {
+            Opened::SingleFile => input.root.parent().unwrap_or(&input.root).to_path_buf(),
+            Opened::Workspace => input.root.clone(),
         },
-        opened: match input.path_status {
-            PathStatus::File => Opened::SingleFile,
-            _ => Opened::Workspace,
-        },
+        opened,
         sidecar: input.sidecar.clone(),
         varde_home: input.varde_home.clone(),
         reviews: input.reviews.clone(),

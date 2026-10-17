@@ -76,11 +76,7 @@ fn main() -> Result<()> {
     let named = args.path.as_deref().unwrap_or(Path::new("."));
     let path_status = path_status(named);
     let path = std::fs::canonicalize(named).unwrap_or_else(|_| named.to_path_buf());
-    let root = match path_status {
-        PathStatus::File => path.parent().unwrap_or(&path).to_path_buf(),
-        _ => path.clone(),
-    };
-    let sidecar = (args.path.is_none() || path_status == PathStatus::File).then(|| sidecar(&root));
+    let (root, sidecar) = root_and_sidecar(args.path.as_deref(), path_status, &path);
     sweep();
 
     // Canonicalize: macOS current_exe may not resolve symlinks; resolved once since :update replaces it
@@ -128,6 +124,22 @@ fn main() -> Result<()> {
     };
 
     run(state, root, exe, startup_effects)
+}
+
+fn root_and_sidecar(
+    named: Option<&Path>,
+    status: PathStatus,
+    path: &Path,
+) -> (PathBuf, Option<PathBuf>) {
+    match (named, status) {
+        (_, PathStatus::File) => {
+            let folder = path.parent().unwrap_or(path).to_path_buf();
+            let sidecar = sidecar(&folder);
+            (folder, Some(sidecar))
+        }
+        (None, _) => (path.to_path_buf(), Some(sidecar(path))),
+        (Some(_), _) => (path.to_path_buf(), None),
+    }
 }
 
 fn sidecar(root: &Path) -> PathBuf {
@@ -4115,8 +4127,8 @@ fn queue_story_file(path: &Path, state: &State, queue: &mut VecDeque<Event>) {
 mod tests {
     use super::{
         alive, authorship, checkout, committed, describe, file_hunks, flatten, found, notice_text,
-        path_status, pid_of, range_ends, read_branches, rewrite, samples, short_date, sidecar,
-        space, stitch, watched_path, Args, ClapParser,
+        path_status, pid_of, range_ends, read_branches, rewrite, root_and_sidecar, samples,
+        short_date, sidecar, space, stitch, watched_path, Args, ClapParser,
     };
     use notify::event::{CreateKind, DataChange, ModifyKind, RenameMode};
     use std::collections::BTreeMap;
@@ -4244,6 +4256,31 @@ mod tests {
             .to_string_lossy();
         assert_eq!(pid_of(&name), Some(std::process::id()));
         assert!(alive(std::process::id()));
+    }
+
+    #[test]
+    fn a_file_is_rooted_at_its_folder_with_a_sidecar_named_for_that_folder() {
+        let file = Path::new("/home/me/projects/theirs/notes.txt");
+        let (root, sidecar) = root_and_sidecar(Some(file), PathStatus::File, file);
+        assert_eq!(root, Path::new("/home/me/projects/theirs"));
+        let name = sidecar.expect("a Sidecar");
+        let name = name.file_name().expect("a name").to_string_lossy();
+        assert_eq!(
+            name,
+            format!("%home%me%projects%theirs-{}", std::process::id())
+        );
+    }
+
+    #[test]
+    fn a_named_folder_has_no_sidecar_and_no_name_has_one() {
+        let folder = Path::new("/home/me/projects/varde");
+        assert_eq!(
+            root_and_sidecar(Some(folder), PathStatus::Folder, folder),
+            (folder.to_path_buf(), None)
+        );
+        let (root, sidecar) = root_and_sidecar(None, PathStatus::Folder, folder);
+        assert_eq!(root, folder);
+        assert!(sidecar.is_some());
     }
 
     #[test]
