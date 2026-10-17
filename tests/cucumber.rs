@@ -40,6 +40,7 @@ pub struct VardeWorld {
     config_effects: Vec<Effect>,
     dirs: BTreeSet<PathBuf>,
     files: BTreeMap<PathBuf, String>,
+    absent: BTreeSet<PathBuf>,
     wrote: Vec<PathBuf>,
     known_files: BTreeSet<PathBuf>,
     opened: Vec<PathBuf>,
@@ -648,6 +649,7 @@ impl VardeWorld {
                             .files
                             .get(&path)
                             .cloned()
+                            .or_else(|| self.absent.contains(&path).then(String::new))
                             .unwrap_or_else(|| "contents".to_string()),
                         path,
                         preview: false,
@@ -2373,7 +2375,7 @@ fn path_and_folder_missing(world: &mut VardeWorld, _path: String) {
 fn new_file(world: &mut VardeWorld, path: String) {
     world.startup.path_status = PathStatus::NewFile;
     world.startup.sidecar = Some(PathBuf::from(SIDECAR));
-    world.files.insert(PathBuf::from(path), String::new());
+    world.absent.insert(PathBuf::from(path));
 }
 
 #[given(expr = "{string} is a file")]

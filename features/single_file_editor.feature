@@ -105,6 +105,7 @@ Feature: The Single-file editor
     Then Varde exits
     And the Sidecar was deleted
     And no file was written next to the file
+    And the file "new.txt" does not exist
 
   Scenario: A missing file whose folder is missing too stops Varde
     Given neither "/home/me/projects/nope/new.txt" nor its folder exists
