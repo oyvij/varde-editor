@@ -5624,11 +5624,17 @@ fn on_close_buffer(_state: &State, mut next: State, event: Event, wheeled: bool)
                     next.preview = None;
                 }
             }
-            match buffer_list(&next).first().map(|path| path.to_path_buf()) {
-                Some(path) => return Ok(update(&next, Event::ShowBuffer(path))),
-                None => next.focus = Pane::Tree,
+            match (
+                buffer_list(&next).first().map(|path| path.to_path_buf()),
+                next.opened,
+            ) {
+                (Some(path), _) => return Ok(update(&next, Event::ShowBuffer(path))),
+                (None, Opened::SingleFile) => leaving(&next),
+                (None, Opened::Workspace) => {
+                    next.focus = Pane::Tree;
+                    vec![]
+                }
             }
-            vec![]
         }
 
         Event::CloseAllBuffers { force } => {

@@ -193,6 +193,69 @@ Feature: The Single-file editor
 
   # Closing
 
+  Scenario: Closing the only Buffer exits Varde and deletes the Sidecar
+    Given "/home/me/projects/theirs/notes.txt" is a file
+    And Varde opened "/home/me/projects/theirs/notes.txt"
+    When I run ":q"
+    Then Varde exits
+    And the Sidecar was deleted
+    And no state was saved
+
+  Scenario: Closing a Buffer with unsaved edits is refused and Varde keeps running
+    Given "/home/me/projects/theirs/notes.txt" is a file
+    And Varde opened "/home/me/projects/theirs/notes.txt"
+    And the editor mode is insert
+    And I type "hello" in the editor
+    And the editor mode is normal
+    When I run ":q"
+    Then Varde is still running
+    And the reviewer is told there are unsaved changes
+    And the open buffers are:
+      | notes.txt |
+
+  Scenario: Force closing a Buffer with unsaved edits exits without writing the file
+    Given "/home/me/projects/theirs/notes.txt" is a file
+    And Varde opened "/home/me/projects/theirs/notes.txt"
+    And the editor mode is insert
+    And I type "hello" in the editor
+    And the editor mode is normal
+    When I run ":q!"
+    Then Varde exits
+    And the Sidecar was deleted
+    And no file was written next to the file
+
+  Scenario: Writing and closing the only Buffer writes the file and exits
+    Given "/home/me/projects/theirs/notes.txt" is a file
+    And Varde opened "/home/me/projects/theirs/notes.txt"
+    And the editor mode is insert
+    And I type "hello" in the editor
+    And the editor mode is normal
+    When I run ":wq"
+    Then "notes.txt" was written with:
+      """
+      hellocontents
+      """
+    And Varde exits
+    And the Sidecar was deleted
+
+  Scenario: Closing every Buffer exits Varde
+    Given "/home/me/projects/theirs/notes.txt" is a file
+    And Varde opened "/home/me/projects/theirs/notes.txt"
+    When I run ":qa"
+    Then Varde exits
+    And the Sidecar was deleted
+    And no state was saved
+
+  Scenario: Force closing every Buffer exits Varde without writing
+    Given "/home/me/projects/theirs/notes.txt" is a file
+    And Varde opened "/home/me/projects/theirs/notes.txt"
+    And the editor mode is insert
+    And I type "hello" in the editor
+    And the editor mode is normal
+    When I run ":qa!"
+    Then Varde exits
+    And no file was written next to the file
+
   # Language intelligence and more Buffers
 
   # Write failures
