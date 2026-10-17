@@ -1,6 +1,6 @@
 use crate::{
-    debug, tree, Direction, Event, FilterKeys, Find, FindIcon, FindKeys, Modal, Pane, ReplaceField,
-    Resolution, Selection, State, Tap, View, FIND_ICONS, REPLACE_FIELDS,
+    debug, tree, Direction, Event, FilterKeys, Find, FindIcon, FindKeys, Modal, Opened, Pane,
+    ReplaceField, Resolution, Selection, State, Tap, View, FIND_ICONS, REPLACE_FIELDS,
 };
 use terminput::{
     Encoding, Event as Input, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, ModifierKeyCode,
@@ -1657,11 +1657,41 @@ fn list_pane_key(event: KeyEvent) -> Vec<Event> {
     }
 }
 
+const SINGLE_FILE_COMMANDS: [&str; 18] = [
+    "w",
+    "q",
+    "q!",
+    "qa",
+    "qa!",
+    "wq",
+    "e",
+    "format",
+    "preview",
+    "widen-preview",
+    "read",
+    "pause",
+    "next",
+    "prev",
+    "stop",
+    "speed",
+    "dim",
+    "minimap",
+];
+
+fn offered(state: &State, line: &str) -> bool {
+    state.opened == Opened::Workspace
+        || line
+            .split(' ')
+            .next()
+            .is_some_and(|word| SINGLE_FILE_COMMANDS.contains(&word))
+}
+
 pub fn command_rows(state: &State, text: &str) -> Vec<(&'static str, &'static str)> {
     let typed = text.to_lowercase();
     let kept: Vec<(bool, &'static str, &'static str)> = COMMANDS
         .iter()
         .filter(|(_, _, views, _)| applies_to(views, state.view))
+        .filter(|(name, _, _, _)| offered(state, name))
         .filter_map(|(name, what, _, _)| {
             let haystack = format!("{name} {what}");
             crate::filter::score(text, &haystack)?;
@@ -1718,7 +1748,7 @@ fn command_line(state: &State, drafts: &mut Drafts, event: KeyEvent) -> Vec<Even
                     line.pick = None;
                     vec![]
                 }
-                None => command(&drafts.command.take().unwrap_or_default().text),
+                None => command(state, &drafts.command.take().unwrap_or_default().text),
             }
         }
         _ => {
@@ -1731,7 +1761,10 @@ fn command_line(state: &State, drafts: &mut Drafts, event: KeyEvent) -> Vec<Even
     }
 }
 
-fn command(line: &str) -> Vec<Event> {
+fn command(state: &State, line: &str) -> Vec<Event> {
+    if !offered(state, line) {
+        return vec![];
+    }
     if let Some(does) = COMMANDS
         .iter()
         .find_map(|(name, _, _, does)| (*name == line && !does.is_empty()).then_some(does))
@@ -1832,8 +1865,8 @@ mod tests {
         Pasted, COMMANDS,
     };
     use crate::{
-        story, DiffLine, Direction, Event, FilterKeys, Find, FindIcon, FindKeys, Modal, Pane,
-        Place, ReplaceField, Selection, State, Tap, View,
+        story, DiffLine, Direction, Event, FilterKeys, Find, FindIcon, FindKeys, Modal, Opened,
+        Pane, Place, ReplaceField, Selection, State, Tap, View,
     };
     use terminput::{
         KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MediaKeyCode, ModifierDirection,
@@ -2492,9 +2525,12 @@ mod tests {
 
     #[test]
     fn the_inquiry_is_its_own_spelling_so_a_branch_named_free_is_still_a_range() {
-        assert_eq!(command("story*"), vec![Event::OpenInquiry]);
         assert_eq!(
-            command("story free"),
+            command(&State::default(), "story*"),
+            vec![Event::OpenInquiry]
+        );
+        assert_eq!(
+            command(&State::default(), "story free"),
             vec![Event::Story {
                 explicit: Some("free".to_string()),
                 force: false,
@@ -2504,7 +2540,7 @@ mod tests {
 
     #[test]
     fn the_inquiry_has_no_bang_form() {
-        assert_eq!(command("story*!"), vec![]);
+        assert_eq!(command(&State::default(), "story*!"), vec![]);
     }
 
     #[test]
@@ -4979,12 +5015,65 @@ mod tests {
         for (name, _, _, does) in COMMANDS {
             assert_eq!(name.contains('<'), does.is_empty(), "{name}");
             assert!(
-                !command(&filled(name)).is_empty(),
+                !command(&State::default(), &filled(name)).is_empty(),
                 "{name} parses to nothing"
             );
             if !does.is_empty() {
-                assert_eq!(command(name), does.to_vec(), "{name}");
+                assert_eq!(command(&State::default(), name), does.to_vec(), "{name}");
             }
+        }
+    }
+
+    #[test]
+    fn the_single_file_editor_lists_and_answers_only_the_buffers_commands() {
+        let single_file = State {
+            opened: Opened::SingleFile,
+            view: View::Edit,
+            ..State::default()
+        };
+        let listed: Vec<&str> = command_rows(&single_file, "")
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect();
+        assert_eq!(
+            listed,
+            vec![
+                "format",
+                "preview",
+                "widen-preview",
+                "read",
+                "pause",
+                "next",
+                "prev",
+                "stop",
+                "speed <rate>",
+                "dim",
+                "minimap",
+                "w",
+                "q",
+                "q!",
+                "qa",
+                "qa!",
+                "wq",
+                "e",
+            ]
+        );
+        assert_eq!(
+            command(&single_file, "speed 1.4"),
+            vec![Event::SetSpeed(1.4)]
+        );
+        assert_eq!(command(&single_file, "e"), vec![Event::ReloadBuffer]);
+        for name in [
+            "inject",
+            "ai",
+            "ai claude",
+            "story",
+            "story?url",
+            "submit",
+            "hotswap",
+            "help",
+        ] {
+            assert_eq!(command(&single_file, name), vec![], "{name}");
         }
     }
 
@@ -4999,7 +5088,7 @@ mod tests {
         for (name, _, _, _) in COMMANDS {
             let bare = fill(name);
             for probe in [format!("{bare} x"), format!("{bare}zz")] {
-                if command(&probe).is_empty() {
+                if command(&State::default(), &probe).is_empty() {
                     continue;
                 }
                 let forceless = probe.replacen('!', "", 1);
@@ -5145,17 +5234,26 @@ mod tests {
 
     #[test]
     fn hotswap_is_the_command_that_replaces_the_running_code() {
-        assert_eq!(command("hotswap"), vec![Event::HotReplace]);
-        assert_eq!(command("hotswa"), vec![]);
+        assert_eq!(
+            command(&State::default(), "hotswap"),
+            vec![Event::HotReplace]
+        );
+        assert_eq!(command(&State::default(), "hotswa"), vec![]);
     }
 
     #[test]
     fn a_speed_nobody_can_mean_is_not_a_command() {
-        assert_eq!(command("speed 1.4"), vec![Event::SetSpeed(1.4)]);
-        assert_eq!(command("split"), vec![Event::SplitTerminal]);
-        assert_eq!(command("speed 0"), vec![]);
-        assert_eq!(command("speed -3"), vec![]);
-        assert_eq!(command("speed fast"), vec![]);
+        assert_eq!(
+            command(&State::default(), "speed 1.4"),
+            vec![Event::SetSpeed(1.4)]
+        );
+        assert_eq!(
+            command(&State::default(), "split"),
+            vec![Event::SplitTerminal]
+        );
+        assert_eq!(command(&State::default(), "speed 0"), vec![]);
+        assert_eq!(command(&State::default(), "speed -3"), vec![]);
+        assert_eq!(command(&State::default(), "speed fast"), vec![]);
     }
 
     #[test]

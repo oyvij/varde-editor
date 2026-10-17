@@ -216,6 +216,22 @@ Feature: The Single-file editor
     Then the current view is Edit
     And the view palette is shown
 
+  Scenario: The Command list offers the Buffer's Commands and not the workspace's
+    Given "/home/me/projects/theirs/notes.txt" is a file
+    And Varde opened "/home/me/projects/theirs/notes.txt"
+    When I open the command line
+    Then the command list offers "format"
+    And the command list offers "speed <rate>"
+    And the command list does not offer "story"
+    And the command list does not offer "ai"
+
+  Scenario: A Command the Single-file editor doesn't offer does nothing when typed
+    Given "/home/me/projects/theirs/notes.txt" is a file
+    And Varde opened "/home/me/projects/theirs/notes.txt"
+    And I open the command line and type "inject"
+    When I press Enter in the command line
+    Then the command line answered with no events
+
   # Closing
 
   Scenario: Closing the only Buffer exits Varde and deletes the Sidecar
