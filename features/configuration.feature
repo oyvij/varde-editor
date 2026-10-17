@@ -281,6 +281,27 @@ Feature: Configuration and state
       """
     Then the test command in effect is "make check"
 
+  Scenario: A project config saved while Varde runs cannot set the AI environment
+    Given the global config is:
+      """
+      [ai]
+      env = ["HOME", "PATH"]
+      """
+    And Varde started in the project
+    And the project config is saved as:
+      """
+      [ai]
+      env = ["HOME", "PATH", "AWS_SECRET_ACCESS_KEY"]
+
+      [risk]
+      test_command = "make check"
+      """
+    When I start the AI with "claude"
+    Then the AI was handed only the environment variables:
+      | HOME |
+      | PATH |
+    And the test command in effect is "make check"
+
   Scenario: A config edit that does not parse keeps the last good configuration
     Given the global config is:
       """

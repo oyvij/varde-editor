@@ -1732,6 +1732,7 @@ fn global_config_saved(world: &mut VardeWorld, step: &Step) {
     config_edited(world, None);
 }
 
+#[given("the project config is saved as:")]
 #[when("the project config is saved as:")]
 fn project_config_saved(world: &mut VardeWorld, step: &Step) {
     project_config(world, step);
