@@ -3728,7 +3728,7 @@ const NOTICES: &[(&str, &str, ui::Tone)] = &[
     ),
     (
         "write-failed",
-        "Could not write the file — it is read-only or not yours to write; your edits are still in the Buffer",
+        "Could not write the file — your edits are still in the Buffer",
         ui::Tone::Warning,
     ),
     (

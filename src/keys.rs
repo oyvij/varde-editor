@@ -118,7 +118,7 @@ pub const COMMANDS: [(&str, &str, &[View], &[Event]); 37] = [
         "wq",
         "write the file and close it",
         &[View::Edit],
-        &[Event::WriteBuffer, Event::CloseBuffer { force: false }],
+        &[Event::WriteBuffer, Event::CloseWrittenBuffer],
     ),
     (
         "e",

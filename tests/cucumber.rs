@@ -6291,6 +6291,16 @@ fn state_saved(world: &mut VardeWorld) {
     assert!(world.startup.state_json.is_some());
 }
 
+#[then(expr = "the status line shows {string}")]
+fn status_line_shows(world: &mut VardeWorld, notice: String) {
+    assert_eq!(
+        world.notices.last(),
+        Some(&notice),
+        "notices: {:?}",
+        world.notices
+    );
+}
+
 #[then(expr = "no write failure is reported")]
 fn no_write_failure(world: &mut VardeWorld) {
     assert!(!world.notices.contains(&"write-failed".to_string()));

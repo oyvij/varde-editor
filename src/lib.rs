@@ -558,6 +558,7 @@ pub enum Event {
     CloseBuffer {
         force: bool,
     },
+    CloseWrittenBuffer,
     CloseAllBuffers {
         force: bool,
     },
@@ -5638,13 +5639,15 @@ fn on_ai_spoke(state: &State, mut next: State, event: Event, wheeled: bool) -> A
 }
 
 fn on_close_buffer(_state: &State, mut next: State, event: Event, wheeled: bool) -> Answered {
+    let dirty = next
+        .current_buffer
+        .as_ref()
+        .and_then(|path| next.buffers.get(path))
+        .is_some_and(|buffer| buffer.is_dirty());
     let effects = match event {
+        Event::CloseWrittenBuffer if dirty => vec![],
+        Event::CloseWrittenBuffer => return Ok(update(&next, Event::CloseBuffer { force: true })),
         Event::CloseBuffer { force } => {
-            let dirty = next
-                .current_buffer
-                .as_ref()
-                .and_then(|path| next.buffers.get(path))
-                .is_some_and(|buffer| buffer.is_dirty());
             if !force && dirty {
                 return Ok((next, vec![Effect::Notify("unsaved-changes")]));
             }

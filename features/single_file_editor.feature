@@ -434,7 +434,7 @@ Feature: The Single-file editor
     And I type "hello" in the editor
     And the editor mode is normal
     When I run ":w"
-    Then the notice is "write-failed"
+    Then the status line shows "write-failed"
     And "hosts" has unsaved edits
     And the open buffers are:
       | hosts |
@@ -447,7 +447,7 @@ Feature: The Single-file editor
     And I type "hello" in the editor
     And the editor mode is normal
     When I run ":wq"
-    Then the notice is "write-failed"
+    Then the status line shows "write-failed"
     And "hosts" has unsaved edits
     And the open buffers are:
       | hosts |
