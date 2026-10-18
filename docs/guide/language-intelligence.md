@@ -115,6 +115,11 @@ Letters narrow it as usual. A space after the comma keeps the list open, but a s
 you typed closes it, as it does anywhere. Which argument you are on is the server's answer, not a
 count of brackets, and while you stay on the same argument the list is not asked again.
 
+The help follows the cursor too. Move it in insert mode with the arrow keys or a click, and once it
+rests for a moment Varde asks the server where it is, box or no box. Landing in another argument
+moves the highlight and opens that argument's list; moving out of the call closes the box. Normal
+mode asks nothing.
+
 The box never takes a key: the arrows and `Enter` stay with the Candidate list. Near the top of the
 pane, where there is no room above the line, it goes below the Candidate list instead, and it never
 covers the line you are typing on. The characters that open it are the server's own list, usually

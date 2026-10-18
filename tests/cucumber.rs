@@ -126,6 +126,7 @@ pub struct VardeWorld {
     lsp_fails: BTreeSet<String>,
     formatter_runs: Vec<Effect>,
     candidates_armed: bool,
+    signature_armed: bool,
     dwell_armed: Option<u64>,
     reported: Vec<String>,
     hold_site_texts: bool,
@@ -797,6 +798,7 @@ impl VardeWorld {
                 }
             }
             Effect::DebounceCandidates(_) => self.candidates_armed = true,
+            Effect::DebounceSignature(_) => self.signature_armed = true,
             Effect::DwellHover(after_ms) => self.dwell_armed = Some(after_ms),
             Effect::Notify(notice) => {
                 self.notices.push(notice.to_string());
@@ -4177,6 +4179,7 @@ fn click_pane(world: &mut VardeWorld, pane: String) {
     world.send(Event::ClickThrough { pane, at: POINTER });
 }
 
+#[given(expr = "I click at line {int} column {int} in the editor")]
 #[when(expr = "I click at line {int} column {int} in the editor")]
 fn click_text(world: &mut VardeWorld, line: usize, column: usize) {
     world.click(Pane::Editor, (line, column), terminput::KeyModifiers::NONE);
@@ -5843,6 +5846,7 @@ fn set_mode(world: &mut VardeWorld, mode: String) {
     }
 }
 
+#[given("I leave insert mode")]
 #[when("I leave insert mode")]
 fn leave_insert_mode(world: &mut VardeWorld) {
     world.send(Event::EditorEscape);
@@ -12302,6 +12306,16 @@ fn signature_was_triggered(world: &mut VardeWorld, language: String, character: 
     );
 }
 
+#[then(expr = "the language server for {string} was sent an invoked signature help request")]
+fn signature_was_invoked(world: &mut VardeWorld, language: String) {
+    let context = sent_context(world, &language, "textDocument/signatureHelp");
+    assert_eq!(
+        (&context["triggerKind"], &context["triggerCharacter"]),
+        (&json!(1), &Value::Null),
+        "{context}"
+    );
+}
+
 #[then(
     expr = "the language server for {string} was sent a signature help retrigger with trigger character {string}"
 )]
@@ -12383,6 +12397,9 @@ fn signature_box_documents(world: &mut VardeWorld, documented: String) {
 fn debounce_passes(world: &mut VardeWorld) {
     if std::mem::take(&mut world.candidates_armed) {
         world.send(Event::CandidatesDue);
+    }
+    if std::mem::take(&mut world.signature_armed) {
+        world.send(Event::SignatureDue);
     }
 }
 

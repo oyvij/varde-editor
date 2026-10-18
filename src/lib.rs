@@ -648,6 +648,7 @@ pub enum Event {
     HotReplace,
     LeaveStepping,
     CandidatesDue,
+    SignatureDue,
     PointerMoved(Pointed),
     HoverDue,
     MoveCandidate(Direction),
@@ -884,6 +885,7 @@ pub enum Effect {
     ReadForReview(PathBuf),
     ReadBreakpointFile(PathBuf),
     DebounceCandidates(u64),
+    DebounceSignature(u64),
     DwellHover(u64),
     Exit,
     Relaunch,
@@ -4055,7 +4057,7 @@ fn on_editor_arrow_2(state: &State, mut next: State, event: Event, wheeled: bool
             if let Some(buffer) = edited_mut(&mut next) {
                 buffer.arrow(direction);
             }
-            vec![]
+            signature_follows(&next)
         }
 
         Event::EditorWord(direction) => {
@@ -5176,6 +5178,10 @@ fn on_lsp(state: &State, mut next: State, event: Event, wheeled: bool) -> Answer
         }
 
         Event::CandidatesDue => lsp::ask(&mut next, lsp::About::Candidates),
+        Event::SignatureDue => match editor_inserting(state) {
+            true => lsp::ask_moved(&mut next),
+            false => Vec::new(),
+        },
 
         Event::PointerMoved(pointed) => {
             next.pointed_at = pointed;
@@ -5855,7 +5861,7 @@ fn on_rebuild(state: &State, mut next: State, event: Event, wheeled: bool) -> An
             } else if let Some(buffer) = current(&mut next) {
                 buffer.go_to_place(at);
             }
-            vec![]
+            signature_follows(&next)
         }
 
         Event::HoverLink(at) => {
@@ -8465,6 +8471,13 @@ pub(crate) fn editor_inserting(state: &State) -> bool {
         .is_some_and(|buffer| buffer.mode == editor::Mode::Insert)
 }
 
+fn signature_follows(state: &State) -> Vec<Effect> {
+    match editor_inserting(state) {
+        true => vec![Effect::DebounceSignature(lsp::DEBOUNCE_MS)],
+        false => Vec::new(),
+    }
+}
+
 fn selected_row(state: &State) -> Option<tree::Row> {
     let selection = state.tree_selection.as_ref()?;
     tree::visible_rows(state)
@@ -10933,6 +10946,21 @@ mod tests {
         assert_eq!(buffer.mode, editor::Mode::Insert);
         assert_eq!((buffer.line, buffer.column), (3, 5));
         assert_eq!(after.refusal, None);
+    }
+
+    #[test]
+    fn only_a_move_in_insert_mode_arms_the_signature_window() {
+        let normal = opened(&State::default(), "/w/src/lib.rs");
+        let inserting = update(&normal, Event::EditorKey('i')).0;
+        let at = Place { line: 1, column: 3 };
+        let armed = vec![Effect::DebounceSignature(lsp::DEBOUNCE_MS)];
+        for (state, expected) in [(&normal, vec![]), (&inserting, armed)] {
+            assert_eq!(
+                update(state, Event::EditorArrow(Direction::Right)).1,
+                expected
+            );
+            assert_eq!(update(state, Event::ClickText(at)).1, expected);
+        }
     }
 
     #[test]

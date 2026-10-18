@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 
 const INITIALIZE: i64 = 1;
 
-const DEBOUNCE_MS: u64 = 120;
+pub const DEBOUNCE_MS: u64 = 120;
 
 pub const DWELL_MS: u64 = 500;
 
@@ -96,6 +96,12 @@ pub struct Ask {
     pub about: About,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Cause {
+    Typed,
+    Moved,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum About {
     Hover,
@@ -138,6 +144,7 @@ impl About {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Question {
     asked: Ask,
+    cause: Cause,
     sent: BTreeMap<String, i64>,
     waiting: BTreeSet<String>,
     refused: bool,
@@ -1052,7 +1059,15 @@ pub fn ask(state: &mut State, about: About) -> Vec<Effect> {
     ask_at(state, about, None)
 }
 
+pub fn ask_moved(state: &mut State) -> Vec<Effect> {
+    asked_for(state, About::Signature, None, Cause::Moved)
+}
+
 pub fn ask_at(state: &mut State, about: About, at: Option<Place>) -> Vec<Effect> {
+    asked_for(state, about, at, Cause::Typed)
+}
+
+fn asked_for(state: &mut State, about: About, at: Option<Place>, cause: Cause) -> Vec<Effect> {
     let Some(path) = state.current_buffer.clone() else {
         return Vec::new();
     };
@@ -1077,6 +1092,7 @@ pub fn ask_at(state: &mut State, about: About, at: Option<Place>) -> Vec<Effect>
     });
     let position = position(buffer.shown(), place);
     let preceding = before(buffer.shown(), place)
+        .filter(|_| cause == Cause::Typed)
         .filter(|_| about != About::Candidates || !opens_slot(state, &path, place));
     let revision = buffer.revision();
     let shown = state
@@ -1156,9 +1172,10 @@ pub fn ask_at(state: &mut State, about: About, at: Option<Place>) -> Vec<Effect>
                         text_document_position_params: at,
                         work_done_progress_params: Default::default(),
                         context: Some(SignatureHelpContext {
-                            trigger_kind: match trigger {
-                                Some(_) => SignatureHelpTriggerKind::TRIGGER_CHARACTER,
-                                None => SignatureHelpTriggerKind::CONTENT_CHANGE,
+                            trigger_kind: match (trigger, cause) {
+                                (Some(_), _) => SignatureHelpTriggerKind::TRIGGER_CHARACTER,
+                                (None, Cause::Typed) => SignatureHelpTriggerKind::CONTENT_CHANGE,
+                                (None, Cause::Moved) => SignatureHelpTriggerKind::INVOKED,
                             },
                             trigger_character: trigger.map(String::from),
                             is_retrigger: shown.is_some(),
@@ -1182,6 +1199,7 @@ pub fn ask_at(state: &mut State, about: About, at: Option<Place>) -> Vec<Effect>
                 revision,
                 about,
             },
+            cause,
             waiting: sent.keys().cloned().collect(),
             sent,
             refused: false,
@@ -1228,6 +1246,7 @@ fn answered(state: &mut State, language: &str, id: i64, message: &Value) -> Vec<
     let error = message.get("error").is_some();
     question.refused |= error;
     let ask = question.asked.clone();
+    let cause = question.cause;
     let last = question.waiting.is_empty();
     let told = last.then(|| question.clone());
     if last {
@@ -1242,7 +1261,7 @@ fn answered(state: &mut State, language: &str, id: i64, message: &Value) -> Vec<
             About::Hover => hovered(state, ask, &message["result"]),
             About::Definition => jumped(state, ask, &message["result"]),
             About::Candidates => offered(state, ask, &message["result"]),
-            About::Signature => signed(state, ask, &message["result"]),
+            About::Signature => signed(state, ask, cause, &message["result"]),
             About::Formatting(_) | About::Document => formatted(state, ask, &message["result"]),
         },
     };
@@ -1426,7 +1445,7 @@ impl Signature {
     }
 }
 
-fn signed(state: &mut State, ask: Ask, result: &Value) -> Told {
+fn signed(state: &mut State, ask: Ask, cause: Cause, result: &Value) -> Told {
     let Ok(Some(reply)) = serde_json::from_value::<Option<ServerSignature>>(result.clone()) else {
         return Told::Nothing;
     };
@@ -1449,7 +1468,7 @@ fn signed(state: &mut State, ask: Ask, result: &Value) -> Told {
             fitted(rows, measure, DOC_ROWS)
         })
         .unwrap_or_default();
-    let new_slot = opens_slot(state, &ask.path, ask.place)
+    let new_slot = (cause == Cause::Typed && opens_slot(state, &ask.path, ask.place))
         || state.signature.as_ref().map(|open| open.parameter) != Some(parameter);
     state.signature = Some(Signature {
         asked: ask,
