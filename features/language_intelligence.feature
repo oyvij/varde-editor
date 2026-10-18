@@ -2800,6 +2800,141 @@ Feature: Language intelligence
       And the cursor is at line 1 column 15
       And no tab stops are pending
 
+  Rule: A snippet's blanks get the same help as a slot that was typed
+
+    Landing on a Tab stop, by accepting a snippet or by Tab, asks for the Signature there the way a
+    move in insert mode does, and the reply asks for that slot's Candidates even when the server
+    says the argument has not changed, because a blank is a slot of its own. Accepting a Candidate
+    into a stop keeps the sequence going. A plain Candidate lands on no stop and asks for nothing.
+
+    Scenario: Accepting a snippet asks for the Signature at its first blank and that slot's list
+      Given a language server for "rust" is ready with capabilities:
+        """
+        {"completionProvider":{},"signatureHelpProvider":{"triggerCharacters":["(", ","]}}
+        """
+      And "src/lib.rs" is open in the editor holding nothing
+      And the editor mode is insert
+      And I type "foo" in the editor
+      And the debounce window passes
+      And the language server for "rust" answers with candidates:
+        | label | insert        | format  |
+        | foo   | foo($1, $2)$0 | snippet |
+      And I press "Enter" in the editor
+      When the language server for "rust" answers the signature help with:
+        """
+        {"signatures":[{"label":"foo(first: i32, second: &str)","parameters":[{"label":"first: i32"},{"label":"second: &str"}]}],"activeParameter":0}
+        """
+      Then the language server for "rust" was sent 1 "textDocument/signatureHelp" request
+      And the language server for "rust" was sent an invoked signature help request
+      And the signature box is open
+      And the highlighted parameter is "first: i32"
+      And the language server for "rust" was sent 2 "textDocument/completion" requests
+      And the language server for "rust" was sent an invoked completion request
+
+    Scenario: Tab to the next blank moves the Signature and opens a new list there
+      Given a language server for "rust" is ready with capabilities:
+        """
+        {"completionProvider":{},"signatureHelpProvider":{"triggerCharacters":["(", ","]}}
+        """
+      And "src/lib.rs" is open in the editor holding nothing
+      And the editor mode is insert
+      And I type "foo" in the editor
+      And the debounce window passes
+      And the language server for "rust" answers with candidates:
+        | label | insert        | format  |
+        | foo   | foo($1, $2)$0 | snippet |
+      And I press "Enter" in the editor
+      And the language server for "rust" answers the signature help with:
+        """
+        {"signatures":[{"label":"foo(first: i32, second: &str)","parameters":[{"label":"first: i32"},{"label":"second: &str"}]}],"activeParameter":0}
+        """
+      And the language server for "rust" answers with candidates:
+        | label | insert |
+        | count | count  |
+      And I press "Tab" in the editor
+      And the language server for "rust" answers the signature help with:
+        """
+        {"signatures":[{"label":"foo(first: i32, second: &str)","parameters":[{"label":"first: i32"},{"label":"second: &str"}]}],"activeParameter":1}
+        """
+      When the language server for "rust" answers with candidates:
+        | label | insert |
+        | name  | name   |
+        | title | title  |
+      Then the language server for "rust" was sent 2 "textDocument/signatureHelp" requests
+      And the highlighted parameter is "second: &str"
+      And the candidates are:
+        | name  |
+        | title |
+
+    Scenario: A blank on an argument the server says is unchanged still gets its own list
+      Given a language server for "rust" is ready with capabilities:
+        """
+        {"completionProvider":{},"signatureHelpProvider":{"triggerCharacters":["(", ","]}}
+        """
+      And "src/lib.rs" is open in the editor holding nothing
+      And the editor mode is insert
+      And I type "foo" in the editor
+      And the debounce window passes
+      And the language server for "rust" answers with candidates:
+        | label | insert        | format  |
+        | foo   | foo($1, $2)$0 | snippet |
+      And I press "Enter" in the editor
+      And the language server for "rust" answers the signature help with:
+        """
+        {"signatures":[{"label":"foo(first: i32, second: &str)","parameters":[{"label":"first: i32"},{"label":"second: &str"}]}]}
+        """
+      And I press "Tab" in the editor
+      When the language server for "rust" answers the signature help with:
+        """
+        {"signatures":[{"label":"foo(first: i32, second: &str)","parameters":[{"label":"first: i32"},{"label":"second: &str"}]}]}
+        """
+      Then the language server for "rust" was sent 3 "textDocument/completion" requests
+
+    Scenario: Accepting from a blank's list keeps the sequence, and Tab lands on the next blank
+      Given a language server for "rust" is ready with capabilities:
+        """
+        {"completionProvider":{},"signatureHelpProvider":{"triggerCharacters":["(", ","]}}
+        """
+      And "src/lib.rs" is open in the editor holding nothing
+      And the editor mode is insert
+      And I type "foo" in the editor
+      And the debounce window passes
+      And the language server for "rust" answers with candidates:
+        | label | insert        | format  |
+        | foo   | foo($1, $2)$0 | snippet |
+      And I press "Enter" in the editor
+      And the language server for "rust" answers the signature help with:
+        """
+        {"signatures":[{"label":"foo(first: i32, second: &str)","parameters":[{"label":"first: i32"},{"label":"second: &str"}]}],"activeParameter":0}
+        """
+      And the language server for "rust" answers with candidates:
+        | label | insert |
+        | count | count  |
+      And I press "Enter" in the editor
+      When I press "Tab" in the editor
+      Then the buffer holds:
+        """
+        foo(count, )
+        """
+      And the cursor is at line 1 column 12
+      And the language server for "rust" was sent 2 "textDocument/signatureHelp" requests
+
+    Scenario: Accepting a plain Candidate asks for nothing
+      Given a language server for "rust" is ready with capabilities:
+        """
+        {"completionProvider":{},"signatureHelpProvider":{"triggerCharacters":["(", ","]}}
+        """
+      And "src/lib.rs" is open in the editor holding nothing
+      And the editor mode is insert
+      And I type "wor" in the editor
+      And the debounce window passes
+      And the language server for "rust" answers with candidates:
+        | label          | insert         | format |
+        | workspace_root | workspace_root | plain  |
+      When I press "Enter" in the editor
+      Then the language server for "rust" was sent no "textDocument/signatureHelp" request
+      And the language server for "rust" was sent 1 "textDocument/completion" request
+
   Rule: The server reformats as it is typed
 
     Where a server offers `onTypeFormatting` it names the characters it wants to be told about, and

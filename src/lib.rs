@@ -5235,47 +5235,56 @@ fn on_lsp(state: &State, mut next: State, event: Event, wheeled: bool) -> Answer
         }
 
         Event::AcceptCandidate => {
-            if let Modal::Candidates(list) = &next.modal {
-                let chosen = list.chosen().clone();
-                next.modal = Modal::None;
-                let (text, stops) = match chosen.snippet {
-                    true => lsp::snippet(&chosen.insert),
-                    false => (chosen.insert, Vec::new()),
-                };
-                let left = current(&mut next)
-                    .map(|buffer| buffer.complete(&text, &stops))
-                    .unwrap_or_default();
-                let held = next.stops.take().map(|stops| stops.at).unwrap_or_default();
-                let at: Vec<editor::Tail> = left.into_iter().chain(held).collect();
-                if let (Some(path), false) = (next.current_buffer.clone(), at.is_empty()) {
-                    next.stops = Some(editor::Stops { path, at });
-                }
+            let Modal::Candidates(list) = &next.modal else {
+                return Ok(settle(next, vec![], wheeled));
+            };
+            let chosen = list.chosen().clone();
+            next.modal = Modal::None;
+            let (text, stops) = match chosen.snippet {
+                true => lsp::snippet(&chosen.insert),
+                false => (chosen.insert, Vec::new()),
+            };
+            let left = current(&mut next)
+                .map(|buffer| buffer.complete(&text, &stops))
+                .unwrap_or_default();
+            let landed = !left.is_empty();
+            let held = next.stops.take().map(|stops| stops.at).unwrap_or_default();
+            let at: Vec<editor::Tail> = left.into_iter().chain(held).collect();
+            if let (Some(path), false) = (next.current_buffer.clone(), at.is_empty()) {
+                next.stops = Some(editor::Stops { path, at });
             }
-            vec![]
+            match landed {
+                true => lsp::lands_on_stop(&mut next),
+                false => vec![],
+            }
         }
 
         Event::NextStop => {
-            if let Some(editor::Stops { path, at }) = next.stops.clone() {
-                if matches!(next.modal, Modal::Candidates(_)) {
-                    next.modal = Modal::None;
-                }
-                let (next_stop, rest) = at.split_first().expect("a stop left to visit");
-                let place = next
-                    .buffers
-                    .get(&path)
-                    .and_then(|buffer| buffer.place_before(*next_stop));
-                next.stops = match (place, rest.is_empty()) {
-                    (Some(_), false) => Some(editor::Stops {
-                        path: path.clone(),
-                        at: rest.to_vec(),
-                    }),
-                    _ => None,
-                };
-                if let (Some(place), Some(buffer)) = (place, next.buffers.get_mut(&path)) {
-                    buffer.go_to_place(place);
-                }
+            let Some(editor::Stops { path, at }) = next.stops.clone() else {
+                return Ok(settle(next, vec![], wheeled));
+            };
+            if matches!(next.modal, Modal::Candidates(_)) {
+                next.modal = Modal::None;
             }
-            vec![]
+            let (next_stop, rest) = at.split_first().expect("a stop left to visit");
+            let place = next
+                .buffers
+                .get(&path)
+                .and_then(|buffer| buffer.place_before(*next_stop));
+            next.stops = match (place, rest.is_empty()) {
+                (Some(_), false) => Some(editor::Stops {
+                    path: path.clone(),
+                    at: rest.to_vec(),
+                }),
+                _ => None,
+            };
+            match (place, next.buffers.get_mut(&path)) {
+                (Some(place), Some(buffer)) => {
+                    buffer.go_to_place(place);
+                    lsp::lands_on_stop(&mut next)
+                }
+                _ => vec![],
+            }
         }
 
         Event::MoveToolRow(direction) => {

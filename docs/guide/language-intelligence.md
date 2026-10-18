@@ -120,6 +120,11 @@ rests for a moment Varde asks the server where it is, box or no box. Landing in 
 moves the highlight and opens that argument's list; moving out of the call closes the box. Normal
 mode asks nothing.
 
+A template's blanks get the same help. Accepting `foo(…, …)` asks for the Signature at the first
+blank and opens that blank's list, and `Tab` to the next blank asks again there, so each blank gets
+a list of its own. Accepting a Candidate into a blank keeps the sequence, so `Tab` still goes on to
+the next one. Accepting a plain Candidate asks for nothing.
+
 The box never takes a key: the arrows and `Enter` stay with the Candidate list. Near the top of the
 pane, where there is no room above the line, it goes below the Candidate list instead, and it never
 covers the line you are typing on. The characters that open it are the server's own list, usually

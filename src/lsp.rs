@@ -100,6 +100,7 @@ pub struct Ask {
 pub enum Cause {
     Typed,
     Moved,
+    Landed,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -575,6 +576,12 @@ fn opens_slot(state: &State, path: &Path, place: Place) -> bool {
         .get(path)
         .and_then(|buffer| before(buffer.shown(), place))
         .is_some_and(|key| names(state, path, About::Signature, "triggerCharacters", key))
+}
+
+pub fn lands_on_stop(state: &mut State) -> Vec<Effect> {
+    let mut effects = sync(state);
+    effects.extend(ask_for(state, About::Signature, None, Cause::Landed));
+    effects
 }
 
 pub fn signs_after(state: &mut State, key: char) -> Vec<Effect> {
@@ -1171,7 +1178,9 @@ pub fn ask_for(state: &mut State, about: About, at: Option<Place>, cause: Cause)
                             trigger_kind: match (trigger, cause) {
                                 (Some(_), _) => SignatureHelpTriggerKind::TRIGGER_CHARACTER,
                                 (None, Cause::Typed) => SignatureHelpTriggerKind::CONTENT_CHANGE,
-                                (None, Cause::Moved) => SignatureHelpTriggerKind::INVOKED,
+                                (None, Cause::Moved | Cause::Landed) => {
+                                    SignatureHelpTriggerKind::INVOKED
+                                }
                             },
                             trigger_character: trigger.map(String::from),
                             is_retrigger: shown.is_some(),
@@ -1464,7 +1473,8 @@ fn signed(state: &mut State, ask: Ask, cause: Cause, result: &Value) -> Told {
             fitted(rows, measure, DOC_ROWS)
         })
         .unwrap_or_default();
-    let new_slot = (cause == Cause::Typed && opens_slot(state, &ask.path, ask.place))
+    let new_slot = cause == Cause::Landed
+        || (cause == Cause::Typed && opens_slot(state, &ask.path, ask.place))
         || state.signature.as_ref().map(|open| open.parameter) != Some(parameter);
     state.signature = Some(Signature {
         asked: ask,
