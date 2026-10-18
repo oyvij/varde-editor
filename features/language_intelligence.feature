@@ -1892,10 +1892,6 @@ Feature: Language intelligence
       And the editor mode is insert
       And the cursor is at line 1 column 7
       And I type "(" in the editor
-      And the language server for "vue" answers the signature help with:
-        """
-        null
-        """
       And the language server for "typescript" answers the signature help with:
         """
         {"signatures":[{"label":"format(value: number)","parameters":[{"label":"value: number"}]}]}
@@ -1906,6 +1902,54 @@ Feature: Language intelligence
         """
       Then the signature box is open
       And the highlighted parameter is "value: number"
+
+    Scenario: With two servers, one with nothing to say does not answer for the other
+      Given a language server for "vue" is ready with capabilities:
+        """
+        {"signatureHelpProvider":{"triggerCharacters":["("]}}
+        """
+      And a language server for "typescript" is ready with capabilities:
+        """
+        {"signatureHelpProvider":{"triggerCharacters":["("]}}
+        """
+      And "vue" files are also served by the language server for "typescript"
+      And "src/App.vue" is open in the editor holding:
+        """
+        format
+        """
+      And the editor mode is insert
+      And the cursor is at line 1 column 7
+      And I type "(" in the editor
+      And the language server for "vue" answers the signature help with:
+        """
+        null
+        """
+      When the language server for "typescript" answers the signature help with:
+        """
+        {"signatures":[{"label":"format(value: number)","parameters":[{"label":"value: number"}]}]}
+        """
+      Then the signature box is open
+      And the highlighted parameter is "value: number"
+
+    Scenario: A closing parenthesis the server names asks again instead of closing
+      Given a language server for "rust" is ready with capabilities:
+        """
+        {"signatureHelpProvider":{"triggerCharacters":["(", ","],"retriggerCharacters":[")"]}}
+        """
+      And "src/lib.rs" is open in the editor holding:
+        """
+        object.method
+        """
+      And the editor mode is insert
+      And the cursor is at line 1 column 14
+      And I type "(" in the editor
+      And the language server for "rust" answers the signature help with:
+        """
+        {"signatures":[{"label":"method()","parameters":[]}]}
+        """
+      When I type ")" in the editor
+      Then the signature box is open
+      And the language server for "rust" was sent a signature help retrigger with trigger character ")"
 
     Scenario: Up and Down still move the Candidate choice while the box is open
       Given a language server for "rust" is ready with capabilities:

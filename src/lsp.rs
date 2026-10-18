@@ -543,12 +543,10 @@ pub fn completes_after(state: &State, key: char) -> Vec<Effect> {
         return Vec::new();
     };
     let (_, capability, _) = About::Candidates.asking();
-    let named = served_by(state, path)
+    let named = capabilities_serving(state, path)
         .into_iter()
-        .filter(|language| ready(state, language))
-        .filter_map(|language| state.lsp.get(&language))
-        .any(|conversation| {
-            characters(&conversation.capabilities[capability], "triggerCharacters").contains(&key)
+        .any(|capabilities| {
+            characters(&capabilities[capability], "triggerCharacters").contains(&key)
         });
     match named {
         true => vec![Effect::DebounceCandidates(DEBOUNCE_MS)],
@@ -562,13 +560,9 @@ pub fn signs_after(state: &mut State, key: char) -> Vec<Effect> {
     };
     let (_, capability, _) = About::Signature.asking();
     let listed = |list: &str| {
-        served_by(state, &path)
+        capabilities_serving(state, &path)
             .into_iter()
-            .filter(|language| ready(state, language))
-            .filter_map(|language| state.lsp.get(&language))
-            .any(|conversation| {
-                characters(&conversation.capabilities[capability], list).contains(&key)
-            })
+            .any(|capabilities| characters(&capabilities[capability], list).contains(&key))
     };
     let (trigger, retrigger) = (listed("triggerCharacters"), listed("retriggerCharacters"));
     if key == ')' && !trigger && !retrigger {
@@ -589,11 +583,9 @@ pub fn on_type(state: &mut State, key: char) -> Vec<Effect> {
         return Vec::new();
     };
     let (_, capability, _) = About::Formatting(key).asking();
-    let named = served_by(state, &path)
+    let named = capabilities_serving(state, &path)
         .into_iter()
-        .filter(|language| ready(state, language))
-        .filter_map(|language| state.lsp.get(&language))
-        .any(|conversation| triggers(&conversation.capabilities[capability]).contains(&key));
+        .any(|capabilities| triggers(&capabilities[capability]).contains(&key));
     if !named {
         return Vec::new();
     }
@@ -606,17 +598,24 @@ pub fn on_type(state: &mut State, key: char) -> Vec<Effect> {
 pub fn format(state: &mut State) -> Option<Vec<Effect>> {
     let path = state.current_buffer.clone()?;
     let (_, capability, _) = About::Document.asking();
-    let declared = served_by(state, &path)
+    let declared = capabilities_serving(state, &path)
         .into_iter()
-        .filter(|language| ready(state, language))
-        .filter_map(|language| state.lsp.get(&language))
-        .any(|conversation| declares(&conversation.capabilities, capability));
+        .any(|capabilities| declares(capabilities, capability));
     if !declared {
         return None;
     }
     let mut effects = sync(state);
     effects.extend(ask(state, About::Document));
     Some(effects)
+}
+
+fn capabilities_serving<'a>(state: &'a State, path: &Path) -> Vec<&'a Value> {
+    served_by(state, path)
+        .into_iter()
+        .filter(|language| ready(state, language))
+        .filter_map(|language| state.lsp.get(&language))
+        .map(|conversation| &conversation.capabilities)
+        .collect()
 }
 
 fn narrowed(state: &mut State) {
@@ -1097,7 +1096,9 @@ pub fn ask_at(state: &mut State, about: About, at: Option<Place>) -> Vec<Effect>
         let declared = &conversation.capabilities[capability];
         let trigger = preceding.filter(|key| {
             characters(declared, "triggerCharacters").contains(key)
-                || (shown.is_some() && characters(declared, "retriggerCharacters").contains(key))
+                || (about == About::Signature
+                    && shown.is_some()
+                    && characters(declared, "retriggerCharacters").contains(key))
         });
         effects.push(Effect::LspSend {
             language,
@@ -1370,7 +1371,7 @@ pub struct Signature {
     pub reply: ServerSignature,
 }
 
-const FEW: usize = 4;
+const DOC_ROWS: usize = 4;
 
 impl Signature {
     pub fn rows(&self) -> usize {
@@ -1384,9 +1385,10 @@ impl Signature {
     pub fn placement(&self, state: &State) -> Placement {
         let line = self.asked.place.line;
         let rows = self.rows();
-        let below = match &state.modal {
-            crate::Modal::Candidates(list) if list.from > line => list.from + list.rows(),
-            _ => line + 1,
+        let (above, below) = match &state.modal {
+            crate::Modal::Candidates(list) if list.from > line => (line, list.from + list.rows()),
+            crate::Modal::Candidates(list) => (list.from, line + 1),
+            _ => (line, line + 1),
         };
         let titled = match self.count() {
             Some(count) => format!("{} {count}", self.label),
@@ -1396,8 +1398,8 @@ impl Signature {
         let width =
             measured(std::iter::once(titled.as_str()).chain(docs.iter().map(String::as_str)));
         Placement {
-            from: match line > state.editor_scroll + rows {
-                true => line - rows,
+            from: match above > state.editor_scroll + rows {
+                true => above - rows,
                 false => below,
             },
             column: at_column(
@@ -1432,7 +1434,7 @@ fn signed(state: &mut State, ask: Ask, result: &Value) -> Told {
                 lsp_types::Documentation::String(text) => preview::rows(&text, measure),
                 lsp_types::Documentation::MarkupContent(markup) => markup_rows(markup, measure),
             };
-            fitted(rows, measure, FEW)
+            fitted(rows, measure, DOC_ROWS)
         })
         .unwrap_or_default();
     state.signature = Some(Signature {
@@ -1469,7 +1471,6 @@ fn active(reply: &ServerSignature) -> Option<(usize, usize)> {
     Some((shown, parameter as usize))
 }
 
-/// Offsets are UTF-16 code units, like every LSP column
 fn span(label: &str, parameter: &ParameterLabel) -> Option<(usize, usize)> {
     match parameter {
         ParameterLabel::Simple(named) if !named.is_empty() => {
@@ -4072,6 +4073,42 @@ mod tests {
         let below = list.from + list.rows();
         state.modal = crate::Modal::Candidates(list);
         assert_eq!(signature.placement(&state).from, below);
+    }
+
+    #[test]
+    fn a_candidate_list_above_the_line_pushes_the_signature_above_it() {
+        let (mut state, signature) = signing(20, 2);
+        let list = Candidates {
+            items: Vec::new(),
+            selected: 0,
+            first: 0,
+            from: 18,
+            column: 8,
+            asked: signature.asked.clone(),
+            word_start: 8,
+            ordered: false,
+            typed: String::new(),
+        };
+        state.modal = crate::Modal::Candidates(list);
+        assert_eq!(signature.placement(&state).from, 13);
+    }
+
+    #[test]
+    fn a_signature_with_no_room_above_a_list_above_the_line_goes_below_the_line() {
+        let (mut state, signature) = signing(8, 2);
+        let list = Candidates {
+            items: Vec::new(),
+            selected: 0,
+            first: 0,
+            from: 5,
+            column: 8,
+            asked: signature.asked.clone(),
+            word_start: 8,
+            ordered: false,
+            typed: String::new(),
+        };
+        state.modal = crate::Modal::Candidates(list);
+        assert_eq!(signature.placement(&state).from, 9);
     }
 
     #[test]
