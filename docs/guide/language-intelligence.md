@@ -121,6 +121,11 @@ covers the line you are typing on. The characters that open it are the server's 
 `(` and `,`, and a server that does not offer signatures shows no box at all. When two servers
 serve the file, the first one with an answer supplies the Signature.
 
+`Esc` closes the box, and the Candidate list with it when both are open, leaving the text as you
+typed it and you in insert mode; the next `Esc` leaves insert mode, or ends a Tab stop sequence you
+are in. Leaving insert mode, jumping to another file or moving focus out of the editor takes the
+box away too.
+
 ### Formatting as you type
 
 A server may ask to be told when you type certain characters, such as `}` or `;` in some languages

@@ -5843,6 +5843,11 @@ fn set_mode(world: &mut VardeWorld, mode: String) {
     }
 }
 
+#[when("I leave insert mode")]
+fn leave_insert_mode(world: &mut VardeWorld) {
+    world.send(Event::EditorEscape);
+}
+
 #[then(expr = "the editor mode is {word}")]
 fn mode_should_be(world: &mut VardeWorld, mode: String) {
     assert_eq!(current_buffer(world).mode.as_str(), mode);
@@ -15450,6 +15455,19 @@ fn cheatsheet_lists(world: &VardeWorld, key: &str) -> bool {
 #[then(expr = "the cheatsheet lists {string}")]
 fn cheatsheet_should_list(world: &mut VardeWorld, key: String) {
     assert!(cheatsheet_lists(world, &key), "{key:?} is not listed");
+}
+
+#[then(expr = "the cheatsheet lists {string} for {string}")]
+fn cheatsheet_lists_for(world: &mut VardeWorld, key: String, what: String) {
+    assert!(
+        keys::cheatsheet_rows(&world.state)
+            .iter()
+            .any(
+                |(keys, does)| keys.split_whitespace().any(|token| token == key)
+                    && does.contains(&what)
+            ),
+        "no {key:?} row for {what:?}"
+    );
 }
 
 #[then(expr = "the cheatsheet does not list {string}")]

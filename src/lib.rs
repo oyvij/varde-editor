@@ -1631,6 +1631,16 @@ fn settle(mut next: State, mut effects: Vec<Effect>, wheeled: bool) -> (State, V
         if elsewhere {
             next.modal = Modal::None;
         }
+        if next.signature.as_ref().is_some_and(|signature| {
+            next.focus != Pane::Editor
+                || next.current_buffer.as_ref() != Some(&signature.asked.path)
+                || next
+                    .buffers
+                    .get(&signature.asked.path)
+                    .is_none_or(|buffer| buffer.mode != editor::Mode::Insert)
+        }) {
+            next.signature = None;
+        }
         if next.stops.as_ref().is_some_and(|stops| {
             next.focus != Pane::Editor || next.current_buffer.as_ref() != Some(&stops.path)
         }) {
@@ -2590,10 +2600,11 @@ fn on_enter_name(state: &State, mut next: State, event: Event, wheeled: bool) ->
             vec![]
         }
         Event::Cancel => {
-            if state.modal == Modal::None {
+            if state.modal == Modal::None && state.signature.is_none() {
                 next.stops = None;
             }
             next.modal = Modal::None;
+            next.signature = None;
             next.selected_action = None;
             if !matches!(state.modal, Modal::StepDetail | Modal::Prediction { .. }) {
                 next.walking = None;

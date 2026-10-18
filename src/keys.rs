@@ -242,7 +242,7 @@ pub const COMMANDS: [(&str, &str, &[View], &[Event]); 37] = [
     ),
 ];
 
-pub const CHEATSHEET: [(&str, &str, &[View]); 46] = [
+pub const CHEATSHEET: [(&str, &str, &[View]); 47] = [
     ("i a o O x", "edit", &[View::Edit]),
     ("w b e", "word", &[View::Edit, View::Knowledge]),
     ("gg G", "file ends", &[View::Edit, View::Knowledge]),
@@ -294,6 +294,7 @@ pub const CHEATSHEET: [(&str, &str, &[View]); 46] = [
         &[View::Edit, View::Review, View::Story, View::Knowledge],
     ),
     ("Enter Esc", "candidates", &[View::Edit]),
+    ("Esc", "close the signature", &[View::Edit]),
     ("Tab", "indent / next blank", &[View::Edit]),
     (
         "C-d D-d gm",
@@ -714,6 +715,9 @@ fn modal_key(state: &State, drafts: &mut Drafts, event: KeyEvent, at_ms: u64) ->
                 (_, Some('k')) => vec![Event::ScrollHover(Direction::Up)],
                 _ => vec![],
             }
+        }
+        Modal::None if state.signature.is_some() && event.code == KeyCode::Esc => {
+            vec![Event::Cancel]
         }
         Modal::None if state.stops.is_some() => match event.code {
             KeyCode::Tab => vec![Event::NextStop],

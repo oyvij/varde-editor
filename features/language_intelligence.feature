@@ -2219,6 +2219,183 @@ Feature: Language intelligence
       Then the language server for "rust" was sent 1 "textDocument/completion" request
       And the candidate list is open
 
+  Rule: One Escape dismisses the Signature, and the box goes when it no longer applies
+
+    Escape closes help before it changes mode. With the Signature box and the Candidate list both
+    open, one Escape takes both and leaves the buffer as typed; with only the box open, it takes the
+    box and Varde stays in insert mode. A Tab stop sequence outlives the Escape that closed the
+    boxes, and the next one ends it as it always has. The box describes a call in insert mode in the
+    file being edited, so leaving insert mode, jumping to another file or moving focus out of the
+    editor takes it away, under the same rule that takes the Candidate list.
+
+    Scenario: Escape with the box and a Candidate list open closes both and keeps the text
+      Given a language server for "rust" is ready with capabilities:
+        """
+        {"signatureHelpProvider":{"triggerCharacters":["(", ","]}}
+        """
+      And "src/lib.rs" is open in the editor holding:
+        """
+        object.method
+        """
+      And the editor mode is insert
+      And the cursor is at line 1 column 14
+      And I type "(" in the editor
+      And the language server for "rust" answers the signature help with:
+        """
+        {"signatures":[{"label":"method(first: i32)","parameters":[{"label":"first: i32"}]}]}
+        """
+      And a candidate list is open in the editor with:
+        | count  |
+        | length |
+      When I press "Escape" in the editor
+      Then the signature box is not open
+      And the candidate list is not open
+      And the buffer holds:
+        """
+        object.method()
+        """
+      And the editor mode is insert
+
+    Scenario: Escape with only the box open closes it and stays in insert mode
+      Given a language server for "rust" is ready with capabilities:
+        """
+        {"signatureHelpProvider":{"triggerCharacters":["(", ","]}}
+        """
+      And "src/lib.rs" is open in the editor holding:
+        """
+        object.method
+        """
+      And the editor mode is insert
+      And the cursor is at line 1 column 14
+      And I type "(" in the editor
+      And the language server for "rust" answers the signature help with:
+        """
+        {"signatures":[{"label":"method(first: i32)","parameters":[{"label":"first: i32"}]}]}
+        """
+      When I press "Escape" in the editor
+      Then the signature box is not open
+      And the editor mode is insert
+
+    Scenario: The Escape after the one that closed the box leaves insert mode
+      Given a language server for "rust" is ready with capabilities:
+        """
+        {"signatureHelpProvider":{"triggerCharacters":["(", ","]}}
+        """
+      And "src/lib.rs" is open in the editor holding:
+        """
+        object.method
+        """
+      And the editor mode is insert
+      And the cursor is at line 1 column 14
+      And I type "(" in the editor
+      And the language server for "rust" answers the signature help with:
+        """
+        {"signatures":[{"label":"method(first: i32)","parameters":[{"label":"first: i32"}]}]}
+        """
+      And I press "Escape" in the editor
+      When I press "Escape" in the editor
+      Then the editor mode is normal
+
+    Scenario: The Escape that closes the box keeps a Tab stop sequence
+      Given a language server for "rust" is ready with capabilities:
+        """
+        {"completionProvider":{},"signatureHelpProvider":{"triggerCharacters":["(", ","]}}
+        """
+      And "src/lib.rs" is open in the editor holding nothing
+      And the editor mode is insert
+      And I type "foo" in the editor
+      And the debounce window passes
+      And the language server for "rust" answers with candidates:
+        | label | insert        | format  |
+        | foo   | foo($1, $2)$0 | snippet |
+      And I press "Enter" in the editor
+      And I type "bar(" in the editor
+      And the language server for "rust" answers the signature help with:
+        """
+        {"signatures":[{"label":"bar(first: i32)","parameters":[{"label":"first: i32"}]}]}
+        """
+      When I press "Escape" in the editor
+      Then the signature box is not open
+      And tab stops are pending
+      And the editor mode is insert
+
+    Scenario: Leaving insert mode while the box is open closes it
+      Given a language server for "rust" is ready with capabilities:
+        """
+        {"signatureHelpProvider":{"triggerCharacters":["(", ","]}}
+        """
+      And "src/lib.rs" is open in the editor holding:
+        """
+        object.method
+        """
+      And the editor mode is insert
+      And the cursor is at line 1 column 14
+      And I type "(" in the editor
+      And the language server for "rust" answers the signature help with:
+        """
+        {"signatures":[{"label":"method(first: i32)","parameters":[{"label":"first: i32"}]}]}
+        """
+      When I leave insert mode
+      Then the signature box is not open
+
+    Scenario: Moving the cursor in normal mode asks for no Signature
+      Given a language server for "rust" is ready with capabilities:
+        """
+        {"signatureHelpProvider":{"triggerCharacters":["(", ","]}}
+        """
+      And "src/lib.rs" is open in the editor holding:
+        """
+        object.method(first, second)
+        """
+      And the editor mode is normal
+      And the cursor is at line 1 column 15
+      When I press the Right arrow in the editor
+      And the debounce window passes
+      Then the language server for "rust" was sent no "textDocument/signatureHelp" request
+      And the signature box is not open
+
+    Scenario: The box goes when a jump lands in another file
+      Given a language server for "rust" is ready with capabilities:
+        """
+        {"signatureHelpProvider":{"triggerCharacters":["(", ","]}}
+        """
+      And "src/lib.rs" is open in the editor holding:
+        """
+        object.method
+        """
+      And the editor mode is insert
+      And the cursor is at line 1 column 14
+      And I type "(" in the editor
+      And the language server for "rust" answers the signature help with:
+        """
+        {"signatures":[{"label":"method(first: i32)","parameters":[{"label":"first: i32"}]}]}
+        """
+      When I jump to "src/other.rs" line 1
+      Then the signature box is not open
+
+    Scenario: The box goes when focus moves out of the editor
+      Given a language server for "rust" is ready with capabilities:
+        """
+        {"signatureHelpProvider":{"triggerCharacters":["(", ","]}}
+        """
+      And "src/lib.rs" is open in the editor holding:
+        """
+        object.method
+        """
+      And the editor mode is insert
+      And the cursor is at line 1 column 14
+      And I type "(" in the editor
+      And the language server for "rust" answers the signature help with:
+        """
+        {"signatures":[{"label":"method(first: i32)","parameters":[{"label":"first: i32"}]}]}
+        """
+      When I click in the terminal pane
+      Then the signature box is not open
+
+    Scenario: The cheatsheet says Escape closes the Signature
+      Given "src/lib.rs" is open in the editor
+      Then the cheatsheet lists "Esc" for "signature"
+
   Rule: A completion fills in its own blanks
 
     Varde declares `completionItem.snippetSupport`, and that declaration is a claim about what Varde
