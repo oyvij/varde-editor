@@ -1355,6 +1355,263 @@ Feature: Language intelligence
         wor
         """
 
+  Rule: A character the server names opens the list with nothing typed
+
+    A server says which characters it wants to be asked about, in `completionProvider`'s
+    `triggerCharacters`: `.` for most, `:` for Rust's paths, `>` for C++'s arrows. That list is the
+    server's own and Varde spells none of it, the same way it spells no on-type formatting
+    character. The list it opens has nothing typed yet, so it holds everything the server offered,
+    and from there it is the list typing a name opens: letters narrow it, `Backspace` widens it, and
+    backing out past where it was asked takes it away.
+
+    Scenario: Typing a character the server names asks for candidates after the debounce
+      Given a language server for "rust" is ready with capabilities:
+        """
+        {"completionProvider":{"triggerCharacters":["."]}}
+        """
+      And "src/lib.rs" is open in the editor holding:
+        """
+        object.method()
+        """
+      And the editor mode is insert
+      And the cursor is at line 1 column 16
+      When I type "." in the editor
+      And the debounce window passes
+      Then the language server for "rust" was sent a completion request with trigger character "."
+
+    Scenario: The list a trigger opens holds everything the server offered
+      Given a language server for "rust" is ready with capabilities:
+        """
+        {"completionProvider":{"triggerCharacters":["."]}}
+        """
+      And "src/lib.rs" is open in the editor holding:
+        """
+        object.method()
+        """
+      And the editor mode is insert
+      And the cursor is at line 1 column 16
+      And I type "." in the editor
+      And the debounce window passes
+      When the language server for "rust" answers with candidates:
+        | label | insert |
+        | len   | len    |
+        | push  | push   |
+        | iter  | iter   |
+      Then the candidate list is open
+      And the candidates are:
+        | len  |
+        | push |
+        | iter |
+
+    Scenario: Letters after the trigger narrow the list
+      Given a language server for "rust" is ready with capabilities:
+        """
+        {"completionProvider":{"triggerCharacters":["."]}}
+        """
+      And "src/lib.rs" is open in the editor holding:
+        """
+        object.method()
+        """
+      And the editor mode is insert
+      And the cursor is at line 1 column 16
+      And I type "." in the editor
+      And the debounce window passes
+      And the language server for "rust" answers with candidates:
+        | label | insert |
+        | len   | len    |
+        | push  | push   |
+        | iter  | iter   |
+      When I type "p" in the editor
+      Then the candidate list is open
+      And the candidates are:
+        | push |
+
+    Scenario: Backspace after the trigger widens the list back to the whole reply
+      Given a language server for "rust" is ready with capabilities:
+        """
+        {"completionProvider":{"triggerCharacters":["."]}}
+        """
+      And "src/lib.rs" is open in the editor holding:
+        """
+        object.method()
+        """
+      And the editor mode is insert
+      And the cursor is at line 1 column 16
+      And I type "." in the editor
+      And the debounce window passes
+      And the language server for "rust" answers with candidates:
+        | label | insert |
+        | len   | len    |
+        | push  | push   |
+        | iter  | iter   |
+      And I type "p" in the editor
+      When I press "Backspace" in the editor
+      Then the candidate list is open
+      And the candidates are:
+        | len  |
+        | push |
+        | iter |
+
+    Scenario: Backspacing over the trigger closes the list
+      Given a language server for "rust" is ready with capabilities:
+        """
+        {"completionProvider":{"triggerCharacters":["."]}}
+        """
+      And "src/lib.rs" is open in the editor holding:
+        """
+        object.method()
+        """
+      And the editor mode is insert
+      And the cursor is at line 1 column 16
+      And I type "." in the editor
+      And the debounce window passes
+      And the language server for "rust" answers with candidates:
+        | label | insert |
+        | len   | len    |
+      When I press "Backspace" in the editor
+      Then the candidate list is not open
+      And the buffer holds:
+        """
+        object.method()
+        """
+
+    Scenario: Escape on a list a trigger opened keeps the trigger in the buffer
+      Given a language server for "rust" is ready with capabilities:
+        """
+        {"completionProvider":{"triggerCharacters":["."]}}
+        """
+      And "src/lib.rs" is open in the editor holding:
+        """
+        object.method()
+        """
+      And the editor mode is insert
+      And the cursor is at line 1 column 16
+      And I type "." in the editor
+      And the debounce window passes
+      And the language server for "rust" answers with candidates:
+        | label | insert |
+        | len   | len    |
+      When I press "Escape" in the editor
+      Then the candidate list is not open
+      And the buffer holds:
+        """
+        object.method().
+        """
+
+    Scenario: Enter on a list a trigger opened inserts the candidate after the trigger
+      Given a language server for "rust" is ready with capabilities:
+        """
+        {"completionProvider":{"triggerCharacters":["."]}}
+        """
+      And "src/lib.rs" is open in the editor holding:
+        """
+        object.method()
+        """
+      And the editor mode is insert
+      And the cursor is at line 1 column 16
+      And I type "." in the editor
+      And the debounce window passes
+      And the language server for "rust" answers with candidates:
+        | label | insert |
+        | len   | len    |
+        | push  | push   |
+      When I press "Enter" in the editor
+      Then the candidate list is not open
+      And the buffer holds:
+        """
+        object.method().len
+        """
+
+    Scenario: Every character in the server's list opens the list
+      Given a language server for "rust" is ready with capabilities:
+        """
+        {"completionProvider":{"triggerCharacters":[".", ":"]}}
+        """
+      And "src/lib.rs" is open in the editor holding:
+        """
+        std:
+        """
+      And the editor mode is insert
+      And the cursor is at line 1 column 5
+      When I type ":" in the editor
+      And the debounce window passes
+      Then the language server for "rust" was sent a completion request with trigger character ":"
+
+    Scenario: A server that names no character is asked nothing after a dot
+      Given a language server for "rust" is ready with capabilities:
+        """
+        {"completionProvider":{}}
+        """
+      And "src/lib.rs" is open in the editor holding:
+        """
+        object.method()
+        """
+      And the editor mode is insert
+      And the cursor is at line 1 column 16
+      When I type "." in the editor
+      And the debounce window passes
+      Then the language server for "rust" was sent no "textDocument/completion" request
+
+    Scenario: Typing a name still asks as an invoked completion
+      Given a language server for "rust" is ready with capabilities:
+        """
+        {"completionProvider":{"triggerCharacters":["."]}}
+        """
+      And "src/lib.rs" is open in the editor holding nothing
+      And the editor mode is insert
+      When I type "wor" in the editor
+      And the debounce window passes
+      Then the language server for "rust" was sent an invoked completion request
+
+    Scenario: Typing through several triggers quickly asks once
+      Given a language server for "rust" is ready with capabilities:
+        """
+        {"completionProvider":{"triggerCharacters":["."]}}
+        """
+      And "src/lib.rs" is open in the editor holding nothing
+      And the editor mode is insert
+      When I type "a.b.c" in the editor
+      And the debounce window passes
+      Then the language server for "rust" was sent 1 "textDocument/completion" request
+
+    Scenario: A reply about a cursor the user has typed past is dropped
+      Given a language server for "rust" is ready with capabilities:
+        """
+        {"completionProvider":{"triggerCharacters":["."]}}
+        """
+      And "src/lib.rs" is open in the editor holding:
+        """
+        object.method()
+        """
+      And the editor mode is insert
+      And the cursor is at line 1 column 16
+      And I type "." in the editor
+      And the debounce window passes
+      When I type "l" in the editor
+      And the language server for "rust" answers with candidates:
+        | label | insert |
+        | len   | len    |
+      Then the candidate list is not open
+
+    Scenario: A character that both formats and completes asks both questions
+      Given a language server for "rust" is ready with capabilities:
+        """
+        {
+          "completionProvider":{"triggerCharacters":["."]},
+          "documentOnTypeFormattingProvider":{"firstTriggerCharacter":"."}
+        }
+        """
+      And "src/lib.rs" is open in the editor holding:
+        """
+        object.method()
+        """
+      And the editor mode is insert
+      And the cursor is at line 1 column 16
+      When I type "." in the editor
+      And the debounce window passes
+      Then the language server for "rust" was sent a "textDocument/onTypeFormatting" request
+      And the language server for "rust" was sent a completion request with trigger character "."
+
   Rule: A completion fills in its own blanks
 
     Varde declares `completionItem.snippetSupport`, and that declaration is a claim about what Varde

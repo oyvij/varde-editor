@@ -82,6 +82,15 @@ Dismissing the list never changes what you wrote. If the word matches no Candida
 rather than showing empty, and it also closes when you jump to another file. Where the server gave
 an order, the list keeps it.
 
+**After a dot.** A server names the characters after which it has something to offer, such as `.`
+for a member, or `:` in Rust's `std::`. Type one of them and, after the same short pause, the list
+opens with nothing typed, holding everything the server offered: after `object.method().` you see
+every method the returned object has without knowing a name first. Letters narrow it and
+`Backspace` widens it as above, and backspacing over the `.` itself closes it. `Esc` leaves the `.`
+where you typed it, and `Enter` puts the Candidate after it. The characters are the server's own
+list, so they differ from language to language, and a server that names none opens the list only
+while you type a name.
+
 **Blanks.** Some Candidates are templates with places for values, such as `println!("…")` or
 `foo(…, …)`. Accepting one inserts the text without the placeholders and puts the cursor on the
 first blank. `Tab` moves to the next blank. At the last one, the cursor lands where the code

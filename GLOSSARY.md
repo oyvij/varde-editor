@@ -664,13 +664,18 @@ _Avoid_: placeholder (that is the `${1:…}` in the reply, not the place in the 
 (the cheatsheet's word for the gesture, not the thing), marker, anchor
 
 **Trigger character**:
-A character a Language server named as one it wants to be told about, so that it can lay out the text
-around it the moment it is typed. The server's own list, read off its `initialize` reply and never
-spelled in Varde: rust-analyzer names `.`, `=`, `<`, `>`, `{`, `(`, `|` and `+`, jdtls names `;`, `}`
-and a newline, clangd names a newline alone, and gopls and the TypeScript server name none. What
-comes back is edits, applied as one thing to undo — and dropped when the reader has typed on since,
-which is the Document version rule read the other way round.
-_Avoid_: format key, hotkey, on-type character, brace (that is one of them, not the idea), autoformat
+A character a Language server named as one it wants to be asked about the moment it is typed. A
+server names one list per question — completion, signature help, on-type formatting — and each is
+the server's own, read off its `initialize` reply and never spelled in Varde. For completion it is
+`completionProvider.triggerCharacters`, usually `.` and often `:` or `>` besides: typing one opens
+the Candidate list with nothing typed after the usual debounce, and the request says which character
+asked. For on-type formatting rust-analyzer names `.`, `=`, `<`, `>`, `{`, `(`, `|` and `+`, jdtls
+names `;`, `}` and a newline, clangd names a newline alone, and gopls and the TypeScript server name
+none; what comes back is edits, applied as one thing to undo — and dropped when the reader has typed
+on since, which is the Document version rule read the other way round. A character on two lists asks
+both questions, independently. Only single characters count: an entry like `->` is ignored.
+_Avoid_: format key, hotkey, on-type character, brace (that is one of them, not the idea),
+autoformat, dot completion
 
 **Formatter**:
 An external command a project names to lay one language's files out — `prettier`, `black`, `gofmt`.

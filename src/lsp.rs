@@ -3,13 +3,13 @@ use crate::search::{Hit, Results};
 use crate::startup::Server;
 use crate::{preview, Effect, Place, Pointed, Search, State};
 use lsp_types::{
-    ClientCapabilities, CompletionClientCapabilities, CompletionItemCapability, CompletionResponse,
-    DiagnosticSeverity, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
-    DidOpenTextDocumentParams, DocumentFormattingParams, DocumentOnTypeFormattingOptions,
-    DocumentOnTypeFormattingParams, FormattingOptions, GotoDefinitionResponse,
-    Hover as ServerHover, HoverClientCapabilities, HoverContents, InitializeParams,
-    InitializedParams, InsertTextFormat, MarkedString, MarkupKind, Position,
-    PublishDiagnosticsClientCapabilities, PublishDiagnosticsParams, Range,
+    ClientCapabilities, CompletionClientCapabilities, CompletionContext, CompletionItemCapability,
+    CompletionParams, CompletionResponse, CompletionTriggerKind, DiagnosticSeverity,
+    DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
+    DocumentFormattingParams, DocumentOnTypeFormattingOptions, DocumentOnTypeFormattingParams,
+    FormattingOptions, GotoDefinitionResponse, Hover as ServerHover, HoverClientCapabilities,
+    HoverContents, InitializeParams, InitializedParams, InsertTextFormat, MarkedString, MarkupKind,
+    Position, PublishDiagnosticsClientCapabilities, PublishDiagnosticsParams, Range,
     TextDocumentClientCapabilities, TextDocumentContentChangeEvent, TextDocumentIdentifier,
     TextDocumentItem, TextDocumentPositionParams, TextEdit, Url, VersionedTextDocumentIdentifier,
 };
@@ -509,10 +509,17 @@ pub fn read_for_review(state: &mut State, path: &Path, contents: &str) -> Vec<Ef
 
 pub fn typed(state: &mut State) -> Vec<Effect> {
     if !typing_a_name(state) {
-        if matches!(state.modal, crate::Modal::Candidates(_)) {
-            state.modal = crate::Modal::None;
+        match typed_word(state).is_some_and(|word| word.is_empty()) {
+            true => narrowed(state),
+            false if matches!(state.modal, crate::Modal::Candidates(_)) => {
+                state.modal = crate::Modal::None
+            }
+            false => {}
         }
-        return Vec::new();
+        return match completes_on_trigger(state) {
+            true => vec![Effect::DebounceCandidates(DEBOUNCE_MS)],
+            false => Vec::new(),
+        };
     }
     narrowed(state);
     let (_, capability, _) = About::Candidates.asking();
@@ -592,7 +599,7 @@ fn typed_word(state: &State) -> Option<String> {
         return None;
     }
     let buffer = state.buffers.get(&list.asked.path)?;
-    if buffer.line != list.asked.place.line {
+    if buffer.line != list.asked.place.line || buffer.column < list.asked.place.column {
         return None;
     }
     word_between(
@@ -620,23 +627,47 @@ fn word_between(
     )
 }
 
-fn typing_a_name(state: &State) -> bool {
-    let Some(buffer) = state
+fn completes_on_trigger(state: &State) -> bool {
+    let Some(path) = state.current_buffer.as_deref() else {
+        return false;
+    };
+    let Some(key) = before_cursor(state) else {
+        return false;
+    };
+    let (_, capability, _) = About::Candidates.asking();
+    served_by(state, path)
+        .into_iter()
+        .filter(|language| ready(state, language))
+        .filter_map(|language| state.lsp.get(&language))
+        .any(|conversation| {
+            completion_triggers(&conversation.capabilities[capability]).contains(&key)
+        })
+}
+
+fn before_cursor(state: &State) -> Option<char> {
+    let buffer = state
         .current_buffer
         .as_ref()
-        .and_then(|path| state.buffers.get(path))
-    else {
-        return false;
-    };
-    let Some(before) = buffer.column.checked_sub(2) else {
-        return false;
-    };
-    buffer
-        .shown()
-        .lines()
-        .nth(buffer.line.saturating_sub(1))
-        .and_then(|line| line.chars().nth(before))
-        .is_some_and(|character| character.is_alphanumeric() || character == '_')
+        .and_then(|path| state.buffers.get(path))?;
+    before(
+        buffer.shown(),
+        Place {
+            line: buffer.line,
+            column: buffer.column,
+        },
+    )
+}
+
+fn before(text: &str, place: Place) -> Option<char> {
+    let column = place.column.checked_sub(2)?;
+    text.lines()
+        .nth(place.line.saturating_sub(1))?
+        .chars()
+        .nth(column)
+}
+
+fn typing_a_name(state: &State) -> bool {
+    before_cursor(state).is_some_and(|character| character.is_alphanumeric() || character == '_')
 }
 
 fn closed(state: &mut State) -> Vec<Effect> {
@@ -1005,6 +1036,7 @@ pub fn ask_at(state: &mut State, about: About, at: Option<Place>) -> Vec<Effect>
         column: buffer.column,
     });
     let position = position(buffer.shown(), place);
+    let key = before(buffer.shown(), place);
     let revision = buffer.revision();
     let options = formatting(state);
     let mut sent = BTreeMap::new();
@@ -1047,6 +1079,30 @@ pub fn ask_at(state: &mut State, about: About, at: Option<Place>) -> Vec<Effect>
                         text_document: at.text_document,
                         options: options.clone(),
                         work_done_progress_params: Default::default(),
+                    },
+                ),
+                About::Candidates => request(
+                    id,
+                    method,
+                    CompletionParams {
+                        text_document_position: at,
+                        work_done_progress_params: Default::default(),
+                        partial_result_params: Default::default(),
+                        context: Some(
+                            match key.filter(|key| {
+                                completion_triggers(&conversation.capabilities[capability])
+                                    .contains(key)
+                            }) {
+                                Some(key) => CompletionContext {
+                                    trigger_kind: CompletionTriggerKind::TRIGGER_CHARACTER,
+                                    trigger_character: Some(key.to_string()),
+                                },
+                                None => CompletionContext {
+                                    trigger_kind: CompletionTriggerKind::INVOKED,
+                                    trigger_character: None,
+                                },
+                            },
+                        ),
                     },
                 ),
                 _ => request(id, method, at),
@@ -1687,6 +1743,20 @@ fn triggers(declared: &Value) -> Vec<char> {
     };
     std::iter::once(named.first_trigger_character)
         .chain(named.more_trigger_character.unwrap_or_default())
+        .filter_map(|named| match named.chars().collect::<Vec<char>>()[..] {
+            [one] => Some(one),
+            _ => None,
+        })
+        .collect()
+}
+
+fn completion_triggers(declared: &Value) -> Vec<char> {
+    let Ok(named) = serde_json::from_value::<Vec<String>>(declared["triggerCharacters"].clone())
+    else {
+        return Vec::new();
+    };
+    named
+        .iter()
         .filter_map(|named| match named.chars().collect::<Vec<char>>()[..] {
             [one] => Some(one),
             _ => None,
@@ -3612,6 +3682,21 @@ mod tests {
             triggers(&json!({"firstTriggerCharacter": ";", "moreTriggerCharacter": ["", ">="]})),
             vec![';']
         );
+    }
+
+    #[test]
+    fn the_characters_that_open_the_list_are_the_servers_own() {
+        assert_eq!(
+            completion_triggers(&json!({"triggerCharacters": [".", ":", "->", ""]})),
+            vec!['.', ':']
+        );
+        assert_eq!(completion_triggers(&json!({})), Vec::<char>::new());
+        assert_eq!(
+            completion_triggers(&json!({"triggerCharacters": []})),
+            Vec::<char>::new()
+        );
+        assert_eq!(completion_triggers(&json!(true)), Vec::<char>::new());
+        assert_eq!(completion_triggers(&Value::Null), Vec::<char>::new());
     }
 
     #[test]

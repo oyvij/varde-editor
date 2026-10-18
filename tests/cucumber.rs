@@ -121,6 +121,7 @@ pub struct VardeWorld {
     lsp_args: BTreeMap<String, Vec<String>>,
     lsp_sent: Vec<(String, Value)>,
     lsp_answers: BTreeSet<String>,
+    lsp_capabilities: BTreeMap<String, Value>,
     lsp_fails: BTreeSet<String>,
     formatter_runs: Vec<Effect>,
     candidates_armed: bool,
@@ -774,13 +775,20 @@ impl VardeWorld {
                 match self.lsp_running.contains_key(&language) {
                     true => {
                         if handshake && self.lsp_answers.contains(&language) {
+                            let capabilities = self
+                                .lsp_capabilities
+                                .get(&language)
+                                .cloned()
+                                .unwrap_or_else(|| {
+                                    json!({
+                                        "hoverProvider": true,
+                                        "definitionProvider": true,
+                                        "completionProvider": {},
+                                    })
+                                });
                             self.lsp_replies(
                                 &language,
-                                json!({"jsonrpc": "2.0", "id": id, "result": {"capabilities": {
-                                    "hoverProvider": true,
-                                    "definitionProvider": true,
-                                    "completionProvider": {},
-                                }}}),
+                                json!({"jsonrpc": "2.0", "id": id, "result": {"capabilities": capabilities}}),
                             );
                         }
                     }
@@ -11596,6 +11604,16 @@ fn server_is_ready(world: &mut VardeWorld, language: String) {
         });
 }
 
+#[given(expr = "a language server for {string} is ready with capabilities:")]
+fn server_is_ready_with(world: &mut VardeWorld, language: String, step: &Step) {
+    let capabilities: Value =
+        serde_json::from_str(step.docstring().expect("docstring")).expect("valid JSON");
+    world
+        .lsp_capabilities
+        .insert(language.clone(), capabilities);
+    server_is_ready(world, language);
+}
+
 #[given(expr = "a language server for {string} is already running")]
 fn server_is_already_running(world: &mut VardeWorld, language: String) {
     let command = format!("{language}-language-server");
@@ -12213,6 +12231,34 @@ fn was_sent_how_many(world: &mut VardeWorld, language: String, count: usize, met
         count,
         "{language} was sent: {:?}",
         methods(&messages)
+    );
+}
+
+fn completion_context(world: &VardeWorld, language: &str) -> Value {
+    sent(world, language)
+        .iter()
+        .rev()
+        .find(|message| message["method"] == "textDocument/completion")
+        .unwrap_or_else(|| panic!("{language} was never sent a textDocument/completion request"))
+        ["params"]["context"]
+        .clone()
+}
+
+#[then(
+    expr = "the language server for {string} was sent a completion request with trigger character {string}"
+)]
+fn completion_was_triggered(world: &mut VardeWorld, language: String, character: String) {
+    assert_eq!(
+        completion_context(world, &language),
+        json!({"triggerKind": 2, "triggerCharacter": character})
+    );
+}
+
+#[then(expr = "the language server for {string} was sent an invoked completion request")]
+fn completion_was_invoked(world: &mut VardeWorld, language: String) {
+    assert_eq!(
+        completion_context(world, &language),
+        json!({"triggerKind": 1})
     );
 }
 
