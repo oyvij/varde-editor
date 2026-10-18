@@ -1617,10 +1617,9 @@ fn settle(mut next: State, mut effects: Vec<Effect>, wheeled: bool) -> (State, V
         if next.hover.is_some() && !lsp::hover_stands(&next) {
             next.hover = None;
         }
-        let elsewhere = match &next.modal {
+        let left_behind = match &next.modal {
             Modal::Candidates(list) => {
-                next.focus != Pane::Editor
-                    || next.current_buffer.as_ref() != Some(&list.asked.path)
+                elsewhere(&next, &list.asked.path)
                     || next.buffers.get(&list.asked.path).is_some_and(|buffer| {
                         (buffer.line, buffer.column)
                             < (list.asked.place.line, list.asked.place.column)
@@ -1628,12 +1627,11 @@ fn settle(mut next: State, mut effects: Vec<Effect>, wheeled: bool) -> (State, V
             }
             _ => false,
         };
-        if elsewhere {
+        if left_behind {
             next.modal = Modal::None;
         }
         if next.signature.as_ref().is_some_and(|signature| {
-            next.focus != Pane::Editor
-                || next.current_buffer.as_ref() != Some(&signature.asked.path)
+            elsewhere(&next, &signature.asked.path)
                 || next
                     .buffers
                     .get(&signature.asked.path)
@@ -1641,9 +1639,11 @@ fn settle(mut next: State, mut effects: Vec<Effect>, wheeled: bool) -> (State, V
         }) {
             next.signature = None;
         }
-        if next.stops.as_ref().is_some_and(|stops| {
-            next.focus != Pane::Editor || next.current_buffer.as_ref() != Some(&stops.path)
-        }) {
+        if next
+            .stops
+            .as_ref()
+            .is_some_and(|stops| elsewhere(&next, &stops.path))
+        {
             next.stops = None;
         }
         if !matches!(next.modal, Modal::Comment) {
@@ -1728,6 +1728,10 @@ pub type Traced = (PathBuf, u64, std::sync::Arc<[Option<usize>]>);
 type Declined = (State, Event);
 
 type Answered = Result<(State, Vec<Effect>), Declined>;
+
+fn elsewhere(state: &State, path: &Path) -> bool {
+    state.focus != Pane::Editor || state.current_buffer.as_deref() != Some(path)
+}
 
 fn clamp_buffers(next: &mut State) {
     let rows = next.buffers.len();

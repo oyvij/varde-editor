@@ -2319,6 +2319,28 @@ Feature: Language intelligence
       And tab stops are pending
       And the editor mode is insert
 
+    Scenario: The Escape after the one that closed the box ends the Tab stop sequence
+      Given a language server for "rust" is ready with capabilities:
+        """
+        {"completionProvider":{},"signatureHelpProvider":{"triggerCharacters":["(", ","]}}
+        """
+      And "src/lib.rs" is open in the editor holding nothing
+      And the editor mode is insert
+      And I type "foo" in the editor
+      And the debounce window passes
+      And the language server for "rust" answers with candidates:
+        | label | insert        | format  |
+        | foo   | foo($1, $2)$0 | snippet |
+      And I press "Enter" in the editor
+      And I type "bar(" in the editor
+      And the language server for "rust" answers the signature help with:
+        """
+        {"signatures":[{"label":"bar(first: i32)","parameters":[{"label":"first: i32"}]}]}
+        """
+      And I press "Escape" in the editor
+      When I press "Escape" in the editor
+      Then no tab stops are pending
+
     Scenario: Leaving insert mode while the box is open closes it
       Given a language server for "rust" is ready with capabilities:
         """
