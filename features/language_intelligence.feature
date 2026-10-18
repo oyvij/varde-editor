@@ -2140,6 +2140,30 @@ Feature: Language intelligence
       When I type "l " in the editor
       Then the candidate list is not open
 
+    Scenario: A space after a dot inside a call closes the dot's list
+      Given a language server for "rust" is ready with capabilities:
+        """
+        {"completionProvider":{"triggerCharacters":["."]},"signatureHelpProvider":{"triggerCharacters":["(", ","]}}
+        """
+      And "src/lib.rs" is open in the editor holding:
+        """
+        object.method(value
+        """
+      And the editor mode is insert
+      And the cursor is at line 1 column 20
+      And I type "(" in the editor
+      And the language server for "rust" answers the signature help with:
+        """
+        {"signatures":[{"label":"method(first: i32)","parameters":[{"label":"first: i32"}]}],"activeParameter":0}
+        """
+      And I type "." in the editor
+      And the debounce window passes
+      And the language server for "rust" answers with candidates:
+        | label | insert |
+        | len   | len    |
+      When I type " " in the editor
+      Then the candidate list is not open
+
     Scenario: A call opened inside a call gets its own list on the same argument number
       Given a language server for "rust" is ready with capabilities:
         """

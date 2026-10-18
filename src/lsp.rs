@@ -514,11 +514,13 @@ pub fn read_for_review(state: &mut State, path: &Path, contents: &str) -> Vec<Ef
 
 pub fn typed(state: &mut State) -> Vec<Effect> {
     if !typing_a_name(state) {
+        let slot = match &state.modal {
+            crate::Modal::Candidates(list) => opens_slot(state, &list.asked.path, list.asked.place),
+            _ => false,
+        };
         match (typed_word(state), &mut state.modal) {
             (Some(word), _) if word.is_empty() => narrowed(state),
-            (Some(word), crate::Modal::Candidates(list))
-                if word.trim().is_empty() && state.signature.is_some() =>
-            {
+            (Some(word), crate::Modal::Candidates(list)) if word.trim().is_empty() && slot => {
                 list.word_start += word.chars().count()
             }
             (_, crate::Modal::Candidates(_)) => state.modal = crate::Modal::None,
@@ -558,6 +560,14 @@ fn names(state: &State, path: &Path, about: About, list: &str, key: char) -> boo
     capabilities_serving(state, path)
         .into_iter()
         .any(|capabilities| characters(&capabilities[capability], list).contains(&key))
+}
+
+fn opens_slot(state: &State, path: &Path, place: Place) -> bool {
+    state
+        .buffers
+        .get(path)
+        .and_then(|buffer| before(buffer.shown(), place))
+        .is_some_and(|key| names(state, path, About::Signature, "triggerCharacters", key))
 }
 
 pub fn signs_after(state: &mut State, key: char) -> Vec<Effect> {
@@ -1066,10 +1076,8 @@ pub fn ask_at(state: &mut State, about: About, at: Option<Place>) -> Vec<Effect>
         column: buffer.column,
     });
     let position = position(buffer.shown(), place);
-    let preceding = before(buffer.shown(), place).filter(|key| {
-        about != About::Candidates
-            || !names(state, &path, About::Signature, "triggerCharacters", *key)
-    });
+    let preceding = before(buffer.shown(), place)
+        .filter(|_| about != About::Candidates || !opens_slot(state, &path, place));
     let revision = buffer.revision();
     let shown = state
         .signature
@@ -1441,12 +1449,8 @@ fn signed(state: &mut State, ask: Ask, result: &Value) -> Told {
             fitted(rows, measure, DOC_ROWS)
         })
         .unwrap_or_default();
-    let opened = state
-        .buffers
-        .get(&ask.path)
-        .and_then(|buffer| before(buffer.shown(), ask.place))
-        .is_some_and(|key| names(state, &ask.path, About::Signature, "triggerCharacters", key));
-    let new_slot = opened || state.signature.as_ref().map(|open| open.parameter) != Some(parameter);
+    let new_slot = opens_slot(state, &ask.path, ask.place)
+        || state.signature.as_ref().map(|open| open.parameter) != Some(parameter);
     state.signature = Some(Signature {
         asked: ask,
         highlighted: held.and_then(|parameter| span(&signature.label, &parameter.label)),
