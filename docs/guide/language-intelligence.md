@@ -86,10 +86,10 @@ an order, the list keeps it.
 for a member, or `:` in Rust's `std::`. Type one of them and, after the same short pause, the list
 opens with nothing typed, holding everything the server offered: after `object.method().` you see
 every method the returned object has without knowing a name first. Letters narrow it and
-`Backspace` widens it as above, and backspacing over the `.` itself closes it. `Esc` leaves the `.`
-where you typed it, and `Enter` puts the Candidate after it. The characters are the server's own
-list, so they differ from language to language, and a server that names none opens the list only
-while you type a name.
+`Backspace` widens it as above, and backspacing or moving back over the `.` closes it. `Esc`
+leaves the `.` where you typed it, and `Enter` puts the Candidate after it. The characters are the
+server's own list, so they differ from language to language, and a server that names none opens
+the list only while you type a name.
 
 **Blanks.** Some Candidates are templates with places for values, such as `println!("…")` or
 `foo(…, …)`. Accepting one inserts the text without the placeholders and puts the cursor on the

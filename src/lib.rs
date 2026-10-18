@@ -1619,7 +1619,12 @@ fn settle(mut next: State, mut effects: Vec<Effect>, wheeled: bool) -> (State, V
         }
         let elsewhere = match &next.modal {
             Modal::Candidates(list) => {
-                next.focus != Pane::Editor || next.current_buffer.as_ref() != Some(&list.asked.path)
+                next.focus != Pane::Editor
+                    || next.current_buffer.as_ref() != Some(&list.asked.path)
+                    || next.buffers.get(&list.asked.path).is_some_and(|buffer| {
+                        (buffer.line, buffer.column)
+                            < (list.asked.place.line, list.asked.place.column)
+                    })
             }
             Modal::Stops { path, .. } => {
                 next.focus != Pane::Editor || next.current_buffer.as_ref() != Some(path)
@@ -4631,6 +4636,7 @@ fn editor_key(state: &State, next: State, key: char, wheeled: bool) -> (State, V
     let mut typed = vec![];
     if inserting {
         typed = lsp::typed(&mut next);
+        typed.extend(lsp::completes_after(&next, key));
         typed.extend(lsp::on_type(&mut next, key));
     }
     let mut effects = match register_of(&next) {

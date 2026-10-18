@@ -1475,6 +1475,45 @@ Feature: Language intelligence
         object.method()
         """
 
+    Scenario: Moving the cursor back past the trigger closes the list
+      Given a language server for "rust" is ready with capabilities:
+        """
+        {"completionProvider":{"triggerCharacters":["."]}}
+        """
+      And "src/lib.rs" is open in the editor holding:
+        """
+        object.method()
+        """
+      And the editor mode is insert
+      And the cursor is at line 1 column 16
+      And I type "." in the editor
+      And the debounce window passes
+      And the language server for "rust" answers with candidates:
+        | label | insert |
+        | len   | len    |
+      When I press "Left" in the editor
+      Then the candidate list is not open
+
+    Scenario: Backspacing back to the trigger asks nothing new
+      Given a language server for "rust" is ready with capabilities:
+        """
+        {"completionProvider":{"triggerCharacters":["."]}}
+        """
+      And "src/lib.rs" is open in the editor holding:
+        """
+        object.method().
+        """
+      And the editor mode is insert
+      And the cursor is at line 1 column 17
+      And I type "p" in the editor
+      And the debounce window passes
+      And the language server for "rust" answers with candidates:
+        | label | insert |
+        | push  | push   |
+      When I press "Backspace" in the editor
+      And the debounce window passes
+      Then the language server for "rust" was sent 1 "textDocument/completion" request
+
     Scenario: Escape on a list a trigger opened keeps the trigger in the buffer
       Given a language server for "rust" is ready with capabilities:
         """
@@ -1533,9 +1572,13 @@ Feature: Language intelligence
         """
       And the editor mode is insert
       And the cursor is at line 1 column 5
-      When I type ":" in the editor
+      And I type ":" in the editor
       And the debounce window passes
+      When the language server for "rust" answers with candidates:
+        | label | insert |
+        | env   | env    |
       Then the language server for "rust" was sent a completion request with trigger character ":"
+      And the candidate list is open
 
     Scenario: A server that names no character is asked nothing after a dot
       Given a language server for "rust" is ready with capabilities:

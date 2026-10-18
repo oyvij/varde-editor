@@ -516,10 +516,7 @@ pub fn typed(state: &mut State) -> Vec<Effect> {
             }
             false => {}
         }
-        return match completes_on_trigger(state) {
-            true => vec![Effect::DebounceCandidates(DEBOUNCE_MS)],
-            false => Vec::new(),
-        };
+        return Vec::new();
     }
     narrowed(state);
     let (_, capability, _) = About::Candidates.asking();
@@ -531,6 +528,24 @@ pub fn typed(state: &mut State) -> Vec<Effect> {
         .and_then(|language| state.lsp.get(language))
         .is_some_and(|conversation| declares(&conversation.capabilities, capability));
     match declared {
+        true => vec![Effect::DebounceCandidates(DEBOUNCE_MS)],
+        false => Vec::new(),
+    }
+}
+
+pub fn completes_after(state: &State, key: char) -> Vec<Effect> {
+    let Some(path) = state.current_buffer.as_deref() else {
+        return Vec::new();
+    };
+    let (_, capability, _) = About::Candidates.asking();
+    let named = served_by(state, path)
+        .into_iter()
+        .filter(|language| ready(state, language))
+        .filter_map(|language| state.lsp.get(&language))
+        .any(|conversation| {
+            completion_triggers(&conversation.capabilities[capability]).contains(&key)
+        });
+    match named {
         true => vec![Effect::DebounceCandidates(DEBOUNCE_MS)],
         false => Vec::new(),
     }
@@ -599,7 +614,7 @@ fn typed_word(state: &State) -> Option<String> {
         return None;
     }
     let buffer = state.buffers.get(&list.asked.path)?;
-    if buffer.line != list.asked.place.line || buffer.column < list.asked.place.column {
+    if buffer.line != list.asked.place.line {
         return None;
     }
     word_between(
@@ -627,37 +642,6 @@ fn word_between(
     )
 }
 
-fn completes_on_trigger(state: &State) -> bool {
-    let Some(path) = state.current_buffer.as_deref() else {
-        return false;
-    };
-    let Some(key) = before_cursor(state) else {
-        return false;
-    };
-    let (_, capability, _) = About::Candidates.asking();
-    served_by(state, path)
-        .into_iter()
-        .filter(|language| ready(state, language))
-        .filter_map(|language| state.lsp.get(&language))
-        .any(|conversation| {
-            completion_triggers(&conversation.capabilities[capability]).contains(&key)
-        })
-}
-
-fn before_cursor(state: &State) -> Option<char> {
-    let buffer = state
-        .current_buffer
-        .as_ref()
-        .and_then(|path| state.buffers.get(path))?;
-    before(
-        buffer.shown(),
-        Place {
-            line: buffer.line,
-            column: buffer.column,
-        },
-    )
-}
-
 fn before(text: &str, place: Place) -> Option<char> {
     let column = place.column.checked_sub(2)?;
     text.lines()
@@ -667,7 +651,21 @@ fn before(text: &str, place: Place) -> Option<char> {
 }
 
 fn typing_a_name(state: &State) -> bool {
-    before_cursor(state).is_some_and(|character| character.is_alphanumeric() || character == '_')
+    let Some(buffer) = state
+        .current_buffer
+        .as_ref()
+        .and_then(|path| state.buffers.get(path))
+    else {
+        return false;
+    };
+    before(
+        buffer.shown(),
+        Place {
+            line: buffer.line,
+            column: buffer.column,
+        },
+    )
+    .is_some_and(|character| character.is_alphanumeric() || character == '_')
 }
 
 fn closed(state: &mut State) -> Vec<Effect> {
@@ -1036,7 +1034,7 @@ pub fn ask_at(state: &mut State, about: About, at: Option<Place>) -> Vec<Effect>
         column: buffer.column,
     });
     let position = position(buffer.shown(), place);
-    let key = before(buffer.shown(), place);
+    let preceding = before(buffer.shown(), place);
     let revision = buffer.revision();
     let options = formatting(state);
     let mut sent = BTreeMap::new();
@@ -1060,6 +1058,9 @@ pub fn ask_at(state: &mut State, about: About, at: Option<Place>) -> Vec<Effect>
             text_document: TextDocumentIdentifier { uri: uri.clone() },
             position,
         };
+        let trigger = preceding.filter(|key| {
+            completion_triggers(&conversation.capabilities[capability]).contains(key)
+        });
         effects.push(Effect::LspSend {
             language,
             json: match about {
@@ -1088,21 +1089,13 @@ pub fn ask_at(state: &mut State, about: About, at: Option<Place>) -> Vec<Effect>
                         text_document_position: at,
                         work_done_progress_params: Default::default(),
                         partial_result_params: Default::default(),
-                        context: Some(
-                            match key.filter(|key| {
-                                completion_triggers(&conversation.capabilities[capability])
-                                    .contains(key)
-                            }) {
-                                Some(key) => CompletionContext {
-                                    trigger_kind: CompletionTriggerKind::TRIGGER_CHARACTER,
-                                    trigger_character: Some(key.to_string()),
-                                },
-                                None => CompletionContext {
-                                    trigger_kind: CompletionTriggerKind::INVOKED,
-                                    trigger_character: None,
-                                },
+                        context: Some(CompletionContext {
+                            trigger_kind: match trigger {
+                                Some(_) => CompletionTriggerKind::TRIGGER_CHARACTER,
+                                None => CompletionTriggerKind::INVOKED,
                             },
-                        ),
+                            trigger_character: trigger.map(String::from),
+                        }),
                     },
                 ),
                 _ => request(id, method, at),
