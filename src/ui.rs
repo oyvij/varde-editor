@@ -506,7 +506,6 @@ fn draw_modal(frame: &mut Frame, state: &State, chrome: &Chrome) {
         Modal::StepDetail => overlay(frame, "STEP", step_detail_lines(state)),
         Modal::Prediction { .. } => overlay(frame, "PREDICTION", prediction_lines(state)),
         Modal::Candidates(_) => {}
-        Modal::Stops { .. } => {}
         Modal::None => {}
     }
 }

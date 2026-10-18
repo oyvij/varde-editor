@@ -9421,7 +9421,6 @@ fn modal_is(world: &mut VardeWorld, expected: String) {
         Modal::Prediction { .. } => "prediction",
         Modal::Diverged => "diverged",
         Modal::Candidates(_) => "candidates",
-        Modal::Stops { .. } => "stops",
         Modal::Restart => "restart",
         Modal::SetValue => "set-value",
         Modal::NewWatch => "new-watch",
@@ -12558,11 +12557,12 @@ fn candidate_list_is_not_open(world: &mut VardeWorld) {
 
 #[then(expr = "no tab stops are pending")]
 fn no_tab_stops(world: &mut VardeWorld) {
-    assert!(
-        !matches!(world.state.modal, Modal::Stops { .. }),
-        "tab stops are pending: {:?}",
-        world.state.modal
-    );
+    assert_eq!(world.state.stops, None);
+}
+
+#[then(expr = "tab stops are pending")]
+fn tab_stops_pending(world: &mut VardeWorld) {
+    assert!(world.state.stops.is_some());
 }
 
 #[then(expr = "the candidates are:")]

@@ -1764,6 +1764,118 @@ Feature: Language intelligence
       When I open "src/tree.rs"
       Then no tab stops are pending
 
+    Scenario: A name typed on a stop opens the candidate list there
+      Given a language server for "rust" is ready
+      And "src/lib.rs" is open in the editor holding nothing
+      And the editor mode is insert
+      And I type "foo" in the editor
+      And the debounce window passes
+      And the language server for "rust" answers with candidates:
+        | label | insert        | format  |
+        | foo   | foo($1, $2)$0 | snippet |
+      And I press "Enter" in the editor
+      And I type "wor" in the editor
+      And the debounce window passes
+      When the language server for "rust" answers with candidates:
+        | label          | insert         |
+        | workspace_root | workspace_root |
+      Then the candidates are:
+        | workspace_root |
+
+    Scenario: Accepting a candidate into a stop keeps the sequence, and Tab lands on the next blank
+      Given a language server for "rust" is ready
+      And "src/lib.rs" is open in the editor holding nothing
+      And the editor mode is insert
+      And I type "foo" in the editor
+      And the debounce window passes
+      And the language server for "rust" answers with candidates:
+        | label | insert        | format  |
+        | foo   | foo($1, $2)$0 | snippet |
+      And I press "Enter" in the editor
+      And I type "wor" in the editor
+      And the debounce window passes
+      And the language server for "rust" answers with candidates:
+        | label          | insert         |
+        | workspace_root | workspace_root |
+      And I press "Enter" in the editor
+      When I press "Tab" in the editor
+      Then the buffer holds:
+        """
+        foo(workspace_root, )
+        """
+      And the cursor is at line 1 column 21
+
+    Scenario: Tab with a list open on a stop goes to the next blank and takes the list with it
+      Given a language server for "rust" is ready
+      And "src/lib.rs" is open in the editor holding nothing
+      And the editor mode is insert
+      And I type "foo" in the editor
+      And the debounce window passes
+      And the language server for "rust" answers with candidates:
+        | label | insert        | format  |
+        | foo   | foo($1, $2)$0 | snippet |
+      And I press "Enter" in the editor
+      And I type "wor" in the editor
+      And the debounce window passes
+      And the language server for "rust" answers with candidates:
+        | label          | insert         |
+        | workspace_root | workspace_root |
+      When I press "Tab" in the editor
+      Then the candidate list is not open
+      And the buffer holds:
+        """
+        foo(wor, )
+        """
+      And the cursor is at line 1 column 10
+
+    Scenario: Escape on a list open on a stop closes the list and keeps the sequence
+      Given a language server for "rust" is ready
+      And "src/lib.rs" is open in the editor holding nothing
+      And the editor mode is insert
+      And I type "foo" in the editor
+      And the debounce window passes
+      And the language server for "rust" answers with candidates:
+        | label | insert        | format  |
+        | foo   | foo($1, $2)$0 | snippet |
+      And I press "Enter" in the editor
+      And I type "wor" in the editor
+      And the debounce window passes
+      And the language server for "rust" answers with candidates:
+        | label          | insert         |
+        | workspace_root | workspace_root |
+      When I press "Escape" in the editor
+      Then the candidate list is not open
+      And the buffer holds:
+        """
+        foo(wor, )
+        """
+      And tab stops are pending
+      And the editor mode is insert
+
+    Scenario: The Escape after the one that closed the list ends the sequence
+      Given a language server for "rust" is ready
+      And "src/lib.rs" is open in the editor holding nothing
+      And the editor mode is insert
+      And I type "foo" in the editor
+      And the debounce window passes
+      And the language server for "rust" answers with candidates:
+        | label | insert        | format  |
+        | foo   | foo($1, $2)$0 | snippet |
+      And I press "Enter" in the editor
+      And I type "wor" in the editor
+      And the debounce window passes
+      And the language server for "rust" answers with candidates:
+        | label          | insert         |
+        | workspace_root | workspace_root |
+      And I press "Escape" in the editor
+      When I press "Escape" in the editor
+      Then no tab stops are pending
+      And the buffer holds:
+        """
+        foo(wor, )
+        """
+      And the editor mode is insert
+
     Scenario: A plain-text completion is exactly what it is today, with no sequence to leave
       Given a language server for "rust" is ready
       And "src/lib.rs" is open in the editor holding nothing

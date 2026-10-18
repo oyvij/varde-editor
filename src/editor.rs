@@ -56,6 +56,12 @@ enum Step {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Tail(pub usize);
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Stops {
+    pub path: std::path::PathBuf,
+    pub at: Vec<Tail>,
+}
+
 /// An empty pty cell (never written, or a wide char's second half) is a space, so columns match the screen
 pub fn grid_row<'a>(cells: impl Iterator<Item = Option<&'a str>>) -> String {
     let row: String = cells
@@ -1763,6 +1769,32 @@ mod tests {
             Some(crate::Place {
                 line: 1,
                 column: 26,
+            })
+        );
+    }
+
+    #[test]
+    fn a_stop_shifts_by_the_completed_text_less_the_word_it_replaced() {
+        let mut buffer = Buffer::open("", false, 4);
+        buffer.key('i');
+        let left = buffer.complete("foo(, )", &[4, 6]);
+        for c in "wor".chars() {
+            buffer.key(c);
+        }
+        assert_eq!(
+            buffer.place_before(left[0]),
+            Some(crate::Place {
+                line: 1,
+                column: 10
+            })
+        );
+        buffer.complete("workspace_root", &[]);
+        assert_eq!(buffer.shown(), "foo(workspace_root, )");
+        assert_eq!(
+            buffer.place_before(left[0]),
+            Some(crate::Place {
+                line: 1,
+                column: 21
             })
         );
     }

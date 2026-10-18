@@ -305,10 +305,6 @@ pub enum Modal {
         text: Buffer,
         tag: story::Tag,
     },
-    Stops {
-        path: PathBuf,
-        at: Vec<editor::Tail>,
-    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1232,6 +1228,7 @@ pub struct State {
     pub diagnostics: BTreeMap<PathBuf, BTreeMap<String, Vec<lsp::Diagnostic>>>,
     pub diagnostic_totals: [usize; 4],
     pub hover: Option<lsp::Hover>,
+    pub stops: Option<editor::Stops>,
     pub pointed_at: Pointed,
 }
 
@@ -1462,6 +1459,7 @@ impl Default for State {
             diagnostics: BTreeMap::new(),
             diagnostic_totals: [0; 4],
             hover: None,
+            stops: None,
             hovered_action: None,
             transport_lit: None,
             preview_width: PreviewWidth::Reading,
@@ -1626,13 +1624,15 @@ fn settle(mut next: State, mut effects: Vec<Effect>, wheeled: bool) -> (State, V
                             < (list.asked.place.line, list.asked.place.column)
                     })
             }
-            Modal::Stops { path, .. } => {
-                next.focus != Pane::Editor || next.current_buffer.as_ref() != Some(path)
-            }
             _ => false,
         };
         if elsewhere {
             next.modal = Modal::None;
+        }
+        if next.stops.as_ref().is_some_and(|stops| {
+            next.focus != Pane::Editor || next.current_buffer.as_ref() != Some(&stops.path)
+        }) {
+            next.stops = None;
         }
         if !matches!(next.modal, Modal::Comment) {
             next.comment = None;
@@ -2588,6 +2588,9 @@ fn on_enter_name(state: &State, mut next: State, event: Event, wheeled: bool) ->
             vec![]
         }
         Event::Cancel => {
+            if state.modal == Modal::None {
+                next.stops = None;
+            }
             next.modal = Modal::None;
             next.selected_action = None;
             if !matches!(state.modal, Modal::StepDetail | Modal::Prediction { .. }) {
@@ -5218,26 +5221,31 @@ fn on_lsp(state: &State, mut next: State, event: Event, wheeled: bool) -> Answer
                 let left = current(&mut next)
                     .map(|buffer| buffer.complete(&text, &stops))
                     .unwrap_or_default();
-                if let (Some(path), false) = (next.current_buffer.clone(), left.is_empty()) {
-                    next.modal = Modal::Stops { path, at: left };
+                let held = next.stops.take().map(|stops| stops.at).unwrap_or_default();
+                let at: Vec<editor::Tail> = left.into_iter().chain(held).collect();
+                if let (Some(path), false) = (next.current_buffer.clone(), at.is_empty()) {
+                    next.stops = Some(editor::Stops { path, at });
                 }
             }
             vec![]
         }
 
         Event::NextStop => {
-            if let Modal::Stops { path, at } = next.modal.clone() {
+            if let Some(editor::Stops { path, at }) = next.stops.clone() {
+                if matches!(next.modal, Modal::Candidates(_)) {
+                    next.modal = Modal::None;
+                }
                 let (next_stop, rest) = at.split_first().expect("a stop left to visit");
                 let place = next
                     .buffers
                     .get(&path)
                     .and_then(|buffer| buffer.place_before(*next_stop));
-                next.modal = match (place, rest.is_empty()) {
-                    (Some(_), false) => Modal::Stops {
+                next.stops = match (place, rest.is_empty()) {
+                    (Some(_), false) => Some(editor::Stops {
                         path: path.clone(),
                         at: rest.to_vec(),
-                    },
-                    _ => Modal::None,
+                    }),
+                    _ => None,
                 };
                 if let (Some(place), Some(buffer)) = (place, next.buffers.get_mut(&path)) {
                     buffer.go_to_place(place);
@@ -9045,28 +9053,28 @@ mod tests {
     fn a_snippet_sequence_goes_when_the_keyboard_leaves_the_editor() {
         let path = std::path::PathBuf::from("/src/lib.rs");
         let filling = State {
-            modal: Modal::Stops {
+            stops: Some(editor::Stops {
                 path: path.clone(),
                 at: vec![editor::Tail(0)],
-            },
+            }),
             current_buffer: Some(path),
             focus: Pane::Editor,
             ..State::default()
         };
         let typed = update(&filling, Event::EditorKey('x')).0;
-        assert!(matches!(typed.modal, Modal::Stops { .. }));
+        assert!(typed.stops.is_some());
         let elsewhere = update(&filling, Event::ClickPane(Pane::Terminal)).0;
-        assert_eq!(elsewhere.modal, Modal::None);
+        assert_eq!(elsewhere.stops, None);
     }
 
     #[test]
     fn a_stop_the_buffer_can_no_longer_name_ends_the_sequence() {
         let path = std::path::PathBuf::from("/src/lib.rs");
         let mut state = State {
-            modal: Modal::Stops {
+            stops: Some(editor::Stops {
                 path: path.clone(),
                 at: vec![editor::Tail(40), editor::Tail(0)],
-            },
+            }),
             current_buffer: Some(path.clone()),
             focus: Pane::Editor,
             ..State::default()
@@ -9075,7 +9083,7 @@ mod tests {
         buffer.go_to_place(Place { line: 2, column: 2 });
         state.buffers.insert(path.clone(), buffer);
         let after = update(&state, Event::NextStop).0;
-        assert_eq!(after.modal, Modal::None);
+        assert_eq!(after.stops, None);
         let left = &after.buffers[&path];
         assert_eq!((left.line, left.column), (2, 2));
         assert_eq!(left.shown(), "one\ntwo");
