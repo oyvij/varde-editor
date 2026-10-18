@@ -4066,7 +4066,7 @@ fn on_editor_arrow_2(state: &State, mut next: State, event: Event, wheeled: bool
             if let Some(buffer) = edited_mut(&mut next) {
                 buffer.word_motion(editor::Word::toward(direction));
             }
-            vec![]
+            signature_follows(&next)
         }
 
         Event::EditorExtend(direction) => {
@@ -5179,7 +5179,7 @@ fn on_lsp(state: &State, mut next: State, event: Event, wheeled: bool) -> Answer
 
         Event::CandidatesDue => lsp::ask(&mut next, lsp::About::Candidates),
         Event::SignatureDue => match editor_inserting(state) {
-            true => lsp::ask_moved(&mut next),
+            true => lsp::ask_for(&mut next, lsp::About::Signature, None, lsp::Cause::Moved),
             false => Vec::new(),
         },
 
@@ -10957,6 +10957,10 @@ mod tests {
         for (state, expected) in [(&normal, vec![]), (&inserting, armed)] {
             assert_eq!(
                 update(state, Event::EditorArrow(Direction::Right)).1,
+                expected
+            );
+            assert_eq!(
+                update(state, Event::EditorWord(Direction::Right)).1,
                 expected
             );
             assert_eq!(update(state, Event::ClickText(at)).1, expected);

@@ -97,7 +97,7 @@ pub struct Ask {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Cause {
+pub enum Cause {
     Typed,
     Moved,
 }
@@ -1059,15 +1059,11 @@ pub fn ask(state: &mut State, about: About) -> Vec<Effect> {
     ask_at(state, about, None)
 }
 
-pub fn ask_moved(state: &mut State) -> Vec<Effect> {
-    asked_for(state, About::Signature, None, Cause::Moved)
-}
-
 pub fn ask_at(state: &mut State, about: About, at: Option<Place>) -> Vec<Effect> {
-    asked_for(state, about, at, Cause::Typed)
+    ask_for(state, about, at, Cause::Typed)
 }
 
-fn asked_for(state: &mut State, about: About, at: Option<Place>, cause: Cause) -> Vec<Effect> {
+pub fn ask_for(state: &mut State, about: About, at: Option<Place>, cause: Cause) -> Vec<Effect> {
     let Some(path) = state.current_buffer.clone() else {
         return Vec::new();
     };

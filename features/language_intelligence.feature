@@ -2343,8 +2343,8 @@ Feature: Language intelligence
         """
       And the editor mode is normal
       And the cursor is at line 1 column 1
-      When I click at line 1 column 23 in the editor
-      And the debounce window passes
+      And I click at line 1 column 23 in the editor
+      When the debounce window passes
       Then the language server for "rust" was sent no "textDocument/signatureHelp" request
 
     Scenario: A move made just before leaving insert mode asks for no Signature
