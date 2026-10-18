@@ -538,6 +538,10 @@ pub enum Event {
     TogglePreview,
     TogglePreviewWidth,
     WriteBuffer,
+    WriteFailed {
+        path: PathBuf,
+        disk: String,
+    },
     ReloadBuffer,
     Resolve(Resolution),
     AiExited,
@@ -4806,6 +4810,13 @@ fn on_editor_escape(state: &State, mut next: State, event: Event, wheeled: bool)
             }
             _ => vec![],
         },
+
+        Event::WriteFailed { path, disk } => {
+            if let Some(buffer) = next.buffers.get_mut(&path) {
+                buffer.write_failed(disk);
+            }
+            vec![Effect::Notify("write-failed")]
+        }
 
         Event::ReloadBuffer => match next.current_buffer.clone() {
             Some(path) => return Ok(update(state, Event::Reload(path))),

@@ -1208,6 +1208,11 @@ impl Buffer {
         self.revision += 1;
         contents
     }
+
+    pub fn write_failed(&mut self, disk: String) {
+        let shown = std::mem::replace(&mut self.disk, disk);
+        self.draft = (shown != self.disk).then_some(shown);
+    }
 }
 
 pub fn merge_prompt(path: &str, disk: &str, buffer: &str) -> String {
@@ -1660,6 +1665,25 @@ mod tests {
         buffer.follow("three".to_string());
         assert_eq!(buffer.shown(), "three");
         assert!(!buffer.changed_on_disk);
+    }
+
+    #[test]
+    fn a_failed_write_keeps_the_edits_over_what_is_still_on_disk() {
+        let mut buffer = Buffer::open("one", false, 4);
+        buffer.key('x');
+        let draft = buffer.write();
+        buffer.write_failed("one".to_string());
+        assert_eq!(buffer.shown(), draft);
+        assert_eq!(buffer.disk, "one");
+        assert!(buffer.is_dirty());
+    }
+
+    #[test]
+    fn a_failed_write_of_an_unedited_buffer_leaves_it_clean() {
+        let mut buffer = Buffer::open("one", false, 4);
+        buffer.write();
+        buffer.write_failed("one".to_string());
+        assert!(!buffer.is_dirty());
     }
 
     #[test]

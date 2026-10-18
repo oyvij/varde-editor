@@ -41,6 +41,8 @@ pub struct VardeWorld {
     dirs: BTreeSet<PathBuf>,
     files: BTreeMap<PathBuf, String>,
     absent: BTreeSet<PathBuf>,
+    read_only: BTreeSet<PathBuf>,
+    writes_failed: Vec<PathBuf>,
     wrote: Vec<PathBuf>,
     known_files: BTreeSet<PathBuf>,
     opened: Vec<PathBuf>,
@@ -627,6 +629,14 @@ impl VardeWorld {
             let entries = self.disk.get(&path).cloned().unwrap_or_default();
             self.send_now(Event::Expand { path, entries });
         }
+        for path in std::mem::take(&mut self.writes_failed) {
+            let disk = self
+                .files
+                .get(&path)
+                .cloned()
+                .unwrap_or_else(|| "contents".to_string());
+            self.send_now(Event::WriteFailed { path, disk });
+        }
     }
 
     fn applied_to_panes(&mut self, effect: Effect) -> Option<Effect> {
@@ -677,6 +687,9 @@ impl VardeWorld {
                 );
                 self.state = state;
                 self.apply(effects);
+            }
+            Effect::WriteFile { path, .. } if self.read_only.contains(&path) => {
+                self.writes_failed.push(path);
             }
             Effect::WriteFile { path, contents } => {
                 self.wrote.push(path.clone());
@@ -2400,10 +2413,15 @@ fn new_file(world: &mut VardeWorld, path: String) {
 }
 
 #[given(expr = "{string} is a file")]
-#[given(expr = "{string} is a read-only file")]
 fn path_is_file(world: &mut VardeWorld, _path: String) {
     world.startup.path_status = PathStatus::File;
     world.startup.sidecar = Some(PathBuf::from(SIDECAR));
+}
+
+#[given(expr = "{string} is a read-only file")]
+fn path_is_read_only_file(world: &mut VardeWorld, path: String) {
+    path_is_file(world, path.clone());
+    world.read_only.insert(PathBuf::from(path));
 }
 
 #[given(expr = "the file {string} cannot be read")]
@@ -6271,6 +6289,11 @@ fn varde_still_running(world: &mut VardeWorld) {
 #[then(expr = "the project state was saved")]
 fn state_saved(world: &mut VardeWorld) {
     assert!(world.startup.state_json.is_some());
+}
+
+#[then(expr = "no write failure is reported")]
+fn no_write_failure(world: &mut VardeWorld) {
+    assert!(!world.notices.contains(&"write-failed".to_string()));
 }
 
 #[then(expr = "the reviewer is told there are unsaved changes")]

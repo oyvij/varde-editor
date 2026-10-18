@@ -426,3 +426,39 @@ Feature: The Single-file editor
     And no file was written next to the file
 
   # Write failures
+
+  Scenario: Writing a read-only file reports the failure and keeps the edits open
+    Given "/home/me/projects/theirs/hosts" is a read-only file
+    And Varde opened "/home/me/projects/theirs/hosts"
+    And the editor mode is insert
+    And I type "hello" in the editor
+    And the editor mode is normal
+    When I run ":w"
+    Then the notice is "write-failed"
+    And "hosts" has unsaved edits
+    And the open buffers are:
+      | hosts |
+    And Varde is still running
+
+  Scenario: Writing and closing a read-only file neither closes the Buffer nor quits
+    Given "/home/me/projects/theirs/hosts" is a read-only file
+    And Varde opened "/home/me/projects/theirs/hosts"
+    And the editor mode is insert
+    And I type "hello" in the editor
+    And the editor mode is normal
+    When I run ":wq"
+    Then the notice is "write-failed"
+    And "hosts" has unsaved edits
+    And the open buffers are:
+      | hosts |
+    And Varde is still running
+
+  Scenario: Writing a writable file clears the unsaved edits and reports no failure
+    Given "/home/me/projects/theirs/notes.txt" is a file
+    And Varde opened "/home/me/projects/theirs/notes.txt"
+    And the editor mode is insert
+    And I type "hello" in the editor
+    And the editor mode is normal
+    When I run ":w"
+    Then "notes.txt" has no unsaved edits
+    And no write failure is reported

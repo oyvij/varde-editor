@@ -2685,7 +2685,13 @@ fn perform_files(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>) -
             if let Some(parent) = path.parent() {
                 let _ = std::fs::create_dir_all(parent);
             }
-            let _ = std::fs::write(path, contents);
+            if let Err(error) = std::fs::write(&path, contents) {
+                eprintln!("varde: write failed: {}: {error}", path.display());
+                queue.push_front(Event::WriteFailed {
+                    disk: std::fs::read_to_string(&path).unwrap_or_default(),
+                    path,
+                });
+            }
         }
         Effect::DeleteFile(path) => {
             let _ = std::fs::remove_file(path);
@@ -3718,6 +3724,11 @@ const NOTICES: &[(&str, &str, ui::Tone)] = &[
     (
         "checkout-failed",
         "Could not check that branch out — you are still on the branch you were on",
+        ui::Tone::Warning,
+    ),
+    (
+        "write-failed",
+        "Could not write the file — it is read-only or not yours to write; your edits are still in the Buffer",
         ui::Tone::Warning,
     ),
     (
