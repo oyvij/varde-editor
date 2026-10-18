@@ -109,6 +109,12 @@ next parameter. While the box is open, every character you type asks the server 
 follows what you write. `)` closes the box, and so does the server saying the cursor is no longer
 in a call.
 
+Each argument also gets its own Candidate list below the line, with nothing typed: after `(` it holds
+what the server offers for the first argument, and after `,` a fresh list opens for the next one.
+Letters narrow it as usual. A space after the comma keeps the list open, but a space after a word
+you typed closes it, as it does anywhere. Which argument you are on is the server's answer, not a
+count of brackets, and while you stay on the same argument the list is not asked again.
+
 The box never takes a key: the arrows and `Enter` stay with the Candidate list. Near the top of the
 pane, where there is no room above the line, it goes below the Candidate list instead, and it never
 covers the line you are typing on. The characters that open it are the server's own list, usually

@@ -1974,6 +1974,227 @@ Feature: Language intelligence
       Then the selected candidate is "length"
       And the signature box is open
 
+  Rule: Each argument slot gets its own Candidate list
+
+    When a Signature arrives for a slot the box was not showing, Varde also asks for Candidates
+    there, with nothing typed, so the list below the line holds what the server offers for that
+    argument. The server's Active parameter says which slot the cursor is in; Varde counts no
+    brackets. A character that opens a slot asks for Candidates only this way, even when the server
+    also names it as a completion Trigger character, so one keystroke never asks twice.
+
+    Scenario: Opening a call asks for the first argument's Candidates and lists them all
+      Given a language server for "rust" is ready with capabilities:
+        """
+        {"completionProvider":{},"signatureHelpProvider":{"triggerCharacters":["(", ","]}}
+        """
+      And "src/lib.rs" is open in the editor holding:
+        """
+        object.method
+        """
+      And the editor mode is insert
+      And the cursor is at line 1 column 14
+      And I type "(" in the editor
+      And the language server for "rust" answers the signature help with:
+        """
+        {"signatures":[{"label":"method(first: i32, second: &str)","parameters":[{"label":"first: i32"},{"label":"second: &str"}]}],"activeParameter":0}
+        """
+      When the language server for "rust" answers with candidates:
+        | label | insert |
+        | count | count  |
+        | limit | limit  |
+      Then the language server for "rust" was sent 1 "textDocument/completion" request
+      And the language server for "rust" was sent an invoked completion request
+      And the candidates are:
+        | count |
+        | limit |
+      And the signature box is open
+
+    Scenario: A slot opener the server also names for completion asks for Candidates once
+      Given a language server for "rust" is ready with capabilities:
+        """
+        {"completionProvider":{"triggerCharacters":[".", "("]},"signatureHelpProvider":{"triggerCharacters":["(", ","]}}
+        """
+      And "src/lib.rs" is open in the editor holding:
+        """
+        object.method
+        """
+      And the editor mode is insert
+      And the cursor is at line 1 column 14
+      And I type "(" in the editor
+      And the debounce window passes
+      When the language server for "rust" answers the signature help with:
+        """
+        {"signatures":[{"label":"method(first: i32)","parameters":[{"label":"first: i32"}]}],"activeParameter":0}
+        """
+      Then the language server for "rust" was sent 1 "textDocument/completion" request
+      And the language server for "rust" was sent an invoked completion request
+
+    Scenario: A comma moves to the next argument and opens a fresh list for it
+      Given a language server for "rust" is ready with capabilities:
+        """
+        {"completionProvider":{},"signatureHelpProvider":{"triggerCharacters":["(", ","]}}
+        """
+      And "src/lib.rs" is open in the editor holding:
+        """
+        object.method
+        """
+      And the editor mode is insert
+      And the cursor is at line 1 column 14
+      And I type "(" in the editor
+      And the language server for "rust" answers the signature help with:
+        """
+        {"signatures":[{"label":"method(first: i32, second: &str)","parameters":[{"label":"first: i32"},{"label":"second: &str"}]}],"activeParameter":0}
+        """
+      And the language server for "rust" answers with candidates:
+        | label | insert |
+        | count | count  |
+      And I type "4," in the editor
+      And the language server for "rust" answers the signature help with:
+        """
+        {"signatures":[{"label":"method(first: i32, second: &str)","parameters":[{"label":"first: i32"},{"label":"second: &str"}]}],"activeParameter":1}
+        """
+      When the language server for "rust" answers with candidates:
+        | label | insert |
+        | name  | name   |
+        | title | title  |
+      Then the language server for "rust" was sent 2 "textDocument/completion" requests
+      And the candidates are:
+        | name  |
+        | title |
+      And the highlighted parameter is "second: &str"
+
+    Scenario: Letters narrow an argument's list
+      Given a language server for "rust" is ready with capabilities:
+        """
+        {"completionProvider":{},"signatureHelpProvider":{"triggerCharacters":["(", ","]}}
+        """
+      And "src/lib.rs" is open in the editor holding:
+        """
+        object.method
+        """
+      And the editor mode is insert
+      And the cursor is at line 1 column 14
+      And I type "(" in the editor
+      And the language server for "rust" answers the signature help with:
+        """
+        {"signatures":[{"label":"method(first: i32)","parameters":[{"label":"first: i32"}]}],"activeParameter":0}
+        """
+      And the language server for "rust" answers with candidates:
+        | label | insert |
+        | count | count  |
+        | limit | limit  |
+      When I type "l" in the editor
+      Then the candidates are:
+        | limit |
+
+    Scenario: A space after the comma keeps the next argument's list open
+      Given a language server for "rust" is ready with capabilities:
+        """
+        {"completionProvider":{},"signatureHelpProvider":{"triggerCharacters":["(", ","]}}
+        """
+      And "src/lib.rs" is open in the editor holding:
+        """
+        object.method(4
+        """
+      And the editor mode is insert
+      And the cursor is at line 1 column 16
+      And I type "," in the editor
+      And the language server for "rust" answers the signature help with:
+        """
+        {"signatures":[{"label":"method(first: i32, second: &str)","parameters":[{"label":"first: i32"},{"label":"second: &str"}]}],"activeParameter":1}
+        """
+      And the language server for "rust" answers with candidates:
+        | label | insert |
+        | name  | name   |
+        | title | title  |
+      When I type " " in the editor
+      And the language server for "rust" answers the signature help with:
+        """
+        {"signatures":[{"label":"method(first: i32, second: &str)","parameters":[{"label":"first: i32"},{"label":"second: &str"}]}],"activeParameter":1}
+        """
+      Then the candidates are:
+        | name  |
+        | title |
+      And the language server for "rust" was sent 1 "textDocument/completion" request
+
+    Scenario: A space after a word typed in the argument still closes its list
+      Given a language server for "rust" is ready with capabilities:
+        """
+        {"completionProvider":{},"signatureHelpProvider":{"triggerCharacters":["(", ","]}}
+        """
+      And "src/lib.rs" is open in the editor holding:
+        """
+        object.method
+        """
+      And the editor mode is insert
+      And the cursor is at line 1 column 14
+      And I type "(" in the editor
+      And the language server for "rust" answers the signature help with:
+        """
+        {"signatures":[{"label":"method(first: i32)","parameters":[{"label":"first: i32"}]}],"activeParameter":0}
+        """
+      And the language server for "rust" answers with candidates:
+        | label | insert |
+        | count | count  |
+        | limit | limit  |
+      When I type "l " in the editor
+      Then the candidate list is not open
+
+    Scenario: A call opened inside a call gets its own list on the same argument number
+      Given a language server for "rust" is ready with capabilities:
+        """
+        {"completionProvider":{},"signatureHelpProvider":{"triggerCharacters":["(", ","]}}
+        """
+      And "src/lib.rs" is open in the editor holding:
+        """
+        object.method
+        """
+      And the editor mode is insert
+      And the cursor is at line 1 column 14
+      And I type "(" in the editor
+      And the language server for "rust" answers the signature help with:
+        """
+        {"signatures":[{"label":"method(first: i32)","parameters":[{"label":"first: i32"}]}],"activeParameter":0}
+        """
+      And the language server for "rust" answers with candidates:
+        | label | insert |
+        | count | count  |
+      And I type "size(" in the editor
+      When the language server for "rust" answers the signature help with:
+        """
+        {"signatures":[{"label":"size(of: &str)","parameters":[{"label":"of: &str"}]}],"activeParameter":0}
+        """
+      Then the language server for "rust" was sent 2 "textDocument/completion" requests
+      And the language server for "rust" was sent an invoked completion request
+
+    Scenario: A Signature that stays on the same argument asks for no new list
+      Given a language server for "rust" is ready with capabilities:
+        """
+        {"completionProvider":{},"signatureHelpProvider":{"triggerCharacters":["(", ","]}}
+        """
+      And "src/lib.rs" is open in the editor holding:
+        """
+        object.method
+        """
+      And the editor mode is insert
+      And the cursor is at line 1 column 14
+      And I type "(" in the editor
+      And the language server for "rust" answers the signature help with:
+        """
+        {"signatures":[{"label":"method(first: i32)","parameters":[{"label":"first: i32"}]}],"activeParameter":0}
+        """
+      And the language server for "rust" answers with candidates:
+        | label | insert |
+        | count | count  |
+        | coins | coins  |
+      And I type "c" in the editor
+      When the language server for "rust" answers the signature help with:
+        """
+        {"signatures":[{"label":"method(first: i32)","parameters":[{"label":"first: i32"}]}],"activeParameter":0}
+        """
+      Then the language server for "rust" was sent 1 "textDocument/completion" request
+      And the candidate list is open
+
   Rule: A completion fills in its own blanks
 
     Varde declares `completionItem.snippetSupport`, and that declaration is a claim about what Varde
