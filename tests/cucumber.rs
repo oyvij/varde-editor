@@ -120,6 +120,7 @@ pub struct VardeWorld {
     folders_to_read: Vec<PathBuf>,
     lsp_started: Vec<(String, String)>,
     lsp_args: BTreeMap<String, Vec<String>>,
+    lsp_logs: BTreeMap<String, PathBuf>,
     lsp_sent: Vec<(String, Value)>,
     lsp_answers: BTreeSet<String>,
     lsp_fails: BTreeSet<String>,
@@ -702,7 +703,9 @@ impl VardeWorld {
                 language,
                 command,
                 args,
+                log,
             } => {
+                self.lsp_logs.insert(language.clone(), log);
                 self.lsp_started.push((language.clone(), command.clone()));
                 self.lsp_args.insert(language.clone(), args);
                 if self.lsp_fails.contains(&language) {
@@ -11967,6 +11970,25 @@ fn initialization_options(world: &VardeWorld, language: &str) -> Value {
             )
         });
     handshake["params"]["initializationOptions"].clone()
+}
+
+#[then(expr = "the language server for {string} was given the root {string}")]
+fn server_given_root(world: &mut VardeWorld, language: String, root: String) {
+    let messages = sent(world, &language);
+    let handshake = messages
+        .iter()
+        .find(|message| message["method"] == "initialize")
+        .unwrap_or_else(|| panic!("{language} was never sent initialize"));
+    assert_eq!(
+        handshake["params"]["rootUri"],
+        Value::String(format!("file://{root}"))
+    );
+}
+
+#[then(expr = "the language server for {string} logs into the Sidecar")]
+fn server_logs_into_sidecar(world: &mut VardeWorld, language: String) {
+    let log = world.lsp_logs.get(&language).expect("a started server");
+    assert!(log.starts_with(SIDECAR), "logs into {log:?}");
 }
 
 #[then(expr = "the initialize request for {string} carried initialization options:")]

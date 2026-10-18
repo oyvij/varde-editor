@@ -2476,9 +2476,8 @@ fn perform_session(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>)
             language,
             command,
             args,
+            log,
         } => {
-            let log =
-                varde_dir(&edge.root, edge.sidecar.as_deref()).join(format!("lsp-{language}.log"));
             let log = match std::fs::File::create(&log) {
                 Ok(file) => Some(file),
                 Err(error) => {

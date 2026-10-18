@@ -323,4 +323,19 @@ Feature: The Single-file editor
 
   # Language intelligence and more Buffers
 
+  Scenario: Opening a Rust file starts the default server, rooted at the file's folder
+    Given there is no global config
+    And "/home/me/projects/theirs/lib.rs" is a file
+    When Varde opens "/home/me/projects/theirs/lib.rs"
+    Then a language server was started with "rust-analyzer"
+    And the language server for "rust" was given the root "/home/me/projects/theirs"
+
+  Scenario: The Language-server log goes into the Sidecar and nothing is written next to the file
+    Given there is no global config
+    And "/home/me/projects/theirs/lib.rs" is a file
+    When Varde opens "/home/me/projects/theirs/lib.rs"
+    Then the language server for "rust" logs into the Sidecar
+    And no file was written next to the file
+    And no directory was created next to the file
+
   # Write failures

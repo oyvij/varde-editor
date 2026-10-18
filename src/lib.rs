@@ -880,6 +880,7 @@ pub enum Effect {
         language: String,
         command: String,
         args: Vec<String>,
+        log: PathBuf,
     },
     StartDap {
         command: String,

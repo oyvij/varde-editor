@@ -377,6 +377,8 @@ pub fn sync(state: &mut State) -> Vec<Effect> {
             continue;
         }
         effects.push(Effect::StartLsp {
+            log: crate::varde_dir(&state.root, state.sidecar.as_deref())
+                .join(format!("lsp-{language}.log")),
             language,
             command: server.command,
             args: server
@@ -2728,6 +2730,7 @@ mod tests {
                 language: "rust".to_string(),
                 command: "rust-analyzer".to_string(),
                 args: Vec::new(),
+                log: PathBuf::from("/home/me/project/.varde/lsp-rust.log"),
             }]
         );
         gone(&mut state, "rust", Gone::FailedToStart);
@@ -2754,6 +2757,7 @@ mod tests {
                 language: "rust".to_string(),
                 command: "rust-analyzer".to_string(),
                 args: Vec::new(),
+                log: PathBuf::from("/home/me/project/.varde/lsp-rust.log"),
             }]
         );
     }
