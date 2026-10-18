@@ -5247,15 +5247,14 @@ fn on_lsp(state: &State, mut next: State, event: Event, wheeled: bool) -> Answer
             let left = current(&mut next)
                 .map(|buffer| buffer.complete(&text, &stops))
                 .unwrap_or_default();
-            let landed = !left.is_empty();
             let held = next.stops.take().map(|stops| stops.at).unwrap_or_default();
             let at: Vec<editor::Tail> = left.into_iter().chain(held).collect();
             if let (Some(path), false) = (next.current_buffer.clone(), at.is_empty()) {
                 next.stops = Some(editor::Stops { path, at });
             }
-            match landed {
-                true => lsp::lands_on_stop(&mut next),
-                false => vec![],
+            match stops.is_empty() {
+                true => vec![],
+                false => lsp::lands_on_stop(&mut next),
             }
         }
 

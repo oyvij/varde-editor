@@ -2831,6 +2831,22 @@ Feature: Language intelligence
       And the language server for "rust" was sent 2 "textDocument/completion" requests
       And the language server for "rust" was sent an invoked completion request
 
+    Scenario: A snippet whose only blank is where it ends still asks for the Signature there
+      Given a language server for "rust" is ready with capabilities:
+        """
+        {"completionProvider":{},"signatureHelpProvider":{"triggerCharacters":["(", ","]}}
+        """
+      And "src/lib.rs" is open in the editor holding nothing
+      And the editor mode is insert
+      And I type "bar" in the editor
+      And the debounce window passes
+      And the language server for "rust" answers with candidates:
+        | label | insert  | format  |
+        | bar   | bar($0) | snippet |
+      When I press "Enter" in the editor
+      Then the cursor is at line 1 column 5
+      And the language server for "rust" was sent 1 "textDocument/signatureHelp" request
+
     Scenario: Tab to the next blank moves the Signature and opens a new list there
       Given a language server for "rust" is ready with capabilities:
         """
