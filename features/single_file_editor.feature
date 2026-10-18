@@ -338,4 +338,74 @@ Feature: The Single-file editor
     And no file was written next to the file
     And no directory was created next to the file
 
+  Scenario: Go-to-definition into another file opens it as a second Buffer
+    Given a language server for "rust" is ready
+    And "/home/me/projects/theirs/lib.rs" is a file
+    And Varde opened "/home/me/projects/theirs/lib.rs"
+    And "keys.rs" on disk is 120 lines long
+    And I press "gd" in the editor
+    When the language server for "rust" answers the definition with:
+      | path    | line | column |
+      | keys.rs | 88   | 1      |
+    Then the open buffers are:
+      | keys.rs |
+      | lib.rs  |
+    And the current buffer is "keys.rs"
+    And the cursor is at line 88 column 1
+    And the editor is the only pane and fills the screen
+
+  Scenario: gt returns from the definition's Buffer to the file Varde opened
+    Given a language server for "rust" is ready
+    And "/home/me/projects/theirs/lib.rs" is a file
+    And Varde opened "/home/me/projects/theirs/lib.rs"
+    And "keys.rs" on disk is 120 lines long
+    And I press "gd" in the editor
+    And the language server for "rust" answers the definition with:
+      | path    | line | column |
+      | keys.rs | 88   | 1      |
+    When I press "gt" in the editor
+    Then the current buffer is "lib.rs"
+
+  Scenario: Several Definitions are offered as hits rather than the first being taken
+    Given a language server for "rust" is ready
+    And "/home/me/projects/theirs/lib.rs" is a file
+    And Varde opened "/home/me/projects/theirs/lib.rs"
+    And I press "gd" in the editor
+    When the language server for "rust" answers the definition with:
+      | path    | line | column |
+      | keys.rs | 88   | 1      |
+      | tree.rs | 14   | 1      |
+    Then the hits are:
+      | keys.rs | 88 |
+      | tree.rs | 14 |
+    And the current buffer is "lib.rs"
+
+  Scenario: :format asks the Language server that says it formats
+    Given there is no global config
+    And "/home/me/projects/theirs/lib.rs" is a file
+    And Varde opened "/home/me/projects/theirs/lib.rs"
+    And the language server for "rust" replies to "initialize" with:
+      """
+      {"capabilities":{"documentFormattingProvider":true}}
+      """
+    When I run ":format" in the editor
+    Then the language server for "rust" was sent a "textDocument/formatting" request
+    And no formatter was run
+
+  Scenario: :format runs the default Formatter on the Buffer
+    Given there is no global config
+    And "/home/me/projects/theirs/data.json" is a file
+    And "/home/me/projects/theirs/data.json" on disk holds:
+      """
+      {"a":1}
+      """
+    And Varde opened "/home/me/projects/theirs/data.json"
+    When I run ":format" in the editor
+    Then the formatter "prettier" was run with:
+      """
+      {"a":1}
+      """
+    And it was run with the arguments "--stdin-filepath /home/me/projects/theirs/data.json"
+    And no file was written next to the file
+
   # Write failures
