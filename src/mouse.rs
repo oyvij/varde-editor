@@ -1141,7 +1141,7 @@ fn text_area(state: &State, panes: &Layout, pane: Pane) -> Area {
 pub fn palette_entry_at(state: &State, panes: &Layout, column: u16, row: u16) -> Option<char> {
     let height = panes.tree.height + panes.terminal.height;
     let rows = match state.modal {
-        Modal::Palette => crate::palette_rows(height),
+        Modal::Palette => crate::palette_rows(state, height),
         Modal::Chord => crate::keys::chord_rows(state)
             .into_iter()
             .map(|row| vec![row])
@@ -2759,7 +2759,7 @@ mod tests {
         };
         for height in [24, 26] {
             let panes = panes(120, height, 30, None, 0, 0, Shapes::default());
-            let rows = crate::palette_rows(height);
+            let rows = crate::palette_rows(&state, height);
             let box_area = crate::layout::overlay(
                 panes.ai.right(),
                 panes.tree.height + panes.terminal.height,

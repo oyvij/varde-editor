@@ -19,8 +19,8 @@ use varde::tools;
 use varde::tree::{self, Entry};
 use varde::tree_actions::{Action, Target};
 use varde::{
-    layout, mouse, reading, update, DiffLine, Direction, Effect, Event, FilterKeys, Modal, Pane,
-    Place, ReplaceFailed, Selection, State, Tap, View, PALETTE,
+    layout, mouse, reading, update, DiffLine, Direction, Effect, Event, FilterKeys, Modal, Opened,
+    Pane, Place, ReplaceFailed, Selection, State, Tap, View, PALETTE,
 };
 
 const POINTER: Place = Place { line: 3, column: 7 };
@@ -40,6 +40,9 @@ pub struct VardeWorld {
     config_effects: Vec<Effect>,
     dirs: BTreeSet<PathBuf>,
     files: BTreeMap<PathBuf, String>,
+    absent: BTreeSet<PathBuf>,
+    read_only: BTreeSet<PathBuf>,
+    writes_failed: Vec<PathBuf>,
     wrote: Vec<PathBuf>,
     known_files: BTreeSet<PathBuf>,
     opened: Vec<PathBuf>,
@@ -119,6 +122,7 @@ pub struct VardeWorld {
     folders_to_read: Vec<PathBuf>,
     lsp_started: Vec<(String, String)>,
     lsp_args: BTreeMap<String, Vec<String>>,
+    lsp_logs: BTreeMap<String, PathBuf>,
     lsp_sent: Vec<(String, Value)>,
     lsp_answers: BTreeSet<String>,
     lsp_fails: BTreeSet<String>,
@@ -625,6 +629,14 @@ impl VardeWorld {
             let entries = self.disk.get(&path).cloned().unwrap_or_default();
             self.send_now(Event::Expand { path, entries });
         }
+        for path in std::mem::take(&mut self.writes_failed) {
+            let disk = self
+                .files
+                .get(&path)
+                .cloned()
+                .unwrap_or_else(|| "contents".to_string());
+            self.send_now(Event::WriteFailed { path, disk });
+        }
     }
 
     fn applied_to_panes(&mut self, effect: Effect) -> Option<Effect> {
@@ -648,6 +660,7 @@ impl VardeWorld {
                             .files
                             .get(&path)
                             .cloned()
+                            .or_else(|| self.absent.contains(&path).then(String::new))
                             .unwrap_or_else(|| "contents".to_string()),
                         path,
                         preview: false,
@@ -675,6 +688,9 @@ impl VardeWorld {
                 self.state = state;
                 self.apply(effects);
             }
+            Effect::WriteFile { path, .. } if self.read_only.contains(&path) => {
+                self.writes_failed.push(path);
+            }
             Effect::WriteFile { path, contents } => {
                 self.wrote.push(path.clone());
                 self.files.insert(path, contents);
@@ -700,7 +716,9 @@ impl VardeWorld {
                 language,
                 command,
                 args,
+                log,
             } => {
+                self.lsp_logs.insert(language.clone(), log);
                 self.lsp_started.push((language.clone(), command.clone()));
                 self.lsp_args.insert(language.clone(), args);
                 if self.lsp_fails.contains(&language) {
@@ -2065,6 +2083,24 @@ fn cheatsheet_at_its_end(world: &mut VardeWorld) {
     assert_eq!(world.state.cheatsheet_scroll, rows - fits);
 }
 
+#[then(expr = "the Cheatsheet lists {string} under the keys {string}")]
+fn cheatsheet_lists_under(world: &mut VardeWorld, what: String, keys: String) {
+    let rows = keys::cheatsheet_rows(&world.state);
+    assert!(
+        rows.contains(&(keys.as_str(), what.as_str())),
+        "{keys}/{what} is not listed: {rows:?}"
+    );
+}
+
+#[then(expr = "the Cheatsheet lists no keys for {string}")]
+fn cheatsheet_lists_nothing_for(world: &mut VardeWorld, what: String) {
+    let rows = keys::cheatsheet_rows(&world.state);
+    assert!(
+        rows.iter().all(|(_, listed)| *listed != what),
+        "{what} is listed: {rows:?}"
+    );
+}
+
 #[then(expr = "the Cheatsheet lists the keys of the view on screen")]
 fn cheatsheet_lists_the_view(world: &mut VardeWorld) {
     assert_eq!(world.state.ai_slot, layout::Slot::Cheatsheet);
@@ -2361,14 +2397,40 @@ fn folder_exists(world: &mut VardeWorld, path: String) {
 
 #[given(expr = "{string} does not exist")]
 fn path_missing(world: &mut VardeWorld, path: String) {
-    match Path::new(&path).starts_with(Path::new(HOME).join(varde::VARDE_DIR)) {
-        true => world.files.retain(|file, _| !file.starts_with(&path)),
-        false => world.startup.path_status = PathStatus::Missing,
-    }
+    world.files.retain(|file, _| !file.starts_with(&path));
+}
+
+#[given(expr = "neither {string} nor its folder exists")]
+fn path_and_folder_missing(world: &mut VardeWorld, _path: String) {
+    world.startup.path_status = PathStatus::Missing;
+}
+
+#[given(expr = "{string} does not exist but its folder does")]
+fn new_file(world: &mut VardeWorld, path: String) {
+    world.startup.path_status = PathStatus::NewFile;
+    world.startup.sidecar = Some(PathBuf::from(SIDECAR));
+    world.absent.insert(PathBuf::from(path));
 }
 
 #[given(expr = "{string} is a file")]
 fn path_is_file(world: &mut VardeWorld, _path: String) {
+    world.startup.path_status = PathStatus::File;
+    world.startup.sidecar = Some(PathBuf::from(SIDECAR));
+}
+
+#[given(expr = "{string} is a read-only file")]
+fn path_is_read_only_file(world: &mut VardeWorld, path: String) {
+    path_is_file(world, path.clone());
+    world.read_only.insert(PathBuf::from(path));
+}
+
+#[given(expr = "the file {string} cannot be read")]
+fn file_unreadable(world: &mut VardeWorld, _path: String) {
+    world.startup.path_status = PathStatus::UnreadableFile;
+}
+
+#[given(expr = "{string} is neither a file nor a folder")]
+fn path_is_neither(world: &mut VardeWorld, _path: String) {
     world.startup.path_status = PathStatus::NotAFolder;
 }
 
@@ -2377,6 +2439,7 @@ fn path_unreadable(world: &mut VardeWorld, _path: String) {
     world.startup.path_status = PathStatus::Unreadable;
 }
 
+#[given(expr = "Varde opened {string}")]
 #[when(expr = "Varde opens {string}")]
 fn varde_opens(world: &mut VardeWorld, path: String) {
     world.startup.root = PathBuf::from(&path);
@@ -2493,6 +2556,67 @@ fn is_scratch(world: &VardeWorld, path: &Path) -> bool {
 #[then(expr = "no state was saved")]
 fn no_state_saved(world: &mut VardeWorld) {
     assert_eq!(world.startup.state_json, None);
+}
+
+#[then(expr = "Varde is the Single-file editor")]
+fn is_single_file_editor(world: &mut VardeWorld) {
+    assert_eq!(world.state.opened, Opened::SingleFile);
+}
+
+#[then(expr = "the editor is the only pane and fills the screen")]
+fn editor_alone_fills_screen(world: &mut VardeWorld) {
+    let (width, height) = world.screen();
+    let panes = world.panes();
+    assert_eq!(
+        panes.editor,
+        layout::Area {
+            x: 0,
+            y: 0,
+            width,
+            height
+        }
+    );
+    for (pane, area) in [
+        ("tree", panes.tree),
+        ("AI", panes.ai),
+        ("Strip", panes.strip()),
+        ("Corner", panes.corner),
+        ("band", panes.band),
+        ("step menu", panes.step_menu),
+        ("evaluator", panes.evaluator),
+    ] {
+        assert_eq!(area.width * area.height, 0, "the {pane} takes {area:?}");
+    }
+}
+
+#[then(expr = "no config file was seeded")]
+fn no_config_seeded(world: &mut VardeWorld) {
+    let seeded: Vec<&PathBuf> = world
+        .wrote
+        .iter()
+        .filter(|path| path.file_name() == Some(startup::CONFIG_FILE.as_ref()))
+        .collect();
+    assert!(seeded.is_empty(), "seeded: {seeded:?}");
+}
+
+#[then(expr = "no file was written next to the file")]
+fn nothing_written_next_to_file(world: &mut VardeWorld) {
+    let beside: Vec<&PathBuf> = world
+        .wrote
+        .iter()
+        .filter(|path| path.starts_with(&world.state.root))
+        .collect();
+    assert!(beside.is_empty(), "written: {beside:?}");
+}
+
+#[then(expr = "no directory was created next to the file")]
+fn no_directory_next_to_file(world: &mut VardeWorld) {
+    let beside: Vec<&PathBuf> = world
+        .dirs
+        .iter()
+        .filter(|dir| dir.starts_with(&world.state.root))
+        .collect();
+    assert!(beside.is_empty(), "created: {beside:?}");
 }
 
 #[then(expr = "Varde's own directory is the Sidecar")]
@@ -6165,6 +6289,21 @@ fn varde_still_running(world: &mut VardeWorld) {
 #[then(expr = "the project state was saved")]
 fn state_saved(world: &mut VardeWorld) {
     assert!(world.startup.state_json.is_some());
+}
+
+#[then(expr = "the status line shows {string}")]
+fn status_line_shows(world: &mut VardeWorld, notice: String) {
+    assert_eq!(
+        world.notices.last(),
+        Some(&notice),
+        "notices: {:?}",
+        world.notices
+    );
+}
+
+#[then(expr = "no write failure is reported")]
+fn no_write_failure(world: &mut VardeWorld) {
+    assert!(!world.notices.contains(&"write-failed".to_string()));
 }
 
 #[then(expr = "the reviewer is told there are unsaved changes")]
@@ -11852,9 +11991,9 @@ fn server_was_sent(world: &mut VardeWorld, language: String, method: String) {
     }
 }
 
-fn initialization_options(world: &VardeWorld, language: &str) -> Value {
+fn handshake(world: &VardeWorld, language: &str) -> Value {
     let messages = sent(world, language);
-    let handshake = messages
+    messages
         .iter()
         .find(|message| message["method"] == "initialize")
         .unwrap_or_else(|| {
@@ -11862,67 +12001,74 @@ fn initialization_options(world: &VardeWorld, language: &str) -> Value {
                 "{language} was never sent initialize; it was sent: {:?}",
                 methods(&messages)
             )
-        });
-    handshake["params"]["initializationOptions"].clone()
+        })["params"]
+        .clone()
+}
+
+#[then(expr = "the language server for {string} was given the root {string}")]
+fn server_given_root(world: &mut VardeWorld, language: String, root: String) {
+    assert_eq!(
+        handshake(world, &language)["rootUri"],
+        Value::String(format!("file://{root}"))
+    );
+}
+
+#[then(expr = "the language server for {string} logs into the Sidecar")]
+fn server_logs_into_sidecar(world: &mut VardeWorld, language: String) {
+    let log = world.lsp_logs.get(&language).expect("a started server");
+    assert!(log.starts_with(SIDECAR), "logs into {log:?}");
 }
 
 #[then(expr = "the initialize request for {string} carried initialization options:")]
 fn initialize_carried_options(world: &mut VardeWorld, language: String, step: &Step) {
     let expected: Value =
         serde_json::from_str(step.docstring().expect("docstring")).expect("valid JSON");
-    assert_eq!(initialization_options(world, &language), expected);
+    assert_eq!(
+        handshake(world, &language)["initializationOptions"],
+        expected
+    );
 }
 
 #[then(expr = "the initialize request for {string} said Varde can be told diagnostics")]
 fn initialize_declared_diagnostics(world: &mut VardeWorld, language: String) {
-    let messages = sent(world, &language);
-    let handshake = messages
-        .iter()
-        .find(|message| message["method"] == "initialize")
-        .expect("initialize");
+    let handshake = handshake(world, &language);
     assert!(
-        handshake["params"]["capabilities"]["textDocument"]["publishDiagnostics"].is_object(),
+        handshake["capabilities"]["textDocument"]["publishDiagnostics"].is_object(),
         "{language} was told: {}",
-        handshake["params"]["capabilities"]
+        handshake["capabilities"]
     );
 }
 
 #[then(expr = "the initialize request for {string} said Varde can receive snippets")]
 fn initialize_declared_snippets(world: &mut VardeWorld, language: String) {
-    let messages = sent(world, &language);
-    let handshake = messages
-        .iter()
-        .find(|message| message["method"] == "initialize")
-        .expect("initialize");
+    let handshake = handshake(world, &language);
     assert_eq!(
-        handshake["params"]["capabilities"]["textDocument"]["completion"]["completionItem"]
-            ["snippetSupport"],
+        handshake["capabilities"]["textDocument"]["completion"]["completionItem"]["snippetSupport"],
         json!(true),
         "{language} was told: {}",
-        handshake["params"]["capabilities"]
+        handshake["capabilities"]
     );
 }
 
 #[then(expr = "the initialize request for {string} said Varde can read markdown")]
 fn initialize_declared_markdown(world: &mut VardeWorld, language: String) {
-    let messages = sent(world, &language);
-    let handshake = messages
-        .iter()
-        .find(|message| message["method"] == "initialize")
-        .expect("initialize");
-    let formats = &handshake["params"]["capabilities"]["textDocument"]["hover"]["contentFormat"];
+    let handshake = handshake(world, &language);
+    let formats = &handshake["capabilities"]["textDocument"]["hover"]["contentFormat"];
     assert!(
         formats
             .as_array()
             .is_some_and(|formats| formats.contains(&json!("markdown"))),
         "{language} was told: {}",
-        handshake["params"]["capabilities"]
+        handshake["capabilities"]
     );
 }
 
 #[then(expr = "the initialize request for {string} carried no initialization options")]
 fn initialize_carried_no_options(world: &mut VardeWorld, language: String) {
-    assert_eq!(initialization_options(world, &language), Value::Null);
+    assert_eq!(
+        handshake(world, &language)["initializationOptions"],
+        Value::Null
+    );
 }
 
 #[then(expr = "the language server for {string} was sent no {string} request")]
@@ -13177,6 +13323,25 @@ fn probe_lands(world: &mut VardeWorld) {
 fn open_the_palette(world: &mut VardeWorld) {
     started(world);
     world.send(Event::FallbackBinding);
+}
+
+#[then(expr = "the palette lists {string} under the key {string}")]
+fn palette_lists_entry(world: &mut VardeWorld, entry: String, key: String) {
+    assert_eq!(world.state.modal, Modal::Palette);
+    assert_eq!(
+        varde::palette_entry(&world.state, parse_char(&key)),
+        Some(entry.as_str())
+    );
+}
+
+#[then(expr = "the palette does not list {string}")]
+fn palette_does_not_list(world: &mut VardeWorld, entry: String) {
+    assert_eq!(world.state.modal, Modal::Palette);
+    assert_eq!(
+        varde::palette_entry(&world.state, palette_key(&entry)),
+        None,
+        "{entry} is listed"
+    );
 }
 
 #[given(expr = "I press {string} in the palette")]

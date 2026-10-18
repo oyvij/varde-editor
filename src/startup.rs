@@ -1,5 +1,5 @@
 use crate::risk::{self, Scope};
-use crate::{Effect, ReplaceFailed, State, View};
+use crate::{Effect, Opened, ReplaceFailed, State, View};
 use sha2::Digest;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -989,9 +989,12 @@ impl std::fmt::Display for ConfigError {
 pub enum PathStatus {
     #[default]
     Folder,
+    File,
+    NewFile,
     Missing,
     NotAFolder,
     Unreadable,
+    UnreadableFile,
 }
 
 #[derive(Debug, Default)]
@@ -1330,7 +1333,7 @@ pub fn start(input: &Startup) -> Result<(State, Config, Vec<Effect>), StartupErr
         Effect::DeleteDir(crate::tmp_dir(&input.varde_home)),
         Effect::EnsureDir(crate::tmp_dir(&input.varde_home)),
     ];
-    if binary_install {
+    if binary_install && state.opened == Opened::Workspace {
         effects.push(Effect::CheckRelease {
             url: RELEASE_URL.to_string(),
         });
@@ -1341,19 +1344,20 @@ pub fn start(input: &Startup) -> Result<(State, Config, Vec<Effect>), StartupErr
             contents: SEEDED_CONFIG.to_string(),
         });
     }
-    if input.global_config.is_none() {
+    if input.global_config.is_none() && state.opened == Opened::Workspace {
         effects.push(Effect::WriteFile {
             path: input.varde_home.join(CONFIG_FILE),
             contents: template(),
         });
     }
-    let stale = crate::skills::SHIPPED.iter().any(|(file, text)| {
-        input
-            .shipped
-            .get(&input.varde_home.join(file))
-            .map(String::as_str)
-            != Some(*text)
-    });
+    let stale = state.opened == Opened::Workspace
+        && crate::skills::SHIPPED.iter().any(|(file, text)| {
+            input
+                .shipped
+                .get(&input.varde_home.join(file))
+                .map(String::as_str)
+                != Some(*text)
+        });
     if stale {
         effects.extend(
             crate::skills::OWNED
@@ -1372,6 +1376,9 @@ pub fn start(input: &Startup) -> Result<(State, Config, Vec<Effect>), StartupErr
     let buffers = saved_buffers(&input.root, input.state_json.as_deref());
     state.restoring = buffers.len();
     effects.extend(buffers.into_iter().map(Effect::OpenBuffer));
+    if state.opened == Opened::SingleFile {
+        effects.push(Effect::OpenBuffer(input.root.clone()));
+    }
     let files: std::collections::BTreeSet<PathBuf> = state
         .breakpoints
         .iter()
@@ -1396,10 +1403,11 @@ pub fn start(input: &Startup) -> Result<(State, Config, Vec<Effect>), StartupErr
 
 fn path_refusal(status: PathStatus) -> Option<&'static str> {
     match status {
-        PathStatus::Folder => None,
+        PathStatus::Folder | PathStatus::File | PathStatus::NewFile => None,
         PathStatus::Missing => Some("no-such-folder"),
         PathStatus::NotAFolder => Some("not-a-folder"),
         PathStatus::Unreadable => Some("folder-not-readable"),
+        PathStatus::UnreadableFile => Some("file-not-readable"),
     }
 }
 
@@ -1526,8 +1534,16 @@ fn initial_state(
     checkout: Option<PathBuf>,
     update: Option<String>,
 ) -> State {
+    let opened = match input.path_status {
+        PathStatus::File | PathStatus::NewFile => Opened::SingleFile,
+        _ => Opened::Workspace,
+    };
     let mut state = State {
-        root: input.root.clone(),
+        root: match opened {
+            Opened::SingleFile => input.root.parent().unwrap_or(&input.root).to_path_buf(),
+            Opened::Workspace => input.root.clone(),
+        },
+        opened,
         sidecar: input.sidecar.clone(),
         varde_home: input.varde_home.clone(),
         reviews: input.reviews.clone(),

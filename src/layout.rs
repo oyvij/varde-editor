@@ -186,6 +186,7 @@ pub fn strip_height(screen_height: u16, asked: u16) -> u16 {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Shapes {
+    pub opened: crate::Opened,
     pub ai: AiPane,
     pub slot: Slot,
     pub corner: Corner,
@@ -305,6 +306,29 @@ pub fn panes(
     step_menu_width: u16,
     shapes: Shapes,
 ) -> Layout {
+    let share = ((width as u32 * 3 + 5) / 10) as u16;
+    if shapes.opened == crate::Opened::SingleFile {
+        let beside = match shapes.slot {
+            Slot::Ai => 0,
+            Slot::Cheatsheet => ai_width.unwrap_or(share).min(width.saturating_sub(20)),
+        };
+        return Layout {
+            editor: Area {
+                x: 0,
+                y: 0,
+                width: width - beside,
+                height,
+            },
+            ai: Area {
+                x: width - beside,
+                y: 0,
+                width: beside,
+                height,
+            },
+            slot: shapes.slot,
+            ..Layout::default()
+        };
+    }
     let terminal_height = shapes
         .strip
         .unwrap_or(((height as u32 * 3 + 5) / 10) as u16)
@@ -313,7 +337,6 @@ pub fn panes(
 
     let tree_width = tree_divider.min(width);
     let room = width.saturating_sub(tree_width);
-    let share = ((width as u32 * 3 + 5) / 10) as u16;
     let ai_width = ai_width.unwrap_or(share).min(room.saturating_sub(20));
     let step_menu_width = step_menu_width.min(room.saturating_sub(ai_width).saturating_sub(20));
     let editor_width = room - ai_width - step_menu_width;
@@ -858,6 +881,66 @@ mod tests {
     }
 
     #[test]
+    fn the_single_file_editor_is_the_editor_alone_whatever_else_was_asked_for() {
+        let asked = Shapes {
+            opened: crate::Opened::SingleFile,
+            ai: AiPane::Tall,
+            corner: Corner::Buffers,
+            strip: Some(16),
+            output: Output::Shown(None),
+            ..Shapes::default()
+        };
+        let layout = panes(120, 26, 30, Some(40), 6, STEP_MENU_WIDTH, asked);
+        assert_eq!(
+            layout.editor,
+            Area {
+                x: 0,
+                y: 0,
+                width: 120,
+                height: 26
+            }
+        );
+        for (column, row) in [(0, 0), (1, 10), (119, 0), (60, 25), (119, 25)] {
+            assert_eq!(pane_at(&layout, column, row), Some(Pane::Editor));
+        }
+    }
+
+    #[test]
+    fn the_cheatsheet_stands_beside_the_single_file_editor_down_the_whole_height() {
+        let layout = panes(
+            120,
+            26,
+            30,
+            None,
+            0,
+            0,
+            Shapes {
+                opened: crate::Opened::SingleFile,
+                slot: Slot::Cheatsheet,
+                ..Shapes::default()
+            },
+        );
+        assert_eq!(
+            (layout.editor, layout.ai),
+            (
+                Area {
+                    x: 0,
+                    y: 0,
+                    width: 84,
+                    height: 26
+                },
+                Area {
+                    x: 84,
+                    y: 0,
+                    width: 36,
+                    height: 26
+                }
+            )
+        );
+        assert_eq!(pane_at(&layout, 100, 20), Some(Pane::Cheatsheet));
+    }
+
+    #[test]
     fn every_column_belongs_to_exactly_one_pane() {
         let layout = panes(120, 26, 30, None, 0, 0, Shapes::default());
         for column in 0..120 {
@@ -1116,6 +1199,7 @@ mod tests {
             0,
             0,
             Shapes {
+                opened: crate::Opened::Workspace,
                 group: Group::Shells,
                 ai: AiPane::Tall,
                 slot: Slot::Ai,
@@ -1142,6 +1226,7 @@ mod tests {
                 0,
                 0,
                 Shapes {
+                    opened: crate::Opened::Workspace,
                     group: Group::Shells,
                     ai,
                     slot: Slot::Ai,
@@ -1337,6 +1422,7 @@ mod tests {
                     ..Shapes::default()
                 }),
                 (Shapes {
+                    opened: crate::Opened::Workspace,
                     group: Group::Shells,
                     ai: AiPane::Tall,
                     slot: Slot::Ai,

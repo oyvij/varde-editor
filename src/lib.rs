@@ -173,9 +173,28 @@ pub const PALETTE: [(&str, &[(char, &str)]); 5] = [
     ("", &[('q', "Quit")]),
 ];
 
-pub fn palette_rows(screen: u16) -> Vec<Vec<(Option<char>, String)>> {
+const SINGLE_FILE_PALETTE: [char; 3] = ['h', 'v', 'q'];
+
+fn palette(
+    state: &State,
+) -> impl Iterator<Item = (&'static str, Vec<&'static (char, &'static str)>)> + '_ {
+    PALETTE
+        .iter()
+        .map(|(heading, entries)| {
+            let offered = entries
+                .iter()
+                .filter(|(key, _)| {
+                    state.opened == Opened::Workspace || SINGLE_FILE_PALETTE.contains(key)
+                })
+                .collect::<Vec<_>>();
+            (*heading, offered)
+        })
+        .filter(|(_, entries)| !entries.is_empty())
+}
+
+pub fn palette_rows(state: &State, screen: u16) -> Vec<Vec<(Option<char>, String)>> {
     let mut rows: Vec<(Option<char>, String)> = Vec::new();
-    for (heading, entries) in PALETTE {
+    for (heading, entries) in palette(state) {
         if !rows.is_empty() {
             rows.push((None, String::new()));
         }
@@ -226,13 +245,12 @@ pub fn palette_rows(screen: u16) -> Vec<Vec<(Option<char>, String)>> {
 }
 
 pub fn palette_dimmed(state: &State, key: char) -> bool {
-    palette_entry(key) == Some("Knowledge") && state.vault.is_none()
+    palette_entry(state, key) == Some("Knowledge") && state.vault.is_none()
 }
 
-pub fn palette_entry(key: char) -> Option<&'static str> {
-    PALETTE
-        .iter()
-        .flat_map(|(_, entries)| entries.iter())
+pub fn palette_entry(state: &State, key: char) -> Option<&'static str> {
+    palette(state)
+        .flat_map(|(_, entries)| entries)
         .find(|(k, _)| *k == key)
         .map(|(_, entry)| entry.trim())
 }
@@ -241,6 +259,13 @@ pub fn palette_entry(key: char) -> Option<&'static str> {
 pub enum PreviewWidth {
     Reading,
     Widened,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Opened {
+    #[default]
+    Workspace,
+    SingleFile,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -513,6 +538,10 @@ pub enum Event {
     TogglePreview,
     TogglePreviewWidth,
     WriteBuffer,
+    WriteFailed {
+        path: PathBuf,
+        disk: String,
+    },
     ReloadBuffer,
     Resolve(Resolution),
     AiExited,
@@ -529,6 +558,7 @@ pub enum Event {
     CloseBuffer {
         force: bool,
     },
+    CloseWrittenBuffer,
     CloseAllBuffers {
         force: bool,
     },
@@ -855,6 +885,7 @@ pub enum Effect {
         language: String,
         command: String,
         args: Vec<String>,
+        log: PathBuf,
     },
     StartDap {
         command: String,
@@ -1063,6 +1094,7 @@ impl Selection {
 pub struct State {
     pub root: PathBuf,
     pub sidecar: Option<PathBuf>,
+    pub opened: Opened,
     pub varde_home: PathBuf,
     pub modal: Modal,
     pub view: View,
@@ -1299,6 +1331,7 @@ impl Default for State {
         Self {
             root: PathBuf::new(),
             sidecar: None,
+            opened: Opened::Workspace,
             varde_home: PathBuf::new(),
             modal: Modal::None,
             view: View::Edit,
@@ -1726,6 +1759,9 @@ fn clamp_buffers(next: &mut State) {
 pub fn update(state: &State, event: Event) -> (State, Vec<Effect>) {
     let jump = history::jumped(state, &event);
     let (mut next, mut effects) = route(state, event);
+    if next.opened == Opened::SingleFile {
+        next.focus = Pane::Editor;
+    }
     if next.focus != state.focus {
         next.selected_action = None;
     }
@@ -1781,6 +1817,9 @@ pub fn update(state: &State, event: Event) -> (State, Vec<Effect>) {
 }
 
 fn route(state: &State, event: Event) -> (State, Vec<Effect>) {
+    if state.opened == Opened::SingleFile && reaches_another_pane_or_view(&event) {
+        return (state.clone(), vec![]);
+    }
     let mut next = state.clone();
     next.refusal = None;
     let wheeled = matches!(event, Event::Scroll { .. } | Event::ScrollHover(_));
@@ -1798,6 +1837,29 @@ fn route(state: &State, event: Event) -> (State, Vec<Effect>) {
         Err(declined) => declined,
     };
     unreachable!("no group answers {:?}", declined.1)
+}
+
+fn reaches_another_pane_or_view(event: &Event) -> bool {
+    matches!(
+        event,
+        Event::OpenReviewView
+            | Event::ToggleKnowledge
+            | Event::Story { .. }
+            | Event::ToggleRiskList
+            | Event::ToggleBuffersList
+            | Event::ToggleCursorHistory
+            | Event::ToggleBreakpointList
+            | Event::ToggleDiagnosticList
+            | Event::ToggleConflictList
+            | Event::ShowDiagnostics(_)
+            | Event::ToggleTallAi
+            | Event::StartAi { .. }
+            | Event::OpenSkills
+            | Event::SplitTerminal
+            | Event::ShowGroup(_)
+            | Event::DragDivider(_)
+            | Event::DragAiDivider(_)
+    )
 }
 
 fn opens_a_chord(state: &State) -> bool {
@@ -2822,7 +2884,7 @@ fn on_key_5(state: &State, mut next: State, event: Event, _wheeled: bool) -> Ans
             Ok(update(&next, chord))
         }
         Event::Key(key) if state.modal == Modal::Palette => {
-            let Some(entry) = palette_entry(key) else {
+            let Some(entry) = palette_entry(state, key) else {
                 return Ok((next, vec![]));
             };
             if entry == "Tools" {
@@ -4750,6 +4812,13 @@ fn on_editor_escape(state: &State, mut next: State, event: Event, wheeled: bool)
             _ => vec![],
         },
 
+        Event::WriteFailed { path, disk } => {
+            if let Some(buffer) = next.buffers.get_mut(&path) {
+                buffer.write_failed(disk);
+            }
+            vec![Effect::Notify("write-failed")]
+        }
+
         Event::ReloadBuffer => match next.current_buffer.clone() {
             Some(path) => return Ok(update(state, Event::Reload(path))),
             None => vec![],
@@ -5570,13 +5639,15 @@ fn on_ai_spoke(state: &State, mut next: State, event: Event, wheeled: bool) -> A
 }
 
 fn on_close_buffer(_state: &State, mut next: State, event: Event, wheeled: bool) -> Answered {
+    let dirty = next
+        .current_buffer
+        .as_ref()
+        .and_then(|path| next.buffers.get(path))
+        .is_some_and(|buffer| buffer.is_dirty());
     let effects = match event {
+        Event::CloseWrittenBuffer if dirty => vec![],
+        Event::CloseWrittenBuffer => return Ok(update(&next, Event::CloseBuffer { force: true })),
         Event::CloseBuffer { force } => {
-            let dirty = next
-                .current_buffer
-                .as_ref()
-                .and_then(|path| next.buffers.get(path))
-                .is_some_and(|buffer| buffer.is_dirty());
             if !force && dirty {
                 return Ok((next, vec![Effect::Notify("unsaved-changes")]));
             }
@@ -5586,11 +5657,17 @@ fn on_close_buffer(_state: &State, mut next: State, event: Event, wheeled: bool)
                     next.preview = None;
                 }
             }
-            match buffer_list(&next).first().map(|path| path.to_path_buf()) {
-                Some(path) => return Ok(update(&next, Event::ShowBuffer(path))),
-                None => next.focus = Pane::Tree,
+            match (
+                buffer_list(&next).first().map(|path| path.to_path_buf()),
+                next.opened,
+            ) {
+                (Some(path), _) => return Ok(update(&next, Event::ShowBuffer(path))),
+                (None, Opened::SingleFile) => leaving(&next),
+                (None, Opened::Workspace) => {
+                    next.focus = Pane::Tree;
+                    vec![]
+                }
             }
-            vec![]
         }
 
         Event::CloseAllBuffers { force } => {
@@ -5619,7 +5696,7 @@ fn on_close_buffer(_state: &State, mut next: State, event: Event, wheeled: bool)
             if !survived {
                 next.current_buffer = None;
                 let (next, mut effects) = update(&next, Event::CloseBuffer { force: true });
-                effects.push(told);
+                effects.insert(0, told);
                 return Ok((next, effects));
             }
             vec![told]
@@ -7422,7 +7499,7 @@ fn open_file(mut next: State, path: PathBuf) -> (State, Vec<Effect>) {
 }
 
 fn switch_view(state: &State, view: View) -> (State, Vec<Effect>) {
-    if view == state.view {
+    if view == state.view || state.opened == Opened::SingleFile {
         return (state.clone(), vec![]);
     }
     enter_view(state, view)
@@ -7658,6 +7735,7 @@ pub fn group_tabs(state: &State) -> Vec<Tab> {
 
 pub fn shapes(state: &State) -> layout::Shapes {
     layout::Shapes {
+        opened: state.opened,
         ai: state.ai_pane,
         slot: state.ai_slot,
         corner: state.corner,
@@ -8476,6 +8554,51 @@ mod tests {
             varde_home: PathBuf::from("/h/.varde"),
             vault: Some(PathBuf::from("/h/.varde/knowledge")),
             ..State::default()
+        }
+    }
+
+    #[test]
+    fn the_single_file_editor_ignores_what_would_reach_another_pane_or_view() {
+        let workspace = opened(&workspace(), "/w/notes.txt");
+        let single_file = State {
+            opened: Opened::SingleFile,
+            ..workspace.clone()
+        };
+        for event in [
+            Event::OpenReviewView,
+            Event::ToggleKnowledge,
+            Event::Story {
+                explicit: None,
+                force: false,
+            },
+            Event::ToggleRiskList,
+            Event::ToggleBuffersList,
+            Event::ToggleCursorHistory,
+            Event::ToggleBreakpointList,
+            Event::ToggleDiagnosticList,
+            Event::ToggleConflictList,
+            Event::ShowDiagnostics(lsp::Severity::Error),
+            Event::ToggleTallAi,
+            Event::StartAi {
+                command: Some("claude".to_string()),
+                force: false,
+            },
+            Event::OpenSkills,
+            Event::SplitTerminal,
+            Event::ShowGroup(layout::Group::Debug),
+            Event::DragDivider(50),
+            Event::DragAiDivider(50),
+        ] {
+            assert_ne!(
+                update(&workspace, event.clone()),
+                (workspace.clone(), vec![]),
+                "{event:?} does nothing in a workspace either"
+            );
+            assert_eq!(
+                update(&single_file, event.clone()),
+                (single_file.clone(), vec![]),
+                "{event:?}"
+            );
         }
     }
 
@@ -9335,6 +9458,27 @@ mod tests {
         let kept = previewed(Some("my edits"));
         assert!(kept.buffers.contains_key(&path));
         assert_eq!(kept.preview, Some(path));
+    }
+
+    #[test]
+    fn closing_every_buffer_in_the_single_file_editor_ends_on_exit() {
+        let path = PathBuf::from("/home/me/projects/theirs/notes.txt");
+        let (state, _) = update(
+            &State {
+                root: PathBuf::from("/home/me/projects/theirs"),
+                opened: Opened::SingleFile,
+                sidecar: Some(PathBuf::from("/tmp/varde-sidecar")),
+                ..State::default()
+            },
+            Event::BufferOpened {
+                path,
+                contents: "notes".to_string(),
+                preview: false,
+                at: None,
+            },
+        );
+        let (_, effects) = update(&state, Event::CloseAllBuffers { force: false });
+        assert_eq!(effects.last(), Some(&Effect::Exit));
     }
 
     #[test]
@@ -11261,7 +11405,7 @@ mod tests {
     #[test]
     fn the_palette_fits_the_screen_it_is_drawn_on() {
         for screen in [24u16, 26, 30, 40] {
-            let rows = palette_rows(screen);
+            let rows = palette_rows(&State::default(), screen);
             assert!(
                 rows.len() <= (screen - 2) as usize,
                 "{} rows in a box that draws {} at {screen}",
@@ -11276,29 +11420,56 @@ mod tests {
             }
         }
 
-        let roomy = palette_rows(40);
+        let roomy = palette_rows(&State::default(), 40);
         assert!(roomy.iter().all(|cells| cells.len() == 1));
         assert!(roomy.iter().flatten().any(|(_, row)| row.is_empty()));
         assert_eq!(
             roomy.last().map(|cells| cells[0].1.as_str()),
             Some("   Esc  cancel")
         );
-        assert!(palette_rows(30)
+        assert!(palette_rows(&State::default(), 30)
             .iter()
             .flatten()
             .any(|(_, row)| row == "   Esc  cancel"));
-        assert!(palette_rows(26).iter().all(|cells| cells.len() == 1));
+        assert!(palette_rows(&State::default(), 26)
+            .iter()
+            .all(|cells| cells.len() == 1));
 
-        let paired = palette_rows(24);
+        let paired = palette_rows(&State::default(), 24);
         assert!(paired.iter().any(|cells| cells.len() == 2));
         assert!(paired
             .iter()
             .filter(|cells| cells.len() == 2)
             .all(|cells| cells[0].1.chars().count() == paired[0][0].1.chars().count()));
 
-        let tiny = palette_rows(10);
+        let tiny = palette_rows(&State::default(), 10);
         assert_eq!(tiny.len(), 8);
         assert_eq!(tiny.last(), Some(&vec![(None, "   …".to_string())]));
+    }
+
+    #[test]
+    fn the_single_file_palette_offers_keys_tools_and_quit() {
+        let single_file = State {
+            opened: Opened::SingleFile,
+            ..State::default()
+        };
+        let offered: Vec<(Option<char>, String)> = palette_rows(&single_file, 40)
+            .into_iter()
+            .flatten()
+            .collect();
+        assert_eq!(
+            offered,
+            vec![
+                (None, "  Project".to_string()),
+                (Some('v'), "   (v) Tools".to_string()),
+                (None, String::new()),
+                (None, "  Help".to_string()),
+                (Some('h'), "   (h) Keys".to_string()),
+                (None, String::new()),
+                (Some('q'), "   (q) Quit".to_string()),
+                (None, "   Esc  cancel".to_string()),
+            ]
+        );
     }
 
     #[test]
