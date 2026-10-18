@@ -11958,9 +11958,9 @@ fn server_was_sent(world: &mut VardeWorld, language: String, method: String) {
     }
 }
 
-fn initialization_options(world: &VardeWorld, language: &str) -> Value {
+fn handshake(world: &VardeWorld, language: &str) -> Value {
     let messages = sent(world, language);
-    let handshake = messages
+    messages
         .iter()
         .find(|message| message["method"] == "initialize")
         .unwrap_or_else(|| {
@@ -11968,19 +11968,14 @@ fn initialization_options(world: &VardeWorld, language: &str) -> Value {
                 "{language} was never sent initialize; it was sent: {:?}",
                 methods(&messages)
             )
-        });
-    handshake["params"]["initializationOptions"].clone()
+        })["params"]
+        .clone()
 }
 
 #[then(expr = "the language server for {string} was given the root {string}")]
 fn server_given_root(world: &mut VardeWorld, language: String, root: String) {
-    let messages = sent(world, &language);
-    let handshake = messages
-        .iter()
-        .find(|message| message["method"] == "initialize")
-        .unwrap_or_else(|| panic!("{language} was never sent initialize"));
     assert_eq!(
-        handshake["params"]["rootUri"],
+        handshake(world, &language)["rootUri"],
         Value::String(format!("file://{root}"))
     );
 }
@@ -11995,59 +11990,52 @@ fn server_logs_into_sidecar(world: &mut VardeWorld, language: String) {
 fn initialize_carried_options(world: &mut VardeWorld, language: String, step: &Step) {
     let expected: Value =
         serde_json::from_str(step.docstring().expect("docstring")).expect("valid JSON");
-    assert_eq!(initialization_options(world, &language), expected);
+    assert_eq!(
+        handshake(world, &language)["initializationOptions"],
+        expected
+    );
 }
 
 #[then(expr = "the initialize request for {string} said Varde can be told diagnostics")]
 fn initialize_declared_diagnostics(world: &mut VardeWorld, language: String) {
-    let messages = sent(world, &language);
-    let handshake = messages
-        .iter()
-        .find(|message| message["method"] == "initialize")
-        .expect("initialize");
+    let handshake = handshake(world, &language);
     assert!(
-        handshake["params"]["capabilities"]["textDocument"]["publishDiagnostics"].is_object(),
+        handshake["capabilities"]["textDocument"]["publishDiagnostics"].is_object(),
         "{language} was told: {}",
-        handshake["params"]["capabilities"]
+        handshake["capabilities"]
     );
 }
 
 #[then(expr = "the initialize request for {string} said Varde can receive snippets")]
 fn initialize_declared_snippets(world: &mut VardeWorld, language: String) {
-    let messages = sent(world, &language);
-    let handshake = messages
-        .iter()
-        .find(|message| message["method"] == "initialize")
-        .expect("initialize");
+    let handshake = handshake(world, &language);
     assert_eq!(
-        handshake["params"]["capabilities"]["textDocument"]["completion"]["completionItem"]
-            ["snippetSupport"],
+        handshake["capabilities"]["textDocument"]["completion"]["completionItem"]["snippetSupport"],
         json!(true),
         "{language} was told: {}",
-        handshake["params"]["capabilities"]
+        handshake["capabilities"]
     );
 }
 
 #[then(expr = "the initialize request for {string} said Varde can read markdown")]
 fn initialize_declared_markdown(world: &mut VardeWorld, language: String) {
-    let messages = sent(world, &language);
-    let handshake = messages
-        .iter()
-        .find(|message| message["method"] == "initialize")
-        .expect("initialize");
-    let formats = &handshake["params"]["capabilities"]["textDocument"]["hover"]["contentFormat"];
+    let handshake = handshake(world, &language);
+    let formats = &handshake["capabilities"]["textDocument"]["hover"]["contentFormat"];
     assert!(
         formats
             .as_array()
             .is_some_and(|formats| formats.contains(&json!("markdown"))),
         "{language} was told: {}",
-        handshake["params"]["capabilities"]
+        handshake["capabilities"]
     );
 }
 
 #[then(expr = "the initialize request for {string} carried no initialization options")]
 fn initialize_carried_no_options(world: &mut VardeWorld, language: String) {
-    assert_eq!(initialization_options(world, &language), Value::Null);
+    assert_eq!(
+        handshake(world, &language)["initializationOptions"],
+        Value::Null
+    );
 }
 
 #[then(expr = "the language server for {string} was sent no {string} request")]

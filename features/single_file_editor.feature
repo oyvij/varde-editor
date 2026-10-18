@@ -330,6 +330,18 @@ Feature: The Single-file editor
     Then a language server was started with "rust-analyzer"
     And the language server for "rust" was given the root "/home/me/projects/theirs"
 
+  Scenario: A server row in the global config is the one started
+    Given the global config is:
+      """
+      [lsp.rust]
+      command = "from-global"
+      extensions = ["rs"]
+      """
+    And "/home/me/projects/theirs/lib.rs" is a file
+    When Varde opens "/home/me/projects/theirs/lib.rs"
+    Then a language server was started with "from-global"
+    And the language server for "rust" was given the root "/home/me/projects/theirs"
+
   Scenario: The Language-server log goes into the Sidecar and nothing is written next to the file
     Given there is no global config
     And "/home/me/projects/theirs/lib.rs" is a file
@@ -354,7 +366,7 @@ Feature: The Single-file editor
     And the cursor is at line 88 column 1
     And the editor is the only pane and fills the screen
 
-  Scenario: gt returns from the definition's Buffer to the file Varde opened
+  Scenario Outline: <keys> returns from the definition's Buffer to the file Varde opened
     Given a language server for "rust" is ready
     And "/home/me/projects/theirs/lib.rs" is a file
     And Varde opened "/home/me/projects/theirs/lib.rs"
@@ -363,8 +375,13 @@ Feature: The Single-file editor
     And the language server for "rust" answers the definition with:
       | path    | line | column |
       | keys.rs | 88   | 1      |
-    When I press "gt" in the editor
+    When I press "<keys>" in the editor
     Then the current buffer is "lib.rs"
+
+    Examples:
+      | keys |
+      | gt   |
+      | gT   |
 
   Scenario: Several Definitions are offered as hits rather than the first being taken
     Given a language server for "rust" is ready
