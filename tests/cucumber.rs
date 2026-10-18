@@ -122,6 +122,7 @@ pub struct VardeWorld {
     lsp_sent: Vec<(String, Value)>,
     lsp_answers: BTreeSet<String>,
     lsp_capabilities: BTreeMap<String, Value>,
+    signature_answered: Value,
     lsp_fails: BTreeSet<String>,
     formatter_runs: Vec<Effect>,
     candidates_armed: bool,
@@ -11920,6 +11921,31 @@ fn initialize_declared_snippets(world: &mut VardeWorld, language: String) {
     );
 }
 
+#[then(expr = "the initialize request for {string} said Varde can read signature help")]
+fn initialize_declared_signature_help(world: &mut VardeWorld, language: String) {
+    let messages = sent(world, &language);
+    let handshake = messages
+        .iter()
+        .find(|message| message["method"] == "initialize")
+        .expect("initialize");
+    let signature = &handshake["params"]["capabilities"]["textDocument"]["signatureHelp"]
+        ["signatureInformation"];
+    assert_eq!(
+        (
+            &signature["documentationFormat"],
+            &signature["parameterInformation"]["labelOffsetSupport"],
+            &signature["activeParameterSupport"],
+        ),
+        (
+            &json!(["markdown", "plaintext"]),
+            &json!(true),
+            &json!(true)
+        ),
+        "{language} was told: {}",
+        handshake["params"]["capabilities"]
+    );
+}
+
 #[then(expr = "the initialize request for {string} said Varde can read markdown")]
 fn initialize_declared_markdown(world: &mut VardeWorld, language: String) {
     let messages = sent(world, &language);
@@ -12233,13 +12259,13 @@ fn was_sent_how_many(world: &mut VardeWorld, language: String, count: usize, met
     );
 }
 
-fn completion_context(world: &VardeWorld, language: &str) -> Value {
+fn sent_context(world: &VardeWorld, language: &str, method: &str) -> Value {
     sent(world, language)
         .iter()
         .rev()
-        .find(|message| message["method"] == "textDocument/completion")
-        .unwrap_or_else(|| panic!("{language} was never sent a textDocument/completion request"))
-        ["params"]["context"]
+        .find(|message| message["method"] == method)
+        .unwrap_or_else(|| panic!("{language} was never sent a {method} request"))["params"]
+        ["context"]
         .clone()
 }
 
@@ -12248,7 +12274,7 @@ fn completion_context(world: &VardeWorld, language: &str) -> Value {
 )]
 fn completion_was_triggered(world: &mut VardeWorld, language: String, character: String) {
     assert_eq!(
-        completion_context(world, &language),
+        sent_context(world, &language, "textDocument/completion"),
         json!({"triggerKind": 2, "triggerCharacter": character})
     );
 }
@@ -12256,8 +12282,94 @@ fn completion_was_triggered(world: &mut VardeWorld, language: String, character:
 #[then(expr = "the language server for {string} was sent an invoked completion request")]
 fn completion_was_invoked(world: &mut VardeWorld, language: String) {
     assert_eq!(
-        completion_context(world, &language),
+        sent_context(world, &language, "textDocument/completion"),
         json!({"triggerKind": 1})
+    );
+}
+
+#[then(
+    expr = "the language server for {string} was sent a signature help request with trigger character {string}"
+)]
+fn signature_was_triggered(world: &mut VardeWorld, language: String, character: String) {
+    assert_eq!(
+        sent_context(world, &language, "textDocument/signatureHelp"),
+        json!({"triggerKind": 2, "triggerCharacter": character, "isRetrigger": false})
+    );
+}
+
+#[then(
+    expr = "the language server for {string} was sent a signature help retrigger with trigger character {string}"
+)]
+fn signature_was_retriggered(world: &mut VardeWorld, language: String, character: String) {
+    assert_eq!(
+        sent_context(world, &language, "textDocument/signatureHelp"),
+        json!({
+            "triggerKind": 2,
+            "triggerCharacter": character,
+            "isRetrigger": true,
+            "activeSignatureHelp": world.signature_answered,
+        })
+    );
+}
+
+#[given(expr = "the language server for {string} answers the signature help with:")]
+#[when(expr = "the language server for {string} answers the signature help with:")]
+fn answers_the_signature_help(world: &mut VardeWorld, language: String, step: &Step) {
+    let result: Value = serde_json::from_str(step.docstring().expect("docstring")).expect("json");
+    world.signature_answered = result.clone();
+    world.lsp_replies(
+        &language,
+        json!({"jsonrpc": "2.0", "id": asked(world, &language, "textDocument/signatureHelp"), "result": result}),
+    );
+}
+
+fn signature_box(world: &VardeWorld) -> &varde::lsp::Signature {
+    world
+        .state
+        .signature
+        .as_ref()
+        .expect("no signature box is open")
+}
+
+#[then(expr = "the signature box is open")]
+fn signature_box_is_open(world: &mut VardeWorld) {
+    signature_box(world);
+}
+
+#[then(expr = "the signature box is not open")]
+fn signature_box_is_not_open(world: &mut VardeWorld) {
+    assert_eq!(world.state.signature, None);
+}
+
+#[then(expr = "the highlighted parameter is {string}")]
+fn highlighted_parameter_is(world: &mut VardeWorld, parameter: String) {
+    let signature = signature_box(world);
+    let (start, end) = signature.highlighted.expect("no parameter is highlighted");
+    let highlighted: String = signature
+        .label
+        .chars()
+        .skip(start)
+        .take(end - start)
+        .collect();
+    assert_eq!(highlighted, parameter);
+}
+
+#[then(expr = "the signature box shows signature {int} of {int}")]
+fn signature_box_shows(world: &mut VardeWorld, shown: usize, of: usize) {
+    let signature = signature_box(world);
+    assert_eq!((signature.shown + 1, signature.of), (shown, of));
+}
+
+#[then(expr = "the signature box documents {string}")]
+fn signature_box_documents(world: &mut VardeWorld, documented: String) {
+    let said: Vec<String> = signature_box(world)
+        .docs
+        .iter()
+        .map(|row| row.text())
+        .collect();
+    assert!(
+        said.join(" ").contains(&documented),
+        "the box documents {said:?}"
     );
 }
 

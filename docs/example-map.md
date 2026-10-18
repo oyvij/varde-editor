@@ -2444,13 +2444,16 @@ server that logs on startup and one that dies on it, and by looking at the file.
 messages are canned JSON; a suite that needs `rust-analyzer` installed is a suite that is red on
 somebody's machine for a reason that is not a defect.
 ⛔ **The rest of the protocol** — rename, code actions, find-references, workspace
-symbols, inlay hints, signature help, call hierarchy, semantic tokens. Semantic
+symbols, inlay hints, call hierarchy, semantic tokens. Semantic
 tokens specifically stays out because syntect is instant, offline and universal and remains the base
 layer permanently. Whole-document formatting has come off this list: F32 specifies it, and it is
 `documentFormattingProvider` beside the `documentOnTypeFormattingProvider` this feature already
 speaks —
 one `About`, five one-line arms, and no new transport. Range formatting stays out, because a
-selection is a second question with a second staleness rule and nobody has asked for it.
+selection is a second question with a second staleness rule and nobody has asked for it. Signature
+help has come off it too: `signatureHelpProvider` is one more `About` on the same ask-and-answer
+path, first answer wins, and the Signature it answers with is shown above the line while a call is
+typed.
 ⛔ **Varde composing an install command, updating a server, or falling back to a second server when
 the configured one is missing.** The fallback stays forbidden for the reason the ADR gives — "tried
 A, falling back to B" is a provider preference expressed in control flow. Installing is no longer on

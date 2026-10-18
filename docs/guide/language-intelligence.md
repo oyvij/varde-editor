@@ -99,6 +99,22 @@ Candidate is not undoing it. Opening another file ends it too. While blanks rema
 "next blank". The rest of the time it indents, as [Editing](editing.md#typing) describes. A plain
 Candidate has no sequence: its text goes in and the cursor lands after it.
 
+### Signature
+
+Type `(` after a method name in insert mode and, if the server has something to say about the
+call, a **Signature** box opens on the rows above your line. It shows the call's signature with the
+parameter you are filling in highlighted, that parameter's documentation under it (a few rows at
+most), and `1/3` at the right when the method has overloads. Type `,` and the highlight moves to the
+next parameter. While the box is open, every character you type asks the server again, so it
+follows what you write. `)` closes the box, and so does the server saying the cursor is no longer
+in a call.
+
+The box never takes a key: the arrows and `Enter` stay with the Candidate list. Near the top of the
+pane, where there is no room above the line, it goes below the Candidate list instead, and it never
+covers the line you are typing on. The characters that open it are the server's own list, usually
+`(` and `,`, and a server that does not offer signatures shows no box at all. When two servers
+serve the file, the first one with an answer supplies the Signature.
+
 ### Formatting as you type
 
 A server may ask to be told when you type certain characters, such as `}` or `;` in some languages

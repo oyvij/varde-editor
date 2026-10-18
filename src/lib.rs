@@ -1229,6 +1229,7 @@ pub struct State {
     pub diagnostic_totals: [usize; 4],
     pub hover: Option<lsp::Hover>,
     pub stops: Option<editor::Stops>,
+    pub signature: Option<lsp::Signature>,
     pub pointed_at: Pointed,
 }
 
@@ -1460,6 +1461,7 @@ impl Default for State {
             diagnostic_totals: [0; 4],
             hover: None,
             stops: None,
+            signature: None,
             hovered_action: None,
             transport_lit: None,
             preview_width: PreviewWidth::Reading,
@@ -4641,6 +4643,7 @@ fn editor_key(state: &State, next: State, key: char, wheeled: bool) -> (State, V
         typed = lsp::typed(&mut next);
         typed.extend(lsp::completes_after(&next, key));
         typed.extend(lsp::on_type(&mut next, key));
+        typed.extend(lsp::signs_after(&mut next, key));
     }
     let mut effects = match register_of(&next) {
         Some(text) if key == 'y' && Some(&text) != held.as_ref() => to_clipboard(state, text),

@@ -1655,6 +1655,281 @@ Feature: Language intelligence
       Then the language server for "rust" was sent a "textDocument/onTypeFormatting" request
       And the language server for "rust" was sent a completion request with trigger character "."
 
+  Rule: A call's Signature is shown above the line while the call is typed
+
+    A server that declares `signatureHelpProvider` names the characters that open a call, usually
+    `(` and `,`, in its `triggerCharacters`. Typing one in insert mode asks it about the call the
+    cursor is in, and its answer is the Signature: the active signature's label with the Active
+    parameter highlighted, that parameter's documentation under it, and how many signatures there
+    are. While the box is open every typed character asks again, as a retrigger carrying the last
+    reply, so the server can keep its overload and move the highlight. `)` takes the box away, and
+    so does a reply that says there is no call here. The box takes no keys: the Candidate list keeps
+    them.
+
+    Scenario: Varde says it can read signatures, because it highlights their parameters
+      Given the project config is:
+        """
+        [lsp.rust]
+        command = "rust-analyzer"
+        """
+      And Varde started in the project
+      When I open "src/lib.rs"
+      Then the initialize request for "rust" said Varde can read signature help
+
+    Scenario: Typing a character the server names asks about the call
+      Given a language server for "rust" is ready with capabilities:
+        """
+        {"signatureHelpProvider":{"triggerCharacters":["(", ","]}}
+        """
+      And "src/lib.rs" is open in the editor holding:
+        """
+        object.method
+        """
+      And the editor mode is insert
+      And the cursor is at line 1 column 14
+      When I type "(" in the editor
+      Then the language server for "rust" was sent a signature help request with trigger character "("
+
+    Scenario: The reply opens the box with the first parameter highlighted
+      Given a language server for "rust" is ready with capabilities:
+        """
+        {"signatureHelpProvider":{"triggerCharacters":["(", ","]}}
+        """
+      And "src/lib.rs" is open in the editor holding:
+        """
+        object.method
+        """
+      And the editor mode is insert
+      And the cursor is at line 1 column 14
+      And I type "(" in the editor
+      When the language server for "rust" answers the signature help with:
+        """
+        {"signatures":[{"label":"method(first: i32, second: &str)","parameters":[{"label":[7,17]},{"label":[19,31]}]}],"activeSignature":0,"activeParameter":0}
+        """
+      Then the signature box is open
+      And the highlighted parameter is "first: i32"
+
+    Scenario: A comma asks again as a retrigger carrying the last reply
+      Given a language server for "rust" is ready with capabilities:
+        """
+        {"signatureHelpProvider":{"triggerCharacters":["(", ","]}}
+        """
+      And "src/lib.rs" is open in the editor holding:
+        """
+        object.method
+        """
+      And the editor mode is insert
+      And the cursor is at line 1 column 14
+      And I type "(" in the editor
+      And the language server for "rust" answers the signature help with:
+        """
+        {"signatures":[{"label":"method(first: i32, second: &str)","parameters":[{"label":[7,17]},{"label":[19,31]}]}],"activeSignature":0,"activeParameter":0}
+        """
+      When I type "," in the editor
+      Then the language server for "rust" was sent a signature help retrigger with trigger character ","
+
+    Scenario: The reply after the comma highlights the next parameter
+      Given a language server for "rust" is ready with capabilities:
+        """
+        {"signatureHelpProvider":{"triggerCharacters":["(", ","]}}
+        """
+      And "src/lib.rs" is open in the editor holding:
+        """
+        object.method
+        """
+      And the editor mode is insert
+      And the cursor is at line 1 column 14
+      And I type "(" in the editor
+      And the language server for "rust" answers the signature help with:
+        """
+        {"signatures":[{"label":"method(first: i32, second: &str)","parameters":[{"label":[7,17]},{"label":[19,31]}]}],"activeSignature":0,"activeParameter":0}
+        """
+      And I type "," in the editor
+      When the language server for "rust" answers the signature help with:
+        """
+        {"signatures":[{"label":"method(first: i32, second: &str)","parameters":[{"label":[7,17]},{"label":[19,31]}]}],"activeSignature":0,"activeParameter":1}
+        """
+      Then the highlighted parameter is "second: &str"
+
+    Scenario: Any character typed while the box is open asks again
+      Given a language server for "rust" is ready with capabilities:
+        """
+        {"signatureHelpProvider":{"triggerCharacters":["(", ","]}}
+        """
+      And "src/lib.rs" is open in the editor holding:
+        """
+        object.method
+        """
+      And the editor mode is insert
+      And the cursor is at line 1 column 14
+      And I type "(" in the editor
+      And the language server for "rust" answers the signature help with:
+        """
+        {"signatures":[{"label":"method(first: i32)","parameters":[{"label":"first: i32"}]}]}
+        """
+      When I type "4" in the editor
+      Then the language server for "rust" was sent 2 "textDocument/signatureHelp" requests
+
+    Scenario: An overloaded call says which signature it shows and documents the parameter
+      Given a language server for "rust" is ready with capabilities:
+        """
+        {"signatureHelpProvider":{"triggerCharacters":["(", ","]}}
+        """
+      And "src/lib.rs" is open in the editor holding:
+        """
+        object.method
+        """
+      And the editor mode is insert
+      And the cursor is at line 1 column 14
+      And I type "(" in the editor
+      When the language server for "rust" answers the signature help with:
+        """
+        {"signatures":[
+          {"label":"method(first: i32)","parameters":[{"label":"first: i32","documentation":{"kind":"markdown","value":"How many **times**."}}]},
+          {"label":"method(first: &str)","parameters":[{"label":"first: &str"}]},
+          {"label":"method()","parameters":[]}
+        ],"activeSignature":0,"activeParameter":0}
+        """
+      Then the signature box shows signature 1 of 3
+      And the signature box documents "How many times."
+
+    Scenario: Typing the closing parenthesis takes the box away
+      Given a language server for "rust" is ready with capabilities:
+        """
+        {"signatureHelpProvider":{"triggerCharacters":["(", ","]}}
+        """
+      And "src/lib.rs" is open in the editor holding:
+        """
+        object.method
+        """
+      And the editor mode is insert
+      And the cursor is at line 1 column 14
+      And I type "(" in the editor
+      And the language server for "rust" answers the signature help with:
+        """
+        {"signatures":[{"label":"method()","parameters":[]}]}
+        """
+      When I type ")" in the editor
+      Then the signature box is not open
+      And the language server for "rust" was sent 1 "textDocument/signatureHelp" request
+
+    Scenario Outline: A reply that says there is no call takes the box away
+      Given a language server for "rust" is ready with capabilities:
+        """
+        {"signatureHelpProvider":{"triggerCharacters":["(", ","]}}
+        """
+      And "src/lib.rs" is open in the editor holding:
+        """
+        object.method
+        """
+      And the editor mode is insert
+      And the cursor is at line 1 column 14
+      And I type "(" in the editor
+      And the language server for "rust" answers the signature help with:
+        """
+        {"signatures":[{"label":"method(first: i32)","parameters":[{"label":"first: i32"}]}]}
+        """
+      And I type "4" in the editor
+      When the language server for "rust" answers the signature help with:
+        """
+        <reply>
+        """
+      Then the signature box is not open
+
+      Examples:
+        | reply             |
+        | null              |
+        | {"signatures":[]} |
+
+    Scenario: A reply about text typed past shows no box
+      Given a language server for "rust" is ready with capabilities:
+        """
+        {"signatureHelpProvider":{"triggerCharacters":["(", ","]}}
+        """
+      And "src/lib.rs" is open in the editor holding:
+        """
+        object.method
+        """
+      And the editor mode is insert
+      And the cursor is at line 1 column 14
+      And I type "(" in the editor
+      And I type "4" in the editor
+      When the language server for "rust" answers the signature help with:
+        """
+        {"signatures":[{"label":"method(first: i32)","parameters":[{"label":"first: i32"}]}]}
+        """
+      Then the signature box is not open
+
+    Scenario: A server that declares no signature help is asked nothing
+      Given a language server for "rust" is ready with capabilities:
+        """
+        {"completionProvider":{}}
+        """
+      And "src/lib.rs" is open in the editor holding:
+        """
+        object.method
+        """
+      And the editor mode is insert
+      And the cursor is at line 1 column 14
+      When I type "(" in the editor
+      Then the language server for "rust" was sent no "textDocument/signatureHelp" request
+      And the signature box is not open
+
+    Scenario: With two servers, the first one with an answer supplies the Signature
+      Given a language server for "vue" is ready with capabilities:
+        """
+        {"signatureHelpProvider":{"triggerCharacters":["("]}}
+        """
+      And a language server for "typescript" is ready with capabilities:
+        """
+        {"signatureHelpProvider":{"triggerCharacters":["("]}}
+        """
+      And "vue" files are also served by the language server for "typescript"
+      And "src/App.vue" is open in the editor holding:
+        """
+        format
+        """
+      And the editor mode is insert
+      And the cursor is at line 1 column 7
+      And I type "(" in the editor
+      And the language server for "vue" answers the signature help with:
+        """
+        null
+        """
+      And the language server for "typescript" answers the signature help with:
+        """
+        {"signatures":[{"label":"format(value: number)","parameters":[{"label":"value: number"}]}]}
+        """
+      When the language server for "vue" answers the signature help with:
+        """
+        {"signatures":[{"label":"format(text: string)","parameters":[{"label":"text: string"}]}]}
+        """
+      Then the signature box is open
+      And the highlighted parameter is "value: number"
+
+    Scenario: Up and Down still move the Candidate choice while the box is open
+      Given a language server for "rust" is ready with capabilities:
+        """
+        {"signatureHelpProvider":{"triggerCharacters":["(", ","]}}
+        """
+      And "src/lib.rs" is open in the editor holding:
+        """
+        object.method
+        """
+      And the editor mode is insert
+      And the cursor is at line 1 column 14
+      And I type "(" in the editor
+      And the language server for "rust" answers the signature help with:
+        """
+        {"signatures":[{"label":"method(first: i32)","parameters":[{"label":"first: i32"}]}]}
+        """
+      And a candidate list is open in the editor with:
+        | count  |
+        | length |
+      When I press "Down" in the editor
+      Then the selected candidate is "length"
+      And the signature box is open
+
   Rule: A completion fills in its own blanks
 
     Varde declares `completionItem.snippetSupport`, and that declaration is a claim about what Varde

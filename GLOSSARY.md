@@ -654,6 +654,21 @@ leaves the Buffer holding exactly the characters that were typed, which is the p
 feature stands on.
 _Avoid_: completion (that is the act), suggestion, item, proposal
 
+**Signature**:
+What a Language server says about the call the cursor is inside: the call's signature, the Active
+parameter it highlights, that parameter's documentation, and how many overloads there are. Asked
+for in insert mode when a signature help Trigger character such as `(` or `,` is typed, and again
+on every character while it is shown; shown above the line, beside the Candidate list rather than
+instead of it, and taking none of its keys. `)` closes it, and so does a reply that says the cursor
+is in no call; an empty box is not an answer.
+_Avoid_: signature help popup, parameter hints, tooltip, popup
+
+**Active parameter**:
+The parameter of a Signature the cursor's argument fills, highlighted in its label. The server
+decides which it is — the signature's own `activeParameter`, otherwise the reply's — and Varde never
+counts commas to work it out.
+_Avoid_: current argument, selected parameter, argument index
+
 **Tab stop**:
 A place an expanded Candidate left for a value to go, and the sequence of them Tab walks. The
 protocol's own word, and the one thing here that outlives the keystroke that made it: while stops
