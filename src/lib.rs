@@ -2895,10 +2895,7 @@ fn on_key_4(state: &State, next: State, event: Event, _wheeled: bool) -> Answere
                 'n' => "new-file",
                 'N' => "new-directory",
                 'd' => "delete",
-                'o' if state.tree_selection.as_deref().is_some_and(|path| {
-                    tree::row_actions(state, path).contains(&"open-externally")
-                }) =>
-                {
+                'o' if selected_row_actions(state).contains(&"open-externally") => {
                     "open-externally"
                 }
                 _ => return Ok((next, vec![])),
