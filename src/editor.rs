@@ -494,6 +494,10 @@ impl Buffer {
             self.remember(Step::Deleting);
             let removed = lines.remove(self.line - 1);
             self.line -= 1;
+            if self.mode == Mode::Insert {
+                let above = &mut lines[self.line - 1];
+                above.truncate(above.trim_end().len());
+            }
             self.column = lines[self.line - 1].chars().count() + 1;
             if !takes_the_line {
                 lines[self.line - 1].push_str(&removed);
@@ -2427,6 +2431,35 @@ mod tests {
         buffer.backspace();
         assert_eq!(buffer.shown(), "one\n   ");
         assert_eq!((buffer.line, buffer.column), (2, 1));
+    }
+
+    #[test]
+    fn backspace_joining_in_insert_mode_drops_the_trailing_spaces_above() {
+        let mut buffer = Buffer::open("one   \ntwo", false, 4);
+        buffer.key('j');
+        buffer.key('i');
+        buffer.backspace();
+        assert_eq!(buffer.shown(), "onetwo");
+        assert_eq!((buffer.line, buffer.column), (1, 4));
+    }
+
+    #[test]
+    fn one_undo_puts_back_the_trailing_spaces_and_the_joined_line() {
+        let mut buffer = Buffer::open("one   \ntwo", false, 4);
+        buffer.key('j');
+        buffer.key('i');
+        buffer.backspace();
+        buffer.escape();
+        buffer.key('u');
+        assert_eq!(buffer.shown(), "one   \ntwo");
+    }
+
+    #[test]
+    fn backspace_joining_in_normal_mode_keeps_the_trailing_spaces_above() {
+        let mut buffer = Buffer::open("one   \ntwo", false, 4);
+        buffer.key('j');
+        buffer.backspace();
+        assert_eq!(buffer.shown(), "one   two");
     }
 
     #[test]
