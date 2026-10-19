@@ -7223,6 +7223,11 @@ fn filter_box_lacks_keyboard(world: &mut VardeWorld) {
     assert_eq!(world.state.filter_keys, FilterKeys::Away);
 }
 
+#[then(expr = "the tree list fits {int} rows")]
+fn tree_list_fits(world: &mut VardeWorld, rows: usize) {
+    assert_eq!(varde::fits(&world.state).0, rows);
+}
+
 #[then("the filter box is closed")]
 fn filter_box_closed(world: &mut VardeWorld) {
     assert_eq!(world.state.filter_keys, FilterKeys::Away);
@@ -8831,7 +8836,7 @@ fn spine_lists(world: &mut VardeWorld, step: &Step) {
 
 #[then(expr = "the tree pane has no filter box")]
 fn tree_has_no_filter_box(world: &mut VardeWorld) {
-    assert_eq!(tree::filter_rows(world.state.view), 0);
+    assert_eq!(tree::filter_rows(&world.state), 0);
 }
 
 #[then(expr = "the spine's title is {string}")]

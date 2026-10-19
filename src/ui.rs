@@ -1319,7 +1319,7 @@ fn tree_lines(state: &State, rows: &[Row], width: u16) -> Vec<Line<'static>> {
 }
 
 fn filter_box(frame: &mut Frame, state: &State, area: Rect) {
-    if area.height < 4 {
+    if area.height < 4 || tree::filter_rows(state) == 0 {
         return;
     }
     let active = state.filter_keys == FilterKeys::Box;
@@ -1353,10 +1353,8 @@ fn filter_box(frame: &mut Frame, state: &State, area: Rect) {
         .unwrap_or_default();
     let hint = if state.index.walking {
         format!(" {}", varde::spinner(state.tick))
-    } else if active || !query.is_empty() {
-        String::new()
     } else {
-        "filter files".to_string()
+        String::new()
     };
     frame.render_widget(
         Paragraph::new(Line::from(vec![

@@ -476,7 +476,7 @@ fn pressed(
         }
     }
     let border = panes.tree.bottom().saturating_sub(1);
-    let filter_box = border.saturating_sub(tree::filter_rows(state.view) as u16)..border;
+    let filter_box = border.saturating_sub(tree::filter_rows(state) as u16)..border;
     if pane == Pane::Tree && filter_box.contains(&input.row) {
         return vec![Event::ClickPane(Pane::Tree), Event::OpenFilter];
     }
@@ -1799,6 +1799,32 @@ mod tests {
             assert_eq!(typing.tree_selection, away.tree_selection, "row {row}");
         }
         assert!(!click(&away, 5, tree.bottom() - 1).contains(&Event::OpenFilter));
+    }
+
+    #[test]
+    fn a_click_where_the_hidden_filter_box_would_be_picks_a_tree_row() {
+        let tree = panes(120, 26, 30, None, 0, 0, Shapes::default()).tree;
+        let mut state = State {
+            focus: Pane::Tree,
+            ..workspace()
+        };
+        state.contents.insert(
+            PathBuf::from("/w"),
+            (0..40)
+                .map(|n| Entry {
+                    name: format!("f{n:02}"),
+                    is_dir: false,
+                })
+                .collect(),
+        );
+        for row in [tree.bottom() - 3, tree.bottom() - 2] {
+            let index = row - tree.y - 1;
+            assert_eq!(
+                click(&state, 5, row),
+                vec![Event::ClickRow(PathBuf::from(format!("/w/f{index:02}")))],
+                "row {row}"
+            );
+        }
     }
 
     #[test]

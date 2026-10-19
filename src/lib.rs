@@ -7881,7 +7881,7 @@ pub fn fits(state: &State) -> (usize, usize, usize) {
 }
 
 pub fn fits_in(state: &State, panes: &layout::Layout) -> (usize, usize, usize) {
-    let filter = tree::filter_rows(state.view) as u16 + story::title_rows(state) as u16;
+    let filter = tree::filter_rows(state) as u16 + story::title_rows(state) as u16;
     (
         panes.tree.height.saturating_sub(2 + filter) as usize,
         panes.editor.height.saturating_sub(2) as usize,
