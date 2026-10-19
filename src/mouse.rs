@@ -1053,9 +1053,9 @@ fn pressed_in_find(state: &State, panes: &Layout, input: Input) -> Option<Vec<Ev
             (None, _) => Vec::new(),
         });
     }
-    let strip = crate::find_strip(state, panes.editor)?;
+    let (_, strip) = crate::find_strip(state, panes.editor)?;
     let rows = Area {
-        height: 2,
+        height: layout::FIND_STRIP_ROWS,
         ..strip.rule
     };
     if !rows.holds(input.column, input.row) {
@@ -1515,7 +1515,7 @@ mod tests {
         };
         let editor = panes(120, 26, 30, None, 0, 0, Shapes::default()).editor;
         let short = searching("state");
-        let strip = crate::find_strip(&short, editor).expect("room for the strip");
+        let (_, strip) = crate::find_strip(&short, editor).expect("room for the strip");
         for (icon, _, at) in &strip.icons {
             assert_eq!(click(&short, at.x, at.y), icon.pressed(), "{icon:?}");
             assert_eq!(
@@ -1526,7 +1526,7 @@ mod tests {
         }
         let (dropped, _, spot) = *strip.icons.last().expect("an icon");
         let long = searching(&"x".repeat(usize::from(spot.x - strip.field.x)));
-        let narrowed = crate::find_strip(&long, editor).expect("room for the strip");
+        let (_, narrowed) = crate::find_strip(&long, editor).expect("room for the strip");
         assert!(narrowed.icons.iter().all(|(icon, _, _)| *icon != dropped));
         assert_eq!(click(&long, spot.x, spot.y), vec![]);
         assert_eq!(

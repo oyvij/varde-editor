@@ -472,6 +472,8 @@ pub fn replace_box(editor: Area) -> Area {
     }
 }
 
+pub const FIND_STRIP_ROWS: u16 = 2;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FindStrip {
     pub rule: Area,
@@ -482,25 +484,29 @@ pub struct FindStrip {
 }
 
 pub fn find_strip(editor: Area, line: &crate::FindLine) -> FindStrip {
-    let field = Area {
+    let rule = Area {
         x: editor.x + 1,
-        y: editor.bottom().saturating_sub(2),
+        y: editor.bottom().saturating_sub(1 + FIND_STRIP_ROWS),
         width: editor.width.saturating_sub(2),
         height: 1,
+    };
+    let field = Area {
+        y: rule.y + 1,
+        ..rule
     };
     let width = |text: &str| UnicodeWidthStr::width(text) as u16;
     let count = width(&line.count);
     let query = 1 + width(&line.query) + 1;
-    let needed = |icons: &[(crate::FindIcon, &str)], count: u16| {
+    let row_width = |icons: &[(crate::FindIcon, &str)], count: u16| {
         let spaced = |each: u16| if each == 0 { 0 } else { each + 1 };
         query + spaced(count) + icons.iter().map(|(_, label)| width(label) + 1).sum::<u16>() + 1
     };
-    let mut kept = crate::FIND_ICONS.len();
-    while kept > 0 && needed(&crate::FIND_ICONS[..kept], count) > field.width {
-        kept -= 1;
+    let mut shown_icons = crate::FIND_ICONS.len();
+    while shown_icons > 0 && row_width(&crate::FIND_ICONS[..shown_icons], count) > field.width {
+        shown_icons -= 1;
     }
     let mut right = field.right().saturating_sub(1);
-    let mut place = |each: u16| {
+    let mut place_from_the_right = |each: u16| {
         right = right.saturating_sub(each);
         let at = Area {
             x: right,
@@ -510,22 +516,20 @@ pub fn find_strip(editor: Area, line: &crate::FindLine) -> FindStrip {
         right = right.saturating_sub(1);
         at
     };
-    let mut icons: Vec<_> = crate::FIND_ICONS[..kept]
+    let mut icons: Vec<_> = crate::FIND_ICONS[..shown_icons]
         .iter()
         .rev()
-        .map(|(icon, label)| (*icon, *label, place(width(label))))
+        .map(|(icon, label)| (*icon, *label, place_from_the_right(width(label))))
         .collect();
     icons.reverse();
-    let count = (count > 0 && needed(&[], count) <= field.width).then(|| place(count));
+    let count =
+        (count > 0 && row_width(&[], count) <= field.width).then(|| place_from_the_right(count));
     let caret = line.caret.map(|at| {
         let before: String = line.query.chars().take(at).collect();
         (field.x + 1 + width(&before), field.y)
     });
     FindStrip {
-        rule: Area {
-            y: field.y.saturating_sub(1),
-            ..field
-        },
+        rule,
         field,
         caret,
         count,

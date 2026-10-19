@@ -7897,7 +7897,7 @@ pub fn fits_in(state: &State, panes: &layout::Layout) -> (usize, usize, usize) {
 
 pub fn editor_strip_rows(state: &State, height: u16) -> u16 {
     match state.find {
-        Some(_) if height > 4 => 2,
+        Some(_) if height > 2 + layout::FIND_STRIP_ROWS => layout::FIND_STRIP_ROWS,
         _ => 0,
     }
 }
@@ -8272,11 +8272,13 @@ pub fn find_line(state: &State) -> Option<FindLine> {
     })
 }
 
-pub fn find_strip(state: &State, editor: layout::Area) -> Option<layout::FindStrip> {
+pub fn find_strip(state: &State, editor: layout::Area) -> Option<(FindLine, layout::FindStrip)> {
     if editor_strip_rows(state, editor.height) == 0 {
         return None;
     }
-    Some(layout::find_strip(editor, &find_line(state)?))
+    let line = find_line(state)?;
+    let strip = layout::find_strip(editor, &line);
+    Some((line, strip))
 }
 
 pub fn asked_of_git(state: &State) -> impl Iterator<Item = &PathBuf> {

@@ -7606,7 +7606,7 @@ fn replace_box_closed(world: &mut VardeWorld) {
 #[when(expr = "I click the {string} icon on the in-file search line")]
 fn click_find_icon(world: &mut VardeWorld, icon: String) {
     let icon = find_icon(&icon);
-    let strip = varde::find_strip(&world.state, world.panes().editor).expect("a search strip");
+    let (_, strip) = varde::find_strip(&world.state, world.panes().editor).expect("a search strip");
     let (_, _, at) = strip
         .icons
         .into_iter()
@@ -7624,7 +7624,7 @@ fn editor_code_rows(world: &mut VardeWorld, rows: usize) {
 
 #[then(expr = "the search strip's caret is at column {int} of the query")]
 fn strip_caret_at(world: &mut VardeWorld, column: u16) {
-    let strip = varde::find_strip(&world.state, world.panes().editor).expect("a search strip");
+    let (_, strip) = varde::find_strip(&world.state, world.panes().editor).expect("a search strip");
     let (x, _) = strip.caret.expect("a caret in the query");
     assert_eq!(
         x - strip.field.x,

@@ -40,7 +40,9 @@ pub fn strip(state: &State, editor: Area) -> Area {
         x: editor.right().saturating_sub(1 + width),
         y: editor.y + 1,
         width,
-        height: editor.height.saturating_sub(2),
+        height: editor
+            .height
+            .saturating_sub(2 + crate::editor_strip_rows(state, editor.height)),
     }
 }
 
@@ -212,6 +214,26 @@ mod tests {
                 top + height
             );
         }
+    }
+
+    #[test]
+    fn the_minimap_stops_above_the_search_strip() {
+        let editor = Area {
+            x: 30,
+            y: 0,
+            width: 60,
+            height: 20,
+        };
+        let mut state = State::default();
+        assert_eq!(strip(&state, editor).height, 18);
+        state.find = Some(crate::Find {
+            query: crate::editor::Buffer::text_box("x"),
+            origin: crate::Place { line: 1, column: 1 },
+            case: crate::search::Case::Smart,
+            extent: crate::search::Extent::Anywhere,
+            keys: crate::FindKeys::Away,
+        });
+        assert_eq!(strip(&state, editor).height, 16);
     }
 
     #[test]

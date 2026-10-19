@@ -3409,11 +3409,7 @@ fn find_strip(
 ) -> Option<(u16, u16)> {
     use ratatui::widgets::Widget;
     let find = state.find.as_ref()?;
-    if varde::editor_strip_rows(state, editor.height) == 0 {
-        return None;
-    }
-    let line = varde::find_line(state)?;
-    let strip = layout::find_strip(editor, &line);
+    let (line, strip) = varde::find_strip(state, editor)?;
     let (rule, field) = (rect(strip.rule), rect(strip.field));
     Clear.render(rule, buffer);
     Clear.render(field, buffer);
