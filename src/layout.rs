@@ -472,6 +472,67 @@ pub fn replace_box(editor: Area) -> Area {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FindStrip {
+    pub rule: Area,
+    pub field: Area,
+    pub caret: Option<(u16, u16)>,
+    pub count: Option<Area>,
+    pub icons: Vec<(crate::FindIcon, &'static str, Area)>,
+}
+
+pub fn find_strip(editor: Area, line: &crate::FindLine) -> FindStrip {
+    let field = Area {
+        x: editor.x + 1,
+        y: editor.bottom().saturating_sub(2),
+        width: editor.width.saturating_sub(2),
+        height: 1,
+    };
+    let width = |text: &str| UnicodeWidthStr::width(text) as u16;
+    let count = width(&line.count);
+    let query = 1 + width(&line.query) + 1;
+    let needed = |icons: &[(crate::FindIcon, &str)], count: u16| {
+        let spaced = |each: u16| if each == 0 { 0 } else { each + 1 };
+        query + spaced(count) + icons.iter().map(|(_, label)| width(label) + 1).sum::<u16>() + 1
+    };
+    let mut kept = crate::FIND_ICONS.len();
+    while kept > 0 && needed(&crate::FIND_ICONS[..kept], count) > field.width {
+        kept -= 1;
+    }
+    let mut right = field.right().saturating_sub(1);
+    let mut place = |each: u16| {
+        right = right.saturating_sub(each);
+        let at = Area {
+            x: right,
+            width: each,
+            ..field
+        };
+        right = right.saturating_sub(1);
+        at
+    };
+    let mut icons: Vec<_> = crate::FIND_ICONS[..kept]
+        .iter()
+        .rev()
+        .map(|(icon, label)| (*icon, *label, place(width(label))))
+        .collect();
+    icons.reverse();
+    let count = (count > 0 && needed(&[], count) <= field.width).then(|| place(count));
+    let caret = line.caret.map(|at| {
+        let before: String = line.query.chars().take(at).collect();
+        (field.x + 1 + width(&before), field.y)
+    });
+    FindStrip {
+        rule: Area {
+            y: field.y.saturating_sub(1),
+            ..field
+        },
+        field,
+        caret,
+        count,
+        icons,
+    }
+}
+
 pub fn command_list(editor: Area, rows: usize, screen_height: u16, widest: u16) -> Area {
     let line = editor.bottom().saturating_sub(1);
     let below = screen_height.saturating_sub(editor.bottom());
@@ -1397,6 +1458,80 @@ mod tests {
             .map(|(_, at)| (at.x, at.y, at.width))
             .collect();
         assert_eq!(buttons, vec![(47, 4, 9), (57, 4, 13)]);
+    }
+
+    fn strip_at_width(width: u16) -> super::FindStrip {
+        let editor = Area {
+            x: 30,
+            y: 0,
+            width,
+            height: 20,
+        };
+        super::find_strip(
+            editor,
+            &crate::FindLine {
+                query: "state".to_string(),
+                caret: Some(2),
+                count: "2 found".to_string(),
+            },
+        )
+    }
+
+    fn icons_of(strip: &super::FindStrip) -> Vec<(crate::FindIcon, u16, u16)> {
+        strip
+            .icons
+            .iter()
+            .map(|(icon, _, at)| (*icon, at.x, at.width))
+            .collect()
+    }
+
+    #[test]
+    fn the_search_strip_sits_at_the_foot_of_the_editor_inside_its_border() {
+        let strip = strip_at_width(60);
+        assert_eq!((strip.rule.x, strip.rule.y, strip.rule.width), (31, 17, 58));
+        assert_eq!(
+            (strip.field.x, strip.field.y, strip.field.width),
+            (31, 18, 58)
+        );
+        assert_eq!(strip.caret, Some((34, 18)), "after the slash and \"st\"");
+        assert_eq!(
+            strip.count.map(|at| (at.x, at.y, at.width)),
+            Some((45, 18, 7))
+        );
+        assert_eq!(
+            icons_of(&strip),
+            vec![
+                (crate::FindIcon::Case, 53, 4),
+                (crate::FindIcon::Word, 58, 6),
+                (crate::FindIcon::Replace, 65, 9),
+                (crate::FindIcon::ReplaceAll, 75, 13),
+            ]
+        );
+        assert!(strip.icons.iter().all(|(_, _, at)| at.y == 18));
+    }
+
+    #[test]
+    fn a_narrow_strip_drops_icons_from_the_right_then_the_count_and_never_the_query() {
+        let two_icons = strip_at_width(36);
+        assert_eq!(
+            icons_of(&two_icons),
+            vec![
+                (crate::FindIcon::Case, 53, 4),
+                (crate::FindIcon::Word, 58, 6)
+            ]
+        );
+        assert_eq!(two_icons.count.map(|at| at.x), Some(45));
+
+        let count_only = strip_at_width(20);
+        assert!(count_only.icons.is_empty());
+        assert_eq!(count_only.count.map(|at| (at.x, at.width)), Some((41, 7)));
+
+        for width in [12, 6] {
+            let query_only = strip_at_width(width);
+            assert!(query_only.icons.is_empty(), "width {width}");
+            assert_eq!(query_only.count, None, "width {width}");
+            assert_eq!(query_only.caret, Some((34, 18)), "width {width}");
+        }
     }
 
     #[test]

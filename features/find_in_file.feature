@@ -1,8 +1,11 @@
 Feature: Finding inside the buffer
 
-  `/` searches the file being edited. The query is typed on the line the editor
-  already uses for `:` commands rather than in the floating modal, which is what
-  keeps finding *here* visibly different from finding *everywhere*.
+  `/` searches the file being edited. The query is typed on a strip at the foot
+  of the editor pane, laid out like the tree's filter, rather than in the
+  floating modal, which is what keeps finding *here* visibly different from
+  finding *everywhere*. The strip shows while the search is on, with the count
+  and the icons beside the query, and the code gives up its rows to it, so it
+  never covers the line the cursor is on.
 
   The cursor moves to the closest match as each character arrives, so you can
   stop typing the moment you have arrived. Escape puts you back where the search
@@ -10,7 +13,7 @@ Feature: Finding inside the buffer
   handed to project search without retyping it.
 
   The search stays on until it is ended: Enter hands the keyboard to the buffer
-  and leaves the line, its count and its highlights where they are, and `/`
+  and leaves the strip, its count and its highlights where they are, and `/`
   goes back into the query. Escape in the buffer ends it where the cursor is.
 
   Matching is the project searcher's, handed a single file rather than the whole
@@ -36,6 +39,35 @@ Feature: Finding inside the buffer
     When I press "/" in the editor
     Then the in-file search is open
     And the search is not open
+
+  Scenario: The search strip takes two of the editor's code rows
+    When I press "/" in the editor
+    Then the editor shows 14 code rows
+
+  Scenario: The strip keeps its rows after Enter hands the keyboard to the buffer
+    Given I press "/" in the editor
+    And I type "state" into the in-file search
+    When I press the key "Enter"
+    Then the editor shows 14 code rows
+
+  Scenario: Escape ends the search and gives the code its rows back
+    Given I press "/" in the editor
+    And I type "state" into the in-file search
+    And I press the key "Enter"
+    When I press "Escape" in the editor
+    Then the in-file search is not open
+    And the editor shows 16 code rows
+
+  Scenario: The strip's caret follows Left, Right and Backspace in the middle of the query
+    Given I press "/" in the editor
+    And I type "othxer" into the in-file search
+    And I press the key "Left"
+    And I press the key "Left"
+    And I press the key "Left"
+    And I press the key "Right"
+    When I press the key "Backspace"
+    Then the in-file search query is "other"
+    And the search strip's caret is at column 4 of the query
 
   Scenario: The cursor moves to the closest match as the query is typed
     Given I press "/" in the editor

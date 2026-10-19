@@ -7884,12 +7884,22 @@ pub fn fits_in(state: &State, panes: &layout::Layout) -> (usize, usize, usize) {
     let filter = tree::filter_rows(state) as u16 + story::title_rows(state) as u16;
     (
         panes.tree.height.saturating_sub(2 + filter) as usize,
-        panes.editor.height.saturating_sub(2) as usize,
+        panes
+            .editor
+            .height
+            .saturating_sub(2 + editor_strip_rows(state, panes.editor.height)) as usize,
         panes
             .editor
             .width
             .saturating_sub(2 + gutter(state) + minimap::width(state)) as usize,
     )
+}
+
+pub fn editor_strip_rows(state: &State, height: u16) -> u16 {
+    match state.find {
+        Some(_) if height > 4 => 2,
+        _ => 0,
+    }
 }
 
 fn editor_focus(state: &State, rows: &[preview::Row]) -> (usize, usize) {
@@ -8238,34 +8248,35 @@ fn under_cursor(state: &State, places: &[Place]) -> Option<usize> {
     })
 }
 
-pub fn find_line(state: &State) -> Vec<(String, Option<FindIcon>)> {
-    let Some(find) = state.find.as_ref() else {
-        return Vec::new();
-    };
-    let text = find.query.shown();
-    let query = match find.keys {
-        FindKeys::Query => {
-            let at = find.query.column.saturating_sub(1);
-            let before: String = text.chars().take(at).collect();
-            let after: String = text.chars().skip(at).collect();
-            format!("/{before}█{after}")
-        }
-        _ => format!("/{text}"),
-    };
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FindLine {
+    pub query: String,
+    pub caret: Option<usize>,
+    pub count: String,
+}
+
+pub fn find_line(state: &State) -> Option<FindLine> {
+    let find = state.find.as_ref()?;
+    let query = find.query.shown().to_string();
     let places = matches(state, ..);
     let count = match (under_cursor(state, &places), places.len()) {
-        (_, 0) if text.is_empty() => String::new(),
+        (_, 0) if query.is_empty() => String::new(),
         (_, 0) => "no match".to_string(),
         (Some(at), all) => format!("{} of {all}", at + 1),
         (None, all) => format!("{all} found"),
     };
-    let mut pieces = vec![(format!(" {query} "), None), (count, None)];
-    for (icon, label) in FIND_ICONS {
-        pieces.push((" ".to_string(), None));
-        pieces.push((label.to_string(), Some(icon)));
+    Some(FindLine {
+        query,
+        caret: (find.keys == FindKeys::Query).then(|| find.query.column.saturating_sub(1)),
+        count,
+    })
+}
+
+pub fn find_strip(state: &State, editor: layout::Area) -> Option<layout::FindStrip> {
+    if editor_strip_rows(state, editor.height) == 0 {
+        return None;
     }
-    pieces.push((" ".to_string(), None));
-    pieces
+    Some(layout::find_strip(editor, &find_line(state)?))
 }
 
 pub fn asked_of_git(state: &State) -> impl Iterator<Item = &PathBuf> {
@@ -11931,5 +11942,65 @@ mod tests {
         .0;
         assert_eq!(swiped.editor_hscroll, 0);
         assert_eq!(swiped.search.as_ref().unwrap().scroll, 0);
+    }
+
+    #[test]
+    fn the_search_strip_takes_two_editor_rows_while_the_search_is_on() {
+        let mut state = update(
+            &State::default(),
+            Event::Resized {
+                width: 120,
+                height: 30,
+            },
+        )
+        .0;
+        let rows = fits(&state).1;
+        assert_eq!(editor_strip_rows(&state, 20), 0);
+        state.find = Some(finding("x"));
+        assert_eq!(editor_strip_rows(&state, 20), 2);
+        assert_eq!(
+            editor_strip_rows(&state, 5),
+            2,
+            "two strip rows and one code row"
+        );
+        assert_eq!(editor_strip_rows(&state, 4), 0, "no room for a code row");
+        assert_eq!(fits(&state).1, rows - 2);
+    }
+
+    #[test]
+    fn the_find_line_holds_the_query_its_caret_and_the_count() {
+        let mut state = State::default();
+        let path = PathBuf::from("/w/a.rs");
+        state.current_buffer = Some(path.clone());
+        state.buffers.insert(
+            path.clone(),
+            Buffer::open("fn update(state)\nfn other(state)\n", false, 4),
+        );
+        assert_eq!(find_line(&state), None);
+        state.find = Some(finding("state"));
+        assert_eq!(
+            find_line(&state),
+            Some(FindLine {
+                query: "state".to_string(),
+                caret: None,
+                count: "2 found".to_string(),
+            })
+        );
+        let find = state.find.as_mut().expect("on");
+        find.keys = FindKeys::Query;
+        find.query.arrow(Direction::Left);
+        state.buffers.get_mut(&path).expect("open").column = 12;
+        assert_eq!(
+            find_line(&state),
+            Some(FindLine {
+                query: "state".to_string(),
+                caret: Some(4),
+                count: "1 of 2".to_string(),
+            })
+        );
+        state.find = Some(finding("zzz"));
+        assert_eq!(find_line(&state).expect("on").count, "no match");
+        state.find = Some(finding(""));
+        assert_eq!(find_line(&state).expect("on").count, "");
     }
 }

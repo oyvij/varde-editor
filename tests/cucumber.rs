@@ -7606,18 +7606,31 @@ fn replace_box_closed(world: &mut VardeWorld) {
 #[when(expr = "I click the {string} icon on the in-file search line")]
 fn click_find_icon(world: &mut VardeWorld, icon: String) {
     let icon = find_icon(&icon);
-    let editor = world.panes().editor;
-    let mut column = editor.x + 1;
-    for (text, piece) in varde::find_line(&world.state) {
-        if piece == Some(icon) {
-            break;
-        }
-        column += UnicodeWidthStr::width(text.as_str()) as u16;
-    }
-    let row = editor.bottom() - 1;
+    let strip = varde::find_strip(&world.state, world.panes().editor).expect("a search strip");
+    let (_, _, at) = strip
+        .icons
+        .into_iter()
+        .find(|(each, _, _)| *each == icon)
+        .expect("the icon on the strip");
     world.pointer = mouse::Pointer::default();
-    world.report(mouse::Kind::LeftDown, column, row);
-    world.report(mouse::Kind::LeftUp, column, row);
+    world.report(mouse::Kind::LeftDown, at.x, at.y);
+    world.report(mouse::Kind::LeftUp, at.x, at.y);
+}
+
+#[then(expr = "the editor shows {int} code rows")]
+fn editor_code_rows(world: &mut VardeWorld, rows: usize) {
+    assert_eq!(varde::fits_in(&world.state, &world.panes()).1, rows);
+}
+
+#[then(expr = "the search strip's caret is at column {int} of the query")]
+fn strip_caret_at(world: &mut VardeWorld, column: u16) {
+    let strip = varde::find_strip(&world.state, world.panes().editor).expect("a search strip");
+    let (x, _) = strip.caret.expect("a caret in the query");
+    assert_eq!(
+        x - strip.field.x,
+        column,
+        "the slash takes the field's first column"
+    );
 }
 
 #[when(expr = "I press Escape during the in-file search")]

@@ -1053,18 +1053,22 @@ fn pressed_in_find(state: &State, panes: &Layout, input: Input) -> Option<Vec<Ev
             (None, _) => Vec::new(),
         });
     }
-    if input.row + 1 != panes.editor.bottom() {
+    let strip = crate::find_strip(state, panes.editor)?;
+    let rows = Area {
+        height: 2,
+        ..strip.rule
+    };
+    if !rows.holds(input.column, input.row) {
         return None;
     }
-    let mut at = panes.editor.x + 1;
-    for (text, icon) in crate::find_line(state) {
-        let width = UnicodeWidthStr::width(text.as_str()) as u16;
-        if (at..at + width).contains(&input.column) {
-            return Some(icon?.pressed());
-        }
-        at += width;
-    }
-    None
+    Some(
+        strip
+            .icons
+            .iter()
+            .find(|(_, _, at)| at.holds(input.column, input.row))
+            .map(|(icon, _, _)| icon.pressed())
+            .unwrap_or_default(),
+    )
 }
 
 fn on_hover(state: &State, panes: &Layout, input: Input) -> bool {
@@ -1494,6 +1498,42 @@ mod tests {
         );
         assert_eq!(click(&state, spot.x + 11, spot.y + 3), vec![]);
         assert_eq!(click(&state, spot.x + 3, spot.y), vec![], "the border");
+    }
+
+    #[test]
+    fn a_press_on_the_search_strip_presses_only_the_icons_drawn_there() {
+        let searching = |query: &str| {
+            let mut state = workspace();
+            state.find = Some(crate::Find {
+                query: crate::editor::Buffer::text_box(query),
+                origin: Place { line: 1, column: 1 },
+                case: crate::search::Case::Smart,
+                extent: crate::search::Extent::Anywhere,
+                keys: crate::FindKeys::Away,
+            });
+            state
+        };
+        let editor = panes(120, 26, 30, None, 0, 0, Shapes::default()).editor;
+        let short = searching("state");
+        let strip = crate::find_strip(&short, editor).expect("room for the strip");
+        for (icon, _, at) in &strip.icons {
+            assert_eq!(click(&short, at.x, at.y), icon.pressed(), "{icon:?}");
+            assert_eq!(
+                click(&short, at.right() - 1, at.y),
+                icon.pressed(),
+                "{icon:?}"
+            );
+        }
+        let (dropped, _, spot) = *strip.icons.last().expect("an icon");
+        let long = searching(&"x".repeat(usize::from(spot.x - strip.field.x)));
+        let narrowed = crate::find_strip(&long, editor).expect("room for the strip");
+        assert!(narrowed.icons.iter().all(|(icon, _, _)| *icon != dropped));
+        assert_eq!(click(&long, spot.x, spot.y), vec![]);
+        assert_eq!(
+            click(&short, strip.field.x + 2, strip.rule.y),
+            vec![],
+            "the rule"
+        );
     }
 
     const CELL: Place = Place { line: 5, column: 9 };
