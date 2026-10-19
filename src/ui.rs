@@ -4830,7 +4830,7 @@ mod tests {
             .insert(path.clone(), varde::editor::Buffer::open(&text, false, 4));
         let tokens = highlight::plain(&text);
         let area = ratatui::layout::Rect::new(0, 0, 60, 12);
-        for (scroll, rows) in [(0, 10), (9_990, 10), (19_995, 6)] {
+        for (scroll, rows) in [(0, 8), (9_990, 8), (19_995, 6)] {
             state.editor_scroll = scroll;
             let lines = source_lines(
                 &state,
