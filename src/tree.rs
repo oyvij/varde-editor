@@ -62,7 +62,7 @@ pub fn highlighted(state: &State) -> Option<PathBuf> {
     }
 }
 
-pub fn has_filter(view: View) -> bool {
+pub fn offers_filter(view: View) -> bool {
     match view {
         View::Edit | View::Knowledge => true,
         View::Review | View::Story => false,
@@ -71,7 +71,7 @@ pub fn has_filter(view: View) -> bool {
 
 pub fn filter_rows(state: &State) -> usize {
     let on = state.filter_keys == FilterKeys::Box || !state.filter.is_empty();
-    if has_filter(state.view) && on {
+    if offers_filter(state.view) && on {
         2
     } else {
         0

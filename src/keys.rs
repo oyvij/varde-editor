@@ -1522,7 +1522,7 @@ fn collecting(state: &State, drafts: &mut Drafts, event: KeyEvent) -> Option<Vec
     if typing_a_filter(state) {
         return Some(filter_box(state, event));
     }
-    if state.focus == Pane::Tree && tree::has_filter(state.view) && typed(event) == Some('/') {
+    if state.focus == Pane::Tree && tree::offers_filter(state.view) && typed(event) == Some('/') {
         return Some(vec![Event::OpenFilter]);
     }
     None

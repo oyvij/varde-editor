@@ -368,6 +368,14 @@ Feature: Filtering the file tree
     When I press the key "Escape"
     Then the tree list fits 19 rows
 
+  Scenario: Escape in the filtered tree hides the strip
+    Given the screen is 30 rows by 120 columns
+    And I filter by "main"
+    And I click in the editor pane
+    And I click in the tree pane
+    When I press the key "Escape"
+    Then the tree list fits 19 rows
+
   Scenario: An empty box losing the keyboard hides the strip
     Given the screen is 30 rows by 120 columns
     And I filter by ""

@@ -8836,6 +8836,7 @@ fn spine_lists(world: &mut VardeWorld, step: &Step) {
 
 #[then(expr = "the tree pane has no filter box")]
 fn tree_has_no_filter_box(world: &mut VardeWorld) {
+    assert!(!tree::offers_filter(world.state.view));
     assert_eq!(tree::filter_rows(&world.state), 0);
 }
 
