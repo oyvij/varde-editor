@@ -414,7 +414,7 @@ fn extension(lowered: &str) -> Option<&str> {
     }
 }
 
-pub fn opens_externally(name: &str, is_dir: bool) -> bool {
+fn opens_externally(name: &str, is_dir: bool) -> bool {
     let lowered = name.to_ascii_lowercase();
     let Some(extension) = extension(&lowered).filter(|_| !is_dir) else {
         return false;
