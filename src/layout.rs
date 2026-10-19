@@ -462,13 +462,126 @@ pub fn inquiry_box(width: u16, height: u16) -> Area {
     overlay(width, height, INQUIRY_ROWS, width.saturating_sub(4).min(72))
 }
 
-pub fn replace_box(editor: Area) -> Area {
-    let width = editor.width.saturating_sub(2).min(44);
-    Area {
-        x: (editor.x + editor.width).saturating_sub(1 + width),
-        y: editor.y + 1,
-        width,
-        height: editor.height.saturating_sub(2).min(5),
+pub const FIND_STRIP_ROWS: u16 = 2;
+pub const REPLACE_STRIP_ROWS: u16 = FIND_STRIP_ROWS + 1;
+pub const WITH_LABEL: &str = "with ";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FindStrip {
+    pub rule: Area,
+    pub field: Area,
+    pub caret: Option<(u16, u16)>,
+    pub count: Option<Area>,
+    pub icons: Vec<(crate::FindIcon, &'static str, Area)>,
+    pub with: Option<WithRow>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WithRow {
+    pub field: Area,
+    pub buttons: Vec<(crate::ReplaceField, &'static str, Area)>,
+}
+
+fn text_width(text: &str) -> u16 {
+    UnicodeWidthStr::width(text) as u16
+}
+
+fn right_aligned<T: Copy>(
+    row: Area,
+    taken: u16,
+    pieces: &[(T, &'static str)],
+) -> Vec<(T, &'static str, Area)> {
+    let mut shown = pieces.len();
+    while shown > 0
+        && taken
+            + pieces[..shown]
+                .iter()
+                .map(|(_, label)| text_width(label) + 1)
+                .sum::<u16>()
+            + 1
+            > row.width
+    {
+        shown -= 1;
+    }
+    let mut right = row.right().saturating_sub(1);
+    let mut placed: Vec<_> = pieces[..shown]
+        .iter()
+        .rev()
+        .map(|(piece, label)| {
+            right = right.saturating_sub(text_width(label));
+            let at = Area {
+                x: right,
+                width: text_width(label),
+                ..row
+            };
+            right = right.saturating_sub(1);
+            (*piece, *label, at)
+        })
+        .collect();
+    placed.reverse();
+    placed
+}
+
+pub fn find_strip(editor: Area, line: &crate::FindLine) -> FindStrip {
+    let rows = match line.with {
+        Some(_) => REPLACE_STRIP_ROWS,
+        None => FIND_STRIP_ROWS,
+    };
+    let rule = Area {
+        x: editor.x + 1,
+        y: editor.bottom().saturating_sub(1 + rows),
+        width: editor.width.saturating_sub(2),
+        height: 1,
+    };
+    let field = Area {
+        y: rule.y + 1,
+        ..rule
+    };
+    let count = text_width(&line.count);
+    let query = 1 + text_width(&line.query) + 1;
+    let spaced_count = if count == 0 { 0 } else { count + 1 };
+    let icons = right_aligned(field, query + spaced_count, &crate::FIND_ICONS);
+    let count = (count > 0 && query + spaced_count < field.width).then(|| {
+        let end = icons
+            .first()
+            .map_or(field.right().saturating_sub(1), |(_, _, at)| {
+                at.x.saturating_sub(1)
+            });
+        Area {
+            x: end.saturating_sub(count),
+            width: count,
+            ..field
+        }
+    });
+    let with = line.with.as_ref().map(|with| {
+        let field = Area {
+            y: field.y + 1,
+            ..field
+        };
+        let taken = text_width(WITH_LABEL) + text_width(&with.text) + 1;
+        WithRow {
+            field,
+            buttons: right_aligned(field, taken, &crate::REPLACE_BUTTONS),
+        }
+    });
+    let query_caret = line.caret.map(|at| {
+        let before: String = line.query.chars().take(at).collect();
+        (field.x + 1 + text_width(&before), field.y)
+    });
+    let with_caret = line.with.as_ref().and_then(|with| {
+        let before: String = with.text.chars().take(with.caret?).collect();
+        Some((
+            field.x + text_width(WITH_LABEL) + text_width(&before),
+            field.y + 1,
+        ))
+    });
+    FindStrip {
+        rule,
+        field,
+        caret: query_caret.or(with_caret),
+        count,
+        icons,
+        with,
     }
 }
 
@@ -489,46 +602,6 @@ pub fn command_list(editor: Area, rows: usize, screen_height: u16, widest: u16) 
         width: widest.saturating_add(5).min(editor.width),
         height,
     }
-}
-
-pub fn replace_toggles(spot: Area) -> Vec<(crate::FindIcon, &'static str, Area)> {
-    let mut right = spot.right().saturating_sub(2);
-    let mut toggles: Vec<_> = crate::FIND_ICONS
-        .iter()
-        .filter(|(icon, _)| matches!(icon, crate::FindIcon::Case | crate::FindIcon::Word))
-        .map(|(icon, label)| {
-            let width = label.len() as u16;
-            right = right.saturating_sub(width);
-            let at = Area {
-                x: right,
-                y: spot.y + 1,
-                width,
-                height: 1,
-            };
-            right = right.saturating_sub(1);
-            (*icon, *label, at)
-        })
-        .collect();
-    toggles.reverse();
-    toggles
-}
-
-pub fn replace_buttons(spot: Area) -> Vec<(crate::ReplaceField, Area)> {
-    let mut x = spot.x + 2;
-    crate::REPLACE_BUTTONS
-        .iter()
-        .map(|(field, label)| {
-            let width = label.len() as u16;
-            let at = Area {
-                x,
-                y: spot.y + 3,
-                width,
-                height: 1,
-            };
-            x += width + 1;
-            (*field, at)
-        })
-        .collect()
 }
 
 pub fn search_hit_rows(width: u16, height: u16) -> usize {
@@ -1319,25 +1392,6 @@ mod tests {
     }
 
     #[test]
-    fn the_replace_box_sits_inside_the_editors_top_right_corner() {
-        let editor = Area {
-            x: 30,
-            y: 0,
-            width: 60,
-            height: 20,
-        };
-        let spot = super::replace_box(editor);
-        assert_eq!((spot.x, spot.y, spot.width, spot.height), (45, 1, 44, 5));
-        let narrow = Area {
-            width: 20,
-            height: 4,
-            ..editor
-        };
-        let spot = super::replace_box(narrow);
-        assert_eq!((spot.x, spot.y, spot.width, spot.height), (31, 1, 18, 2));
-    }
-
-    #[test]
     fn the_command_list_sits_under_the_command_line_when_the_screen_has_room() {
         let editor = Area {
             x: 30,
@@ -1373,30 +1427,144 @@ mod tests {
         assert_eq!((spot.x, spot.y, spot.width, spot.height), (30, 4, 20, 7));
     }
 
-    #[test]
-    fn the_replace_boxs_toggle_and_buttons_have_one_place_each() {
-        let spot = Area {
-            x: 45,
-            y: 1,
-            width: 44,
-            height: 5,
+    fn strip_at_width(width: u16) -> super::FindStrip {
+        let editor = Area {
+            x: 30,
+            y: 0,
+            width,
+            height: 20,
         };
-        let toggles: Vec<(crate::FindIcon, u16, u16, u16)> = super::replace_toggles(spot)
+        super::find_strip(
+            editor,
+            &crate::FindLine {
+                query: "state".to_string(),
+                caret: Some(2),
+                count: "2 found".to_string(),
+                with: None,
+            },
+        )
+    }
+
+    fn replacing_at_width(width: u16) -> super::FindStrip {
+        let editor = Area {
+            x: 30,
+            y: 0,
+            width,
+            height: 20,
+        };
+        super::find_strip(
+            editor,
+            &crate::FindLine {
+                query: "state".to_string(),
+                caret: None,
+                count: "2 found".to_string(),
+                with: Some(crate::Replacement {
+                    text: "status".to_string(),
+                    caret: Some(2),
+                }),
+            },
+        )
+    }
+
+    fn buttons_of(strip: &super::FindStrip) -> Vec<(crate::ReplaceField, u16, u16, u16)> {
+        strip
+            .with
             .iter()
-            .map(|(icon, _, at)| (*icon, at.x, at.y, at.width))
-            .collect();
+            .flat_map(|row| &row.buttons)
+            .map(|(button, _, at)| (*button, at.x, at.y, at.width))
+            .collect()
+    }
+
+    #[test]
+    fn the_with_row_sits_under_the_query_with_its_buttons_right_aligned() {
+        let strip = replacing_at_width(60);
+        assert_eq!((strip.rule.y, strip.field.y), (16, 17));
+        let with = strip.with.as_ref().expect("a with row");
+        assert_eq!((with.field.x, with.field.y, with.field.width), (31, 18, 58));
+        assert_eq!(strip.caret, Some((38, 18)), "after \"with \" and \"st\"");
         assert_eq!(
-            toggles,
+            buttons_of(&strip),
             vec![
-                (crate::FindIcon::Word, 76, 2, 6),
-                (crate::FindIcon::Case, 83, 2, 4)
+                (crate::ReplaceField::Replace, 65, 18, 9),
+                (crate::ReplaceField::ReplaceAll, 75, 18, 13),
             ]
         );
-        let buttons: Vec<(u16, u16, u16)> = super::replace_buttons(spot)
+        assert_eq!(
+            icons_of(&strip).len(),
+            4,
+            "the query row keeps its own icons"
+        );
+        assert!(strip.icons.iter().all(|(_, _, at)| at.y == 17));
+    }
+
+    #[test]
+    fn a_narrow_with_row_drops_its_buttons_from_the_right_and_never_the_replacement() {
+        assert_eq!(
+            buttons_of(&replacing_at_width(36)),
+            vec![(crate::ReplaceField::Replace, 55, 18, 9)]
+        );
+        for width in [20, 8] {
+            let strip = replacing_at_width(width);
+            assert_eq!(buttons_of(&strip), vec![], "width {width}");
+            assert_eq!(strip.caret, Some((38, 18)), "width {width}");
+        }
+    }
+
+    fn icons_of(strip: &super::FindStrip) -> Vec<(crate::FindIcon, u16, u16)> {
+        strip
+            .icons
             .iter()
-            .map(|(_, at)| (at.x, at.y, at.width))
-            .collect();
-        assert_eq!(buttons, vec![(47, 4, 9), (57, 4, 13)]);
+            .map(|(icon, _, at)| (*icon, at.x, at.width))
+            .collect()
+    }
+
+    #[test]
+    fn the_search_strip_sits_at_the_foot_of_the_editor_inside_its_border() {
+        let strip = strip_at_width(60);
+        assert_eq!((strip.rule.x, strip.rule.y, strip.rule.width), (31, 17, 58));
+        assert_eq!(
+            (strip.field.x, strip.field.y, strip.field.width),
+            (31, 18, 58)
+        );
+        assert_eq!(strip.caret, Some((34, 18)), "after the slash and \"st\"");
+        assert_eq!(
+            strip.count.map(|at| (at.x, at.y, at.width)),
+            Some((45, 18, 7))
+        );
+        assert_eq!(
+            icons_of(&strip),
+            vec![
+                (crate::FindIcon::Case, 53, 4),
+                (crate::FindIcon::Word, 58, 6),
+                (crate::FindIcon::Replace, 65, 9),
+                (crate::FindIcon::ReplaceAll, 75, 13),
+            ]
+        );
+        assert!(strip.icons.iter().all(|(_, _, at)| at.y == 18));
+    }
+
+    #[test]
+    fn a_narrow_strip_drops_icons_from_the_right_then_the_count_and_never_the_query() {
+        let two_icons = strip_at_width(36);
+        assert_eq!(
+            icons_of(&two_icons),
+            vec![
+                (crate::FindIcon::Case, 53, 4),
+                (crate::FindIcon::Word, 58, 6)
+            ]
+        );
+        assert_eq!(two_icons.count.map(|at| at.x), Some(45));
+
+        let count_only = strip_at_width(20);
+        assert!(count_only.icons.is_empty());
+        assert_eq!(count_only.count.map(|at| (at.x, at.width)), Some((41, 7)));
+
+        for width in [12, 6] {
+            let query_only = strip_at_width(width);
+            assert!(query_only.icons.is_empty(), "width {width}");
+            assert_eq!(query_only.count, None, "width {width}");
+            assert_eq!(query_only.caret, Some((34, 18)), "width {width}");
+        }
     }
 
     #[test]

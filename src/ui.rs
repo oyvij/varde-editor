@@ -145,9 +145,11 @@ pub fn draw(
         );
     }
     minimap(frame, state, &areas, chrome.tokens);
-    replace_box(frame, state, areas.panes.editor);
-    if !finding {
-        place_cursor(frame, state, &areas, typing.as_deref());
+    let caret = find_strip(frame.buffer_mut(), state, areas.panes.editor);
+    match caret {
+        Some(caret) if typing.is_none() => frame.set_cursor_position(caret),
+        _ if !finding => place_cursor(frame, state, &areas, typing.as_deref()),
+        _ => {}
     }
     match state.strip {
         layout::Group::Shells => {
@@ -1319,7 +1321,7 @@ fn tree_lines(state: &State, rows: &[Row], width: u16) -> Vec<Line<'static>> {
 }
 
 fn filter_box(frame: &mut Frame, state: &State, area: Rect) {
-    if area.height < 4 {
+    if area.height < 4 || tree::filter_rows(state) == 0 {
         return;
     }
     let active = state.filter_keys == FilterKeys::Box;
@@ -1353,10 +1355,8 @@ fn filter_box(frame: &mut Frame, state: &State, area: Rect) {
         .unwrap_or_default();
     let hint = if state.index.walking {
         format!(" {}", varde::spinner(state.tick))
-    } else if active || !query.is_empty() {
-        String::new()
     } else {
-        "filter files".to_string()
+        String::new()
     };
     frame.render_widget(
         Paragraph::new(Line::from(vec![
@@ -1752,7 +1752,11 @@ fn source_lines(
 ) -> Vec<Line<'static>> {
     let shown: Vec<usize> = story::rows(state, tokens.len())
         .skip(state.editor_scroll)
-        .take(area.height.saturating_sub(2) as usize)
+        .take(
+            area.height
+                .saturating_sub(2 + varde::editor_strip_rows(state, area.height))
+                as usize,
+        )
         .filter_map(|row| match row {
             story::Row::Code(number) => Some(number as usize),
             _ => None,
@@ -3005,61 +3009,6 @@ fn bar(kind: story::Kind) -> Color {
     }
 }
 
-fn replace_box(frame: &mut Frame, state: &State, editor: Area) {
-    let Some(find) = state.find.as_ref() else {
-        return;
-    };
-    let varde::FindKeys::Replace(field) = find.keys else {
-        return;
-    };
-    let spot = layout::replace_box(editor);
-    let on = |at| match at == field {
-        true => Style::default().add_modifier(Modifier::REVERSED),
-        false => Style::default(),
-    };
-    let text = |buffer: &varde::editor::Buffer, at| match at == field {
-        true => with_caret(buffer.shown(), buffer.column),
-        false => vec![Span::raw(buffer.shown().to_string())],
-    };
-    let mut find_row = vec![Span::raw(" find  ")];
-    find_row.extend(text(&find.query, varde::ReplaceField::Find));
-    let mut with_row = vec![Span::raw(" with  ")];
-    with_row.extend(text(&state.replace_with, varde::ReplaceField::With));
-    let footer = keys::REPLACE_BOX_KEYS
-        .iter()
-        .map(|(key, word)| format!("{key} {word}"))
-        .collect::<Vec<_>>()
-        .join(" · ");
-    let area = rect(spot);
-    frame.render_widget(Clear, area);
-    frame.render_widget(
-        Paragraph::new(vec![Line::from(find_row), Line::from(with_row)]).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_type(BorderType::Rounded)
-                .title(" replace ")
-                .title_bottom(Line::from(Span::styled(
-                    format!(" {footer} "),
-                    Style::default().fg(Color::DarkGray),
-                ))),
-        ),
-        area,
-    );
-    for (icon, label, at) in layout::replace_toggles(spot) {
-        let style = match find.lit(icon) {
-            true => Style::default().fg(Color::Yellow),
-            false => Style::default().fg(Color::DarkGray),
-        };
-        frame.render_widget(Span::styled(label, style), rect(at));
-    }
-    for ((at, label), (_, spot)) in varde::REPLACE_BUTTONS
-        .iter()
-        .zip(layout::replace_buttons(spot))
-    {
-        frame.render_widget(Span::styled(*label, on(*at)), rect(spot));
-    }
-}
-
 fn cheatsheet_widget(state: &State) -> Paragraph<'static> {
     let rows = keys::cheatsheet_rows(state);
     let column = rows.iter().map(|(keys, _)| keys.len()).max().unwrap_or(0);
@@ -3388,27 +3337,80 @@ fn over_buffer_line(
     );
 }
 
-fn command_line(state: &State, command: Option<&str>) -> Line<'static> {
-    let yellow = Style::default().fg(Color::Yellow);
-    if let Some(line) = command {
-        return Line::from(Span::styled(format!(" {line} "), yellow));
-    }
-    let Some(find) = state.find.as_ref() else {
-        return Line::default();
+fn command_line(command: Option<&str>) -> Line<'static> {
+    command.map_or_else(Line::default, |line| {
+        Line::from(Span::styled(
+            format!(" {line} "),
+            Style::default().fg(Color::Yellow),
+        ))
+    })
+}
+
+fn find_strip(
+    buffer: &mut ratatui::buffer::Buffer,
+    state: &State,
+    editor: Area,
+) -> Option<(u16, u16)> {
+    use ratatui::widgets::Widget;
+    let find = state.find.as_ref()?;
+    let (line, strip) = varde::find_strip(state, editor)?;
+    let (rule, field) = (rect(strip.rule), rect(strip.field));
+    Clear.render(rule, buffer);
+    Clear.render(field, buffer);
+    let dim = Style::default().fg(Color::DarkGray);
+    Paragraph::new("─".repeat(rule.width as usize))
+        .style(dim)
+        .render(rule, buffer);
+    let label = |text: &'static str, typing: bool| {
+        Span::styled(
+            text,
+            Style::default().fg(if typing { Color::Cyan } else { Color::DarkGray }),
+        )
     };
-    let pieces = varde::find_line(state).into_iter().map(|(text, icon)| {
-        let style = match icon {
-            Some(icon) if !find.lit(icon) => Style::default().fg(Color::DarkGray),
-            _ => yellow,
-        };
-        match (icon, find.keys) {
-            (Some(icon), varde::FindKeys::Icon(on)) if icon == on => {
-                Span::styled(text, style.add_modifier(Modifier::REVERSED))
-            }
-            _ => Span::styled(text, style),
+    Line::from(vec![
+        label("/", line.caret.is_some()),
+        Span::raw(line.query),
+    ])
+    .render(field, buffer);
+    if let (Some(with), Some(replacement)) = (strip.with, line.with) {
+        let footer = keys::REPLACE_BOX_KEYS
+            .iter()
+            .map(|(key, word)| format!("{key} {word}"))
+            .collect::<Vec<_>>()
+            .join(" · ");
+        Line::from(Span::styled(format!(" {footer} "), dim))
+            .right_aligned()
+            .render(rule, buffer);
+        Clear.render(rect(with.field), buffer);
+        Line::from(vec![
+            label(layout::WITH_LABEL, replacement.caret.is_some()),
+            Span::raw(replacement.text),
+        ])
+        .render(rect(with.field), buffer);
+        for (button, text, at) in with.buttons {
+            let style = match find.keys == varde::FindKeys::Replace(button) {
+                true => Style::default().add_modifier(Modifier::REVERSED),
+                false => Style::default(),
+            };
+            Span::styled(text, style).render(rect(at), buffer);
         }
-    });
-    Line::from(pieces.collect::<Vec<_>>())
+    }
+    let yellow = Style::default().fg(Color::Yellow);
+    if let Some(at) = strip.count {
+        Span::styled(line.count, yellow).render(rect(at), buffer);
+    }
+    for (icon, label, at) in strip.icons {
+        let style = match find.lit(icon) {
+            true => yellow,
+            false => Style::default().fg(Color::DarkGray),
+        };
+        let style = match find.keys == varde::FindKeys::Icon(icon) {
+            true => style.add_modifier(Modifier::REVERSED),
+            false => style,
+        };
+        Span::styled(label, style).render(rect(at), buffer);
+    }
+    strip.caret
 }
 
 fn at_caret(query: &varde::editor::Buffer) -> (String, String) {
@@ -3431,7 +3433,7 @@ fn editor_block(
     pane_block(title, state, Pane::Editor)
         .title(right_title(state, room, width))
         .title_bottom(Line::from(footer).right_aligned())
-        .title_bottom(command_line(state, command).left_aligned())
+        .title_bottom(command_line(command).left_aligned())
 }
 
 fn diff_rows(
@@ -3541,7 +3543,7 @@ fn diff_widget(
                 state,
                 Pane::Editor,
             )
-            .title_bottom(command_line(state, command).left_aligned()),
+            .title_bottom(command_line(command).left_aligned()),
         )
 }
 
@@ -4724,7 +4726,38 @@ mod tests {
             faint(None),
         )
         .render(area, &mut buffer);
+        super::find_strip(
+            &mut buffer,
+            state,
+            super::layout::Area {
+                x: 0,
+                y: 0,
+                width: 60,
+                height: rows + 2,
+            },
+        );
         buffer
+    }
+
+    #[test]
+    fn a_command_is_typed_on_the_border_while_the_search_has_the_strip() {
+        use ratatui::widgets::Widget;
+        let (state, tokens, marks) = decorated().remove(0);
+        let area = ratatui::layout::Rect::new(0, 0, 60, 16);
+        let mut buffer = ratatui::buffer::Buffer::empty(area);
+        super::editor_widget(
+            &state,
+            Some(":wq█"),
+            (&tokens, &marks),
+            (&[], &[]),
+            &[],
+            area,
+            faint(None),
+        )
+        .render(area, &mut buffer);
+        let row = |y: u16| -> String { (0..60).map(|x| buffer[(x, y)].symbol()).collect() };
+        assert!(row(15).starts_with("╰ :wq█ "), "{}", row(15));
+        assert!(!row(15).contains("/step"), "{}", row(15));
     }
 
     #[test]
@@ -4765,7 +4798,7 @@ mod tests {
             .insert(path.clone(), varde::editor::Buffer::open(&text, false, 4));
         let tokens = highlight::plain(&text);
         let area = ratatui::layout::Rect::new(0, 0, 60, 12);
-        for (scroll, rows) in [(0, 10), (9_990, 10), (19_995, 6)] {
+        for (scroll, rows) in [(0, 8), (9_990, 8), (19_995, 6)] {
             state.editor_scroll = scroll;
             let lines = source_lines(
                 &state,

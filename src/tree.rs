@@ -62,10 +62,19 @@ pub fn highlighted(state: &State) -> Option<PathBuf> {
     }
 }
 
-pub fn filter_rows(view: View) -> usize {
+pub fn offers_filter(view: View) -> bool {
     match view {
-        View::Edit | View::Knowledge => 2,
-        View::Review | View::Story => 0,
+        View::Edit | View::Knowledge => true,
+        View::Review | View::Story => false,
+    }
+}
+
+pub fn filter_rows(state: &State) -> usize {
+    let on = state.filter_keys == FilterKeys::Box || !state.filter.is_empty();
+    if offers_filter(state.view) && on {
+        2
+    } else {
+        0
     }
 }
 
@@ -428,12 +437,33 @@ fn opens_externally(name: &str, is_dir: bool) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        icon, opens_externally, row_actions, visible_rows, IconKind, FOLDERS, ICONS, NAMES, PLAIN,
+        filter_rows, icon, opens_externally, row_actions, visible_rows, IconKind, FOLDERS, ICONS,
+        NAMES, PLAIN,
     };
     use crate::review::{GitFile, GitStatus};
     use crate::tree::Entry;
-    use crate::{State, View};
+    use crate::{FilterKeys, State, View};
     use std::path::PathBuf;
+
+    #[test]
+    fn the_filter_takes_its_strips_rows_only_while_it_is_on() {
+        let filtering = |view, filter_keys, filter: &str| {
+            filter_rows(&State {
+                view,
+                filter_keys,
+                filter: filter.to_string(),
+                ..State::default()
+            })
+        };
+        for view in [View::Edit, View::Knowledge] {
+            assert_eq!(filtering(view, FilterKeys::Away, ""), 0, "{view:?} off");
+            assert_eq!(filtering(view, FilterKeys::Box, ""), 2, "{view:?} box");
+            assert_eq!(filtering(view, FilterKeys::Away, "a"), 2, "{view:?} query");
+        }
+        for view in [View::Review, View::Story] {
+            assert_eq!(filtering(view, FilterKeys::Box, "a"), 0, "{view:?}");
+        }
+    }
 
     #[test]
     fn actions_come_from_the_rows_on_screen() {

@@ -1,8 +1,11 @@
 Feature: Finding inside the buffer
 
-  `/` searches the file being edited. The query is typed on the line the editor
-  already uses for `:` commands rather than in the floating modal, which is what
-  keeps finding *here* visibly different from finding *everywhere*.
+  `/` searches the file being edited. The query is typed on a strip at the foot
+  of the editor pane, laid out like the tree's filter, rather than in the
+  floating modal, which is what keeps finding *here* visibly different from
+  finding *everywhere*. The strip shows while the search is on, with the count
+  and the icons beside the query, and the code gives up its rows to it, so it
+  never covers the line the cursor is on.
 
   The cursor moves to the closest match as each character arrives, so you can
   stop typing the moment you have arrived. Escape puts you back where the search
@@ -10,7 +13,7 @@ Feature: Finding inside the buffer
   handed to project search without retyping it.
 
   The search stays on until it is ended: Enter hands the keyboard to the buffer
-  and leaves the line, its count and its highlights where they are, and `/`
+  and leaves the strip, its count and its highlights where they are, and `/`
   goes back into the query. Escape in the buffer ends it where the cursor is.
 
   Matching is the project searcher's, handed a single file rather than the whole
@@ -20,8 +23,11 @@ Feature: Finding inside the buffer
   word, so `state` stops finding `states` and `restate`; a new search starts
   with it off.
 
-  `[replace]` and `[replace all]` open the replace box. Replacing edits the
-  buffer and nothing else: it is written when it is saved, like any other edit.
+  `[replace]` and `[replace all]` add a `with` row to the strip, under the
+  query, with the two buttons right-aligned beside the replacement and the
+  replace keys named on the strip's rule. The code gives up one more row to it
+  while it is open. Replacing edits the buffer and nothing else: it is written
+  when it is saved, like any other edit.
 
   Background:
     Given the workspace root is "/home/me/projects/varde"
@@ -36,6 +42,35 @@ Feature: Finding inside the buffer
     When I press "/" in the editor
     Then the in-file search is open
     And the search is not open
+
+  Scenario: The search strip takes two of the editor's code rows
+    When I press "/" in the editor
+    Then the editor shows 14 code rows
+
+  Scenario: The strip keeps its rows after Enter hands the keyboard to the buffer
+    Given I press "/" in the editor
+    And I type "state" into the in-file search
+    When I press the key "Enter"
+    Then the editor shows 14 code rows
+
+  Scenario: Escape ends the search and gives the code its rows back
+    Given I press "/" in the editor
+    And I type "state" into the in-file search
+    And I press the key "Enter"
+    When I press "Escape" in the editor
+    Then the in-file search is not open
+    And the editor shows 16 code rows
+
+  Scenario: The strip's caret follows Left, Right and Backspace in the middle of the query
+    Given I press "/" in the editor
+    And I type "othxer" into the in-file search
+    And I press the key "Left"
+    And I press the key "Left"
+    And I press the key "Left"
+    And I press the key "Right"
+    When I press the key "Backspace"
+    Then the in-file search query is "other"
+    And the search strip's caret is at column 4 of the query
 
   Scenario: The cursor moves to the closest match as the query is typed
     Given I press "/" in the editor
@@ -460,7 +495,7 @@ Feature: Finding inside the buffer
       state_x = status.x
       """
 
-  Scenario: The replace box has its own whole word toggle
+  Scenario: The strip's whole word toggle works while replace is open
     Given "src/words.rs" is open in the editor holding:
       """
       states = restate(state)
@@ -469,12 +504,20 @@ Feature: Finding inside the buffer
     And I type "state" into the in-file search
     And I press the key "Enter"
     And I click the "replace" icon on the in-file search line
-    When I click the word toggle in the replace box
+    When I click the "word" icon on the in-file search line
     Then the word toggle is lit
+    And the replace box is open
     And the highlighted matches are:
       | 1 | 18 |
 
-  Scenario: Escape closes the replace box and the search stays on
+  Scenario: The with row takes one more of the editor's code rows
+    Given I press "/" in the editor
+    And I type "state" into the in-file search
+    And I press the key "Enter"
+    When I click the "replace" icon on the in-file search line
+    Then the editor shows 13 code rows
+
+  Scenario: Escape closes the replace box, gives back its row and the search stays on
     Given I press "/" in the editor
     And I type "state" into the in-file search
     And I press the key "Enter"
@@ -482,6 +525,7 @@ Feature: Finding inside the buffer
     When I press the key "Escape"
     Then the replace box is not open
     And the in-file search query is "state"
+    And the editor shows 14 code rows
 
   Scenario: Ctrl+F searches the project for what the editor has selected
     Given I press "/" in the editor

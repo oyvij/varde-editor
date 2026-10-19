@@ -96,14 +96,16 @@ _Avoid_: navigation, movement command
 
 **In-file search**:
 Looking inside the buffer you are editing and moving the cursor to a match. Once started it stays
-on — its line on the editor's border, its highlights, `n` and `N` — until Escape, whichever pane has
-the keyboard; the query line holds the keyboard only while you type in it.
+on — its search strip at the foot of the editor pane (a rule and the query row, and the Replace
+box's `with` row while replacing, inside the pane's border; not the Strip), its highlights, `n` and `N` — until Escape, whichever pane has the
+keyboard; the query holds the keyboard only while you type in it.
 _Avoid_: local search, find
 
 **Replace box**:
-The small floating box the in-file search's replace icons open: the query, what to put in its place,
-and whether to replace the one Match at the cursor or every Match in the buffer. It edits the buffer
-and never the disk, and it shares the search's case toggle rather than holding one of its own.
+The `with` row the in-file search's replace icons add to its search strip, under the query row: what
+to put in place of the query, and whether to replace the one Match at the cursor or every Match in
+the buffer. Its keys are named on the strip's rule. It edits the buffer and never the disk, and it
+uses the query row's case and word toggles rather than holding its own.
 _Avoid_: replace dialog, substitute, find-and-replace
 
 **Match**:
