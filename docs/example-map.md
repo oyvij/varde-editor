@@ -648,7 +648,8 @@ asked "given a tree action, what command is injected?" and none asked "how does 
 A fully specified, fully tested, unreachable feature.
 
 **R12.1** Only the **focused row** offers actions. A folder offers new-file, new-directory, go-here,
-search-here and delete; a file offers only delete. Every row offers copy-path.
+search-here and delete; a file offers delete, and an html, htm, pdf, svg or image file offers
+open-externally first, before it. Every row offers copy-path.
 **R12.5** **search-here** opens F21's search box confined to that folder — the same box, with a scope
 the query keeps as it is retyped, so the folder is chosen once rather than on every keystroke.
 **R12.2** The icons are clickable, right-aligned on the row.

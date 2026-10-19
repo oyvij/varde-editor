@@ -2628,6 +2628,10 @@ fn on_trigger(state: &State, mut next: State, event: Event, wheeled: bool) -> An
                 state.shown_root().join(path).to_string_lossy().into_owned(),
             )
         }
+        Event::Trigger(Action::OpenExternally, Some(Target::File(path))) => {
+            url::Url::from_file_path(state.shown_root().join(path))
+                .map_or(vec![], |url| vec![Effect::OpenUrl(url.into())])
+        }
         Event::Trigger(action @ (Action::NewFile | Action::NewDirectory), Some(target)) => {
             let dir = match target {
                 Target::Folder(p) => p,
@@ -8593,6 +8597,7 @@ fn row_action(name: &str) -> Action {
         "search-here" => Action::SearchHere,
         "delete" => Action::Delete,
         "copy-path" => Action::CopyPath,
+        "open-externally" => Action::OpenExternally,
         other => unreachable!("unknown row action {other}"),
     }
 }

@@ -39,6 +39,33 @@ Feature: Reaching the tree actions
       | delete    |
       | copy-path |
 
+  Scenario: A focused page offers to open it externally first
+    Given "index.html" is on disk under collapsed folders
+    And the tree selection is "index.html"
+    Then the row actions offered are:
+      | open-externally |
+      | delete          |
+      | copy-path       |
+
+  Scenario: A focused source file is not offered to open externally
+    Given "main.rs" is on disk under collapsed folders
+    And the tree selection is "main.rs"
+    Then the row actions offered are:
+      | delete    |
+      | copy-path |
+
+  Scenario: Clicking the open-externally icon opens the file in its default app
+    Given "index.html" is on disk under collapsed folders
+    And the tree selection is "index.html"
+    When I click the "open-externally" action on "index.html"
+    Then the browser opens "file:///home/me/projects/varde/index.html"
+
+  Scenario: A file name with a space still opens externally
+    Given "my page.html" is on disk under collapsed folders
+    And the tree selection is "my page.html"
+    When I click the "open-externally" action on "my page.html"
+    Then the browser opens "file:///home/me/projects/varde/my%20page.html"
+
   Scenario: Rows that are not focused offer nothing
     Given the tree selection is "src"
     Then the row "src/tree.js" offers no actions
