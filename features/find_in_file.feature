@@ -517,16 +517,7 @@ Feature: Finding inside the buffer
     When I click the "replace" icon on the in-file search line
     Then the editor shows 13 code rows
 
-  Scenario: Escape gives the with row's code row back while the search stays on
-    Given I press "/" in the editor
-    And I type "state" into the in-file search
-    And I press the key "Enter"
-    And I click the "replace" icon on the in-file search line
-    When I press the key "Escape"
-    Then the in-file search is open
-    And the editor shows 14 code rows
-
-  Scenario: Escape closes the replace box and the search stays on
+  Scenario: Escape closes the replace box, gives back its row and the search stays on
     Given I press "/" in the editor
     And I type "state" into the in-file search
     And I press the key "Enter"
@@ -534,6 +525,7 @@ Feature: Finding inside the buffer
     When I press the key "Escape"
     Then the replace box is not open
     And the in-file search query is "state"
+    And the editor shows 14 code rows
 
   Scenario: Ctrl+F searches the project for what the editor has selected
     Given I press "/" in the editor

@@ -96,8 +96,8 @@ _Avoid_: navigation, movement command
 
 **In-file search**:
 Looking inside the buffer you are editing and moving the cursor to a match. Once started it stays
-on — its search strip at the foot of the editor pane (a rule and the query row, inside the pane's
-border; not the Strip), its highlights, `n` and `N` — until Escape, whichever pane has the
+on — its search strip at the foot of the editor pane (a rule and the query row, and the Replace
+box's `with` row while replacing, inside the pane's border; not the Strip), its highlights, `n` and `N` — until Escape, whichever pane has the
 keyboard; the query holds the keyboard only while you type in it.
 _Avoid_: local search, find
 
