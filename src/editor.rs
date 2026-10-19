@@ -477,15 +477,15 @@ impl Buffer {
     pub fn backspace(&mut self) {
         let (left, right) = self.either_side();
         let mut lines = self.lines();
-        let takes_the_line =
-            self.mode == Mode::Insert && self.line > 1 && lines[self.line - 1].trim().is_empty();
+        let inserting = self.mode == Mode::Insert;
+        let takes_the_line = inserting && self.line > 1 && lines[self.line - 1].trim().is_empty();
         if self.column > 1 && !takes_the_line {
             self.remember(Step::Deleting);
             let line = &mut lines[self.line - 1];
             let at = byte_index(line, self.column - 2);
             line.remove(at);
             self.column -= 1;
-            if self.mode == Mode::Insert
+            if inserting
                 && matches!((left, right), (Some(open), Some(close)) if closes(open) == Some(close))
             {
                 line.remove(byte_index(line, self.column - 1));
@@ -494,7 +494,7 @@ impl Buffer {
             self.remember(Step::Deleting);
             let removed = lines.remove(self.line - 1);
             self.line -= 1;
-            if self.mode == Mode::Insert {
+            if inserting {
                 let above = &mut lines[self.line - 1];
                 above.truncate(above.trim_end().len());
             }

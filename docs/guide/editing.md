@@ -67,8 +67,8 @@ no modifier, which is why `Alt+Backspace` is not bound there.
 
 - **Backspace** deletes backwards and joins with the line above at the start of a line. While
   inserting, a line holding only indentation counts as the start of a line too, and wherever
-  Backspace goes up a line it drops the spaces trailing the line above: the cursor lands right after
-  that line's last character that isn't a space, or at its start when nothing else is left.
+  Backspace goes up a line it drops the whitespace trailing the line above: the cursor lands right
+  after that line's last character that isn't whitespace, or at its start when nothing is left.
 - **Enter** copies the current line's indentation to the new line as-is: tabs stay tabs, three
   spaces stay three. Between the halves of a bracket pair it opens a block. The closing half moves
   to its own line and the cursor lands one level deeper. That level is the file's own shallowest

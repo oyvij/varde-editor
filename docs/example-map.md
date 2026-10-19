@@ -678,8 +678,9 @@ nothing at all. The whitespace is dropped rather than carried up, where it would
 nobody can see. Whenever insert-mode Backspace goes up a line, by this jump or by the join at column
 1, the line above loses its trailing whitespace first, in the same undo step: the cursor lands right
 after its last non-blank character, or at column 1 when nothing is left, and a join appends the
-carried-up text there. Normal-mode Backspace is unchanged. The rule is the buffer's, so the review comment box (F17) — the other multi-line
-buffer that opens in insert mode — follows it; a query box is one line and has nothing to jump to.
+carried-up text there. Normal-mode Backspace is unchanged. The rule is the buffer's, so the review
+comment box (F17) — the other multi-line buffer that opens in insert mode — follows it; a query box
+is one line and has nothing to jump to.
 **R13.7** A **half-typed command is shown** — `2d` while you are still deciding — and clears when it
 completes or is abandoned. The editor renders it on its bottom edge, with the cursor position.
 **R13.8** **The indent width is `editor.tab_width`** — F9's layered, project-scoped key, four spaces
