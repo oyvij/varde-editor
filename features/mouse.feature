@@ -635,7 +635,7 @@ Feature: The whole TUI is usable with the mouse
       When I press at line 1 column 1 in the file tree pane
       And I drag past the bottom of the file tree pane
       And I hold the drag still for 1 ticks
-      Then the tree selection is "file-06.js"
+      Then the tree selection is "file-08.js"
       And the file tree view starts at row 3
 
     Scenario: A drag that stays inside the pane holds nothing

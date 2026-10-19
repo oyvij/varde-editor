@@ -832,8 +832,10 @@ match you cannot see has not helped you.
 **R20.3** The box **completes to the best match** ahead of the cursor, narrowing as you type.
 **R20.4** An empty filter shows the tree as it was; a filter with no matches says **"no files
 match"** rather than showing an empty pane.
-**R20.6** The box is **always visible** on the tree's bottom edge, showing a dim "filter files" hint
-when idle. `/` puts the keyboard in it; Esc leaves and clears.
+**R20.6** The box shows on the tree's bottom edge **only while the filter is on**: while it has the
+keyboard, or while its query isn't empty. There is no hint; with the filter off its rows go back to
+the tree list. `/` shows it and puts the keyboard in it; Esc leaves, clears and hides it, as does an
+empty box losing the keyboard.
 **R20.5** The filter matches **the whole project**, not just expanded folders — the tree stays lazy
 (R2.5), but the filter walks once on first use and caches. Without this it could only find files you
 had already navigated to, which is the opposite of the point.

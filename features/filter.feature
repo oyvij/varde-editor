@@ -31,6 +31,11 @@ Feature: Filtering the file tree
   filtered tree, removes the filter, keeps the selection and opens the folders
   leading to it.
 
+  The box shows only while the filter is on: while it has the keyboard, or
+  while its query isn't empty. With the filter off there is nothing to see, so
+  its rows go back to the tree list, and seeing the box means the tree is
+  filtered.
+
   Opening the filter walks the project afresh, in the background, so typing
   never waits for the walk. Matches appear as the walk finds them. The filter
   searches the project as it was when the filter opened: a file created since
@@ -338,3 +343,65 @@ Feature: Filtering the file tree
     And the project gains "src/keys.rs"
     When I filter by "keys"
     Then the filtered files are empty
+
+  Scenario: With the filter off the tree list takes the strip's rows
+    Given the screen is 30 rows by 120 columns
+    Then the tree list fits 19 rows
+
+  Scenario: Slash in the tree shows the strip and puts the keyboard in it
+    Given the screen is 30 rows by 120 columns
+    And the tree pane has focus
+    When I press the key "/"
+    Then the filter box has the keyboard
+    And the tree list fits 17 rows
+
+  Scenario: A query keeps the strip while another pane has the keyboard
+    Given the screen is 30 rows by 120 columns
+    And I filter by "tree"
+    When I click in the editor pane
+    Then the filter query is "tree"
+    And the tree list fits 17 rows
+
+  Scenario: Escape hides the strip and gives its rows back to the tree list
+    Given the screen is 30 rows by 120 columns
+    And I filter by "tree"
+    When I press the key "Escape"
+    Then the tree list fits 19 rows
+
+  Scenario: Escape in the filtered tree hides the strip
+    Given the screen is 30 rows by 120 columns
+    And I filter by "main"
+    And I click in the editor pane
+    And I click in the tree pane
+    When I press the key "Escape"
+    Then the tree list fits 19 rows
+
+  Scenario: An empty box losing the keyboard hides the strip
+    Given the screen is 30 rows by 120 columns
+    And I filter by ""
+    When I click in the editor pane
+    Then the tree list fits 19 rows
+
+  Scenario: In the Knowledge view the filter off gives the strip's rows to the tree list
+    Given the home folder is "/home/me"
+    And the knowledge base is enabled with the default Vault
+    And the screen is 30 rows by 120 columns
+    When I toggle the Knowledge view
+    Then the tree list fits 19 rows
+
+  Scenario: In the Knowledge view the strip shows while the box has the keyboard
+    Given the home folder is "/home/me"
+    And the knowledge base is enabled with the default Vault
+    And the screen is 30 rows by 120 columns
+    And I toggle the Knowledge view
+    When I filter by ""
+    Then the tree list fits 17 rows
+
+  Scenario: In the Knowledge view a query keeps the strip while another pane has the keyboard
+    Given the home folder is "/home/me"
+    And the knowledge base is enabled with the default Vault
+    And the screen is 30 rows by 120 columns
+    And I toggle the Knowledge view
+    And I filter by "tree"
+    When I click in the editor pane
+    Then the tree list fits 17 rows
