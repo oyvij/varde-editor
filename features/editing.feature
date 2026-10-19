@@ -143,6 +143,19 @@ Feature: Editing a file
       """
     And the cursor is at line 1 column 4
 
+  Scenario: Joining at the start of a line drops the trailing spaces of the line above
+    Given I press "$a" in the editor
+    And I type "   " in the editor
+    And I leave insert mode
+    And I press "j0i" in the editor
+    When I press Backspace in the editor
+    Then the buffer holds:
+      """
+      onetwo
+      three
+      """
+    And the cursor is at line 1 column 4
+
   Scenario: Backspace at the start of a line joins it to an empty line above
     Given "src/blank.js" is open in the editor holding:
       """
@@ -153,6 +166,25 @@ Feature: Editing a file
     And the editor mode is insert
     And I press the Down arrow in the editor
     And I press the Down arrow in the editor
+    When I press Backspace in the editor
+    Then the buffer holds:
+      """
+      one
+      three
+      """
+    And the cursor is at line 2 column 1
+
+  Scenario: Joining at the start of a line empties a line above holding only spaces
+    Given "src/blank.js" is open in the editor holding:
+      """
+      one
+
+      three
+      """
+    And I press "ji" in the editor
+    And I type "  " in the editor
+    And I leave insert mode
+    And I press "j0i" in the editor
     When I press Backspace in the editor
     Then the buffer holds:
       """
@@ -197,6 +229,57 @@ Feature: Editing a file
       three
       """
     And the cursor is at line 2 column 1
+
+  Scenario: An indented line jumps up past the trailing spaces of the line above
+    Given I press "$a" in the editor
+    And I type "   " in the editor
+    And I press "Enter" in the editor
+    And I type "    " in the editor
+    When I press Backspace in the editor
+    Then the buffer holds:
+      """
+      one
+      two
+      three
+      """
+    And the cursor is at line 1 column 4
+
+  Scenario: An indented line jumps up onto a line above holding only spaces
+    Given "src/gap.js" is open in the editor holding:
+      """
+      one
+
+
+      three
+      """
+    And I press "ji" in the editor
+    And I type "  " in the editor
+    And I leave insert mode
+    And I press "ji" in the editor
+    And I type "    " in the editor
+    When I press Backspace in the editor
+    Then the buffer holds:
+      """
+      one
+
+      three
+      """
+    And the cursor is at line 2 column 1
+
+  Scenario: Backspace inside the indentation of a line holding text takes one character
+    Given "src/deep.js" is open in the editor holding:
+      """
+      one
+          two
+      """
+    And I press "jlli" in the editor
+    When I press Backspace in the editor
+    Then the buffer holds:
+      """
+      one
+         two
+      """
+    And the cursor is at line 2 column 2
 
   Scenario: Backspace at the very start does nothing
     Given the editor mode is insert
