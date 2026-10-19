@@ -102,9 +102,10 @@ keyboard; the query holds the keyboard only while you type in it.
 _Avoid_: local search, find
 
 **Replace box**:
-The small floating box the in-file search's replace icons open: the query, what to put in its place,
-and whether to replace the one Match at the cursor or every Match in the buffer. It edits the buffer
-and never the disk, and it shares the search's case toggle rather than holding one of its own.
+The `with` row the in-file search's replace icons add to its search strip, under the query row: what
+to put in place of the query, and whether to replace the one Match at the cursor or every Match in
+the buffer. Its keys are named on the strip's rule. It edits the buffer and never the disk, and it
+uses the query row's case and word toggles rather than holding its own.
 _Avoid_: replace dialog, substitute, find-and-replace
 
 **Match**:

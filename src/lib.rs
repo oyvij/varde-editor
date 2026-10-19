@@ -7896,9 +7896,14 @@ pub fn fits_in(state: &State, panes: &layout::Layout) -> (usize, usize, usize) {
 }
 
 pub fn editor_strip_rows(state: &State, height: u16) -> u16 {
-    match state.find {
-        Some(_) if height > 2 + layout::FIND_STRIP_ROWS => layout::FIND_STRIP_ROWS,
-        _ => 0,
+    let rows = match state.find.as_ref().map(|find| find.keys) {
+        None => return 0,
+        Some(FindKeys::Replace(_)) => layout::REPLACE_STRIP_ROWS,
+        Some(_) => layout::FIND_STRIP_ROWS,
+    };
+    match height > 2 + rows {
+        true => rows,
+        false => 0,
     }
 }
 
@@ -8253,6 +8258,13 @@ pub struct FindLine {
     pub query: String,
     pub caret: Option<usize>,
     pub count: String,
+    pub with: Option<Replacement>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Replacement {
+    pub text: String,
+    pub caret: Option<usize>,
 }
 
 pub fn find_line(state: &State) -> Option<FindLine> {
@@ -8265,10 +8277,22 @@ pub fn find_line(state: &State) -> Option<FindLine> {
         (Some(at), all) => format!("{} of {all}", at + 1),
         (None, all) => format!("{all} found"),
     };
+    let caret_at = |buffer: &Buffer| buffer.column.saturating_sub(1);
     Some(FindLine {
         query,
-        caret: (find.keys == FindKeys::Query).then(|| find.query.column.saturating_sub(1)),
+        caret: matches!(
+            find.keys,
+            FindKeys::Query | FindKeys::Replace(ReplaceField::Find)
+        )
+        .then(|| caret_at(&find.query)),
         count,
+        with: match find.keys {
+            FindKeys::Replace(field) => Some(Replacement {
+                text: state.replace_with.shown().to_string(),
+                caret: (field == ReplaceField::With).then(|| caret_at(&state.replace_with)),
+            }),
+            _ => None,
+        },
     })
 }
 
@@ -11970,6 +11994,30 @@ mod tests {
     }
 
     #[test]
+    fn the_with_row_takes_a_third_editor_row_while_replace_is_open() {
+        let mut state = update(
+            &State::default(),
+            Event::Resized {
+                width: 120,
+                height: 30,
+            },
+        )
+        .0;
+        let rows = fits(&state).1;
+        let mut replacing = finding("x");
+        replacing.keys = FindKeys::Replace(ReplaceField::With);
+        state.find = Some(replacing);
+        assert_eq!(editor_strip_rows(&state, 20), 3);
+        assert_eq!(
+            editor_strip_rows(&state, 6),
+            3,
+            "three strip rows and one code row"
+        );
+        assert_eq!(editor_strip_rows(&state, 5), 0, "no room for a code row");
+        assert_eq!(fits(&state).1, rows - 3);
+    }
+
+    #[test]
     fn the_find_line_holds_the_query_its_caret_and_the_count() {
         let mut state = State::default();
         let path = PathBuf::from("/w/a.rs");
@@ -11986,6 +12034,7 @@ mod tests {
                 query: "state".to_string(),
                 caret: None,
                 count: "2 found".to_string(),
+                with: None,
             })
         );
         let find = state.find.as_mut().expect("on");
@@ -11998,7 +12047,35 @@ mod tests {
                 query: "state".to_string(),
                 caret: Some(4),
                 count: "1 of 2".to_string(),
+                with: None,
             })
+        );
+        state.replace_with = Buffer::text_box("status");
+        state.find.as_mut().expect("on").keys = FindKeys::Replace(ReplaceField::Find);
+        let replacing = find_line(&state).expect("on");
+        assert_eq!(replacing.caret, Some(4), "the query is the find field");
+        assert_eq!(
+            replacing.with,
+            Some(Replacement {
+                text: "status".to_string(),
+                caret: None,
+            })
+        );
+        state.find.as_mut().expect("on").keys = FindKeys::Replace(ReplaceField::With);
+        let replacing = find_line(&state).expect("on");
+        assert_eq!(replacing.caret, None);
+        assert_eq!(
+            replacing.with,
+            Some(Replacement {
+                text: "status".to_string(),
+                caret: Some(6),
+            })
+        );
+        state.find.as_mut().expect("on").keys = FindKeys::Replace(ReplaceField::Replace);
+        assert_eq!(
+            find_line(&state).expect("on").with.expect("open").caret,
+            None,
+            "a button has the keyboard"
         );
         state.find = Some(finding("zzz"));
         assert_eq!(find_line(&state).expect("on").count, "no match");

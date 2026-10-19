@@ -7580,18 +7580,6 @@ fn toggle_is(world: &mut VardeWorld, icon: String, shown: String) {
     assert_eq!(lit, shown == "lit", "the toggle is lit: {lit}");
 }
 
-#[when(expr = "I click the word toggle in the replace box")]
-fn click_replace_word(world: &mut VardeWorld) {
-    let spot = layout::replace_box(world.panes().editor);
-    let (_, _, at) = layout::replace_toggles(spot)
-        .into_iter()
-        .find(|(icon, _, _)| *icon == varde::FindIcon::Word)
-        .expect("a word toggle");
-    world.pointer = mouse::Pointer::default();
-    world.report(mouse::Kind::LeftDown, at.x, at.y);
-    world.report(mouse::Kind::LeftUp, at.x, at.y);
-}
-
 #[then(expr = "the replace box is open")]
 fn replace_box_open(world: &mut VardeWorld) {
     assert!(matches!(find_keys(world), varde::FindKeys::Replace(_)));

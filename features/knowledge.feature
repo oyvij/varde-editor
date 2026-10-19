@@ -502,6 +502,7 @@ Feature: Keeping knowledge
     Scenario: Replace is refused
       When I open the Replace box
       Then no modal is open
+      And the replace box is not open
       And the reviewer is told "vault-is-read-only"
 
     Scenario: The tree offers no file actions

@@ -23,8 +23,11 @@ Feature: Finding inside the buffer
   word, so `state` stops finding `states` and `restate`; a new search starts
   with it off.
 
-  `[replace]` and `[replace all]` open the replace box. Replacing edits the
-  buffer and nothing else: it is written when it is saved, like any other edit.
+  `[replace]` and `[replace all]` add a `with` row to the strip, under the
+  query, with the two buttons right-aligned beside the replacement and the
+  replace keys named on the strip's rule. The code gives up one more row to it
+  while it is open. Replacing edits the buffer and nothing else: it is written
+  when it is saved, like any other edit.
 
   Background:
     Given the workspace root is "/home/me/projects/varde"
@@ -492,7 +495,7 @@ Feature: Finding inside the buffer
       state_x = status.x
       """
 
-  Scenario: The replace box has its own whole word toggle
+  Scenario: The strip's whole word toggle works while replace is open
     Given "src/words.rs" is open in the editor holding:
       """
       states = restate(state)
@@ -501,10 +504,27 @@ Feature: Finding inside the buffer
     And I type "state" into the in-file search
     And I press the key "Enter"
     And I click the "replace" icon on the in-file search line
-    When I click the word toggle in the replace box
+    When I click the "word" icon on the in-file search line
     Then the word toggle is lit
+    And the replace box is open
     And the highlighted matches are:
       | 1 | 18 |
+
+  Scenario: The with row takes one more of the editor's code rows
+    Given I press "/" in the editor
+    And I type "state" into the in-file search
+    And I press the key "Enter"
+    When I click the "replace" icon on the in-file search line
+    Then the editor shows 13 code rows
+
+  Scenario: Escape gives the with row's code row back while the search stays on
+    Given I press "/" in the editor
+    And I type "state" into the in-file search
+    And I press the key "Enter"
+    And I click the "replace" icon on the in-file search line
+    When I press the key "Escape"
+    Then the in-file search is open
+    And the editor shows 14 code rows
 
   Scenario: Escape closes the replace box and the search stays on
     Given I press "/" in the editor

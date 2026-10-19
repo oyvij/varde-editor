@@ -146,7 +146,6 @@ pub fn draw(
     }
     minimap(frame, state, &areas, chrome.tokens);
     let caret = find_strip(frame.buffer_mut(), state, areas.panes.editor);
-    replace_box(frame, state, areas.panes.editor);
     match caret {
         Some(caret) if typing.is_none() => frame.set_cursor_position(caret),
         _ if !finding => place_cursor(frame, state, &areas, typing.as_deref()),
@@ -3010,61 +3009,6 @@ fn bar(kind: story::Kind) -> Color {
     }
 }
 
-fn replace_box(frame: &mut Frame, state: &State, editor: Area) {
-    let Some(find) = state.find.as_ref() else {
-        return;
-    };
-    let varde::FindKeys::Replace(field) = find.keys else {
-        return;
-    };
-    let spot = layout::replace_box(editor);
-    let on = |at| match at == field {
-        true => Style::default().add_modifier(Modifier::REVERSED),
-        false => Style::default(),
-    };
-    let text = |buffer: &varde::editor::Buffer, at| match at == field {
-        true => with_caret(buffer.shown(), buffer.column),
-        false => vec![Span::raw(buffer.shown().to_string())],
-    };
-    let mut find_row = vec![Span::raw(" find  ")];
-    find_row.extend(text(&find.query, varde::ReplaceField::Find));
-    let mut with_row = vec![Span::raw(" with  ")];
-    with_row.extend(text(&state.replace_with, varde::ReplaceField::With));
-    let footer = keys::REPLACE_BOX_KEYS
-        .iter()
-        .map(|(key, word)| format!("{key} {word}"))
-        .collect::<Vec<_>>()
-        .join(" · ");
-    let area = rect(spot);
-    frame.render_widget(Clear, area);
-    frame.render_widget(
-        Paragraph::new(vec![Line::from(find_row), Line::from(with_row)]).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_type(BorderType::Rounded)
-                .title(" replace ")
-                .title_bottom(Line::from(Span::styled(
-                    format!(" {footer} "),
-                    Style::default().fg(Color::DarkGray),
-                ))),
-        ),
-        area,
-    );
-    for (icon, label, at) in layout::replace_toggles(spot) {
-        let style = match find.lit(icon) {
-            true => Style::default().fg(Color::Yellow),
-            false => Style::default().fg(Color::DarkGray),
-        };
-        frame.render_widget(Span::styled(label, style), rect(at));
-    }
-    for ((at, label), (_, spot)) in varde::REPLACE_BUTTONS
-        .iter()
-        .zip(layout::replace_buttons(spot))
-    {
-        frame.render_widget(Span::styled(*label, on(*at)), rect(spot));
-    }
-}
-
 fn cheatsheet_widget(state: &State) -> Paragraph<'static> {
     let rows = keys::cheatsheet_rows(state);
     let column = rows.iter().map(|(keys, _)| keys.len()).max().unwrap_or(0);
@@ -3413,21 +3357,44 @@ fn find_strip(
     let (rule, field) = (rect(strip.rule), rect(strip.field));
     Clear.render(rule, buffer);
     Clear.render(field, buffer);
+    let dim = Style::default().fg(Color::DarkGray);
     Paragraph::new("─".repeat(rule.width as usize))
-        .style(Style::default().fg(Color::DarkGray))
+        .style(dim)
         .render(rule, buffer);
-    let typing = matches!(
-        find.keys,
-        varde::FindKeys::Query | varde::FindKeys::Replace(varde::ReplaceField::Find)
-    );
-    Line::from(vec![
+    let label = |text: &'static str, typing: bool| {
         Span::styled(
-            "/",
+            text,
             Style::default().fg(if typing { Color::Cyan } else { Color::DarkGray }),
-        ),
+        )
+    };
+    Line::from(vec![
+        label("/", line.caret.is_some()),
         Span::raw(line.query),
     ])
     .render(field, buffer);
+    if let (Some(with), Some(replacement)) = (strip.with, line.with) {
+        let footer = keys::REPLACE_BOX_KEYS
+            .iter()
+            .map(|(key, word)| format!("{key} {word}"))
+            .collect::<Vec<_>>()
+            .join(" · ");
+        Line::from(Span::styled(format!(" {footer} "), dim))
+            .right_aligned()
+            .render(rule, buffer);
+        Clear.render(rect(with.field), buffer);
+        Line::from(vec![
+            label(layout::WITH_LABEL, replacement.caret.is_some()),
+            Span::raw(replacement.text),
+        ])
+        .render(rect(with.field), buffer);
+        for (button, text, at) in with.buttons {
+            let style = match find.keys == varde::FindKeys::Replace(button) {
+                true => Style::default().add_modifier(Modifier::REVERSED),
+                false => Style::default(),
+            };
+            Span::styled(text, style).render(rect(at), buffer);
+        }
+    }
     let yellow = Style::default().fg(Color::Yellow);
     if let Some(at) = strip.count {
         Span::styled(line.count, yellow).render(rect(at), buffer);

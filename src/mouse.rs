@@ -1030,45 +1030,29 @@ fn pressed_in_hover(state: &State, panes: &Layout, input: Input) -> Option<Vec<E
 }
 
 fn pressed_in_find(state: &State, panes: &Layout, input: Input) -> Option<Vec<Event>> {
-    let find = state.find.as_ref()?;
-    let spot = layout::replace_box(panes.editor);
-    if matches!(find.keys, FindKeys::Replace(_)) && spot.holds(input.column, input.row) {
-        let field = |field| vec![Event::FindKeys(FindKeys::Replace(field))];
-        let toggle = layout::replace_toggles(spot)
-            .into_iter()
-            .find(|(_, _, at)| at.holds(input.column, input.row));
-        if let Some((icon, _, _)) = toggle {
-            return Some(icon.pressed());
-        }
-        let button = layout::replace_buttons(spot)
-            .into_iter()
-            .find(|(_, at)| at.holds(input.column, input.row));
-        return Some(match (button, input.row - spot.y) {
-            (Some((ReplaceField::ReplaceAll, _)), _) => vec![Event::ReplaceAll],
-            (Some((ReplaceField::Replace | ReplaceField::Find | ReplaceField::With, _)), _) => {
-                vec![Event::ReplaceMatch]
-            }
-            (None, 1) => field(ReplaceField::Find),
-            (None, 2) => field(ReplaceField::With),
-            (None, _) => Vec::new(),
-        });
-    }
     let (_, strip) = crate::find_strip(state, panes.editor)?;
+    let held = |at: &Area| at.holds(input.column, input.row);
     let rows = Area {
-        height: layout::FIND_STRIP_ROWS,
+        height: crate::editor_strip_rows(state, panes.editor.height),
         ..strip.rule
     };
-    if !rows.holds(input.column, input.row) {
+    if !held(&rows) {
         return None;
     }
-    Some(
-        strip
-            .icons
-            .iter()
-            .find(|(_, _, at)| at.holds(input.column, input.row))
-            .map(|(icon, _, _)| icon.pressed())
-            .unwrap_or_default(),
-    )
+    if let Some((icon, _, _)) = strip.icons.iter().find(|(_, _, at)| held(at)) {
+        return Some(icon.pressed());
+    }
+    let Some(with) = strip.with else {
+        return Some(Vec::new());
+    };
+    let field = |field| vec![Event::FindKeys(FindKeys::Replace(field))];
+    Some(match with.buttons.iter().find(|(_, _, at)| held(at)) {
+        Some((ReplaceField::ReplaceAll, _, _)) => vec![Event::ReplaceAll],
+        Some(_) => vec![Event::ReplaceMatch],
+        None if held(&with.field) => field(ReplaceField::With),
+        None if held(&strip.field) => field(ReplaceField::Find),
+        None => Vec::new(),
+    })
 }
 
 fn on_hover(state: &State, panes: &Layout, input: Input) -> bool {
@@ -1460,7 +1444,7 @@ mod tests {
     }
 
     #[test]
-    fn a_press_in_the_replace_box_lands_on_what_is_drawn_there() {
+    fn a_press_on_the_with_row_or_the_query_while_replacing_lands_on_what_is_drawn_there() {
         let mut state = workspace();
         state.find = Some(crate::Find {
             query: crate::editor::Buffer::text_box("state"),
@@ -1470,34 +1454,43 @@ mod tests {
             keys: crate::FindKeys::Replace(crate::ReplaceField::With),
         });
         let editor = panes(120, 26, 30, None, 0, 0, Shapes::default()).editor;
-        let spot = crate::layout::replace_box(editor);
+        let (_, strip) = crate::find_strip(&state, editor).expect("room for the strip");
+        let with = strip.with.as_ref().expect("a with row");
         let field = |field| vec![Event::FindKeys(crate::FindKeys::Replace(field))];
         assert_eq!(
-            click(&state, spot.x + 3, spot.y + 1),
-            field(crate::ReplaceField::Find)
-        );
-        assert_eq!(
-            click(&state, spot.x + 3, spot.y + 2),
+            click(&state, with.field.x + 2, with.field.y),
             field(crate::ReplaceField::With)
         );
         assert_eq!(
-            click(&state, spot.right() - 4, spot.y + 1),
-            vec![Event::ToggleCase]
+            click(&state, strip.field.x + 2, strip.field.y),
+            field(crate::ReplaceField::Find)
+        );
+        let [(first, _, replace), (second, _, replace_all)] = with.buttons[..] else {
+            panic!("two buttons on the with row: {:?}", with.buttons);
+        };
+        assert_eq!(
+            (first, second),
+            (
+                crate::ReplaceField::Replace,
+                crate::ReplaceField::ReplaceAll
+            )
         );
         assert_eq!(
-            click(&state, spot.right() - 9, spot.y + 1),
-            vec![Event::ToggleWord]
-        );
-        assert_eq!(
-            click(&state, spot.x + 2, spot.y + 3),
+            click(&state, replace.x, replace.y),
             vec![Event::ReplaceMatch]
         );
         assert_eq!(
-            click(&state, spot.x + 12, spot.y + 3),
+            click(&state, replace_all.right() - 1, replace_all.y),
             vec![Event::ReplaceAll]
         );
-        assert_eq!(click(&state, spot.x + 11, spot.y + 3), vec![]);
-        assert_eq!(click(&state, spot.x + 3, spot.y), vec![], "the border");
+        let (icon, _, at) = strip.icons[0];
+        assert_eq!(icon, crate::FindIcon::Case);
+        assert_eq!(click(&state, at.x, at.y), vec![Event::ToggleCase]);
+        assert_eq!(
+            click(&state, strip.rule.x + 2, strip.rule.y),
+            vec![],
+            "the rule"
+        );
     }
 
     #[test]
