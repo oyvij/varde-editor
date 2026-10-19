@@ -131,6 +131,14 @@ pub fn row_actions(state: &State, path: &Path) -> Vec<&'static str> {
             "delete",
             "copy-path",
         ],
+        Some(row)
+            if opens_externally(
+                &row.path.file_name().unwrap_or_default().to_string_lossy(),
+                row.is_dir,
+            ) =>
+        {
+            vec!["open-externally", "delete", "copy-path"]
+        }
         Some(_) => vec!["delete", "copy-path"],
         None => Vec::new(),
     }
@@ -390,11 +398,7 @@ pub fn icon(name: &str, is_dir: bool, expanded: bool) -> (&'static str, IconKind
     {
         return (*glyph, *kind);
     }
-    let extension = match lowered.rsplit_once('.') {
-        Some((stem, extension)) if !stem.is_empty() => Some(extension),
-        _ => None,
-    };
-    let Some(extension) = extension else {
+    let Some(extension) = extension(&lowered) else {
         return PLAIN;
     };
     ICONS
@@ -403,9 +407,29 @@ pub fn icon(name: &str, is_dir: bool, expanded: bool) -> (&'static str, IconKind
         .map_or(PLAIN, |(_, glyph, kind)| (*glyph, *kind))
 }
 
+fn extension(lowered: &str) -> Option<&str> {
+    match lowered.rsplit_once('.') {
+        Some((stem, extension)) if !stem.is_empty() => Some(extension),
+        _ => None,
+    }
+}
+
+fn opens_externally(name: &str, is_dir: bool) -> bool {
+    let lowered = name.to_ascii_lowercase();
+    let Some(extension) = extension(&lowered).filter(|_| !is_dir) else {
+        return false;
+    };
+    ["html", "htm", "pdf", "svg"].contains(&extension)
+        || ICONS
+            .iter()
+            .any(|(names, _, kind)| *kind == IconKind::Image && names.contains(&extension))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{icon, row_actions, visible_rows, IconKind, FOLDERS, ICONS, NAMES, PLAIN};
+    use super::{
+        icon, opens_externally, row_actions, visible_rows, IconKind, FOLDERS, ICONS, NAMES, PLAIN,
+    };
     use crate::review::{GitFile, GitStatus};
     use crate::tree::Entry;
     use crate::{State, View};
@@ -425,6 +449,31 @@ mod tests {
         let selected = state.root.join("only.rs");
         state.tree_selection = Some(selected.clone());
         assert_eq!(row_actions(&state, &selected), vec!["delete", "copy-path"]);
+    }
+
+    #[test]
+    fn pages_documents_and_images_open_externally() {
+        for name in [
+            "index.html",
+            "old.htm",
+            "report.pdf",
+            "logo.svg",
+            "a.png",
+            "a.jpg",
+            "a.jpeg",
+            "a.gif",
+            "a.webp",
+            "a.bmp",
+            "favicon.ico",
+            "a.avif",
+            "SCREENSHOT.PNG",
+        ] {
+            assert!(opens_externally(name, false), "{name}");
+        }
+        for name in ["feed.xml", "README.md", "clip.mp4", "main.rs"] {
+            assert!(!opens_externally(name, false), "{name}");
+        }
+        assert!(!opens_externally("site.html", true));
     }
 
     #[test]

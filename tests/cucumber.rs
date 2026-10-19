@@ -5859,6 +5859,7 @@ fn click_row_action(world: &mut VardeWorld, action: String, _row: String) {
         "go-here" => "go-here",
         "delete" => "delete",
         "copy-path" => "copy-path",
+        "open-externally" => "open-externally",
         "search-here" => "search-here",
         other => panic!("unknown action {other:?}"),
     };
