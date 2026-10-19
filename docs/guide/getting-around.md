@@ -195,7 +195,8 @@ what ran. Paths are absolute, and quoted only when they need it.
 The focused row shows its actions as icons on the right. A folder has new-file, new-directory,
 go-here, search-here, delete and copy-path. A file has delete and copy-path, and a file a browser or
 viewer can show (html, htm, pdf, svg or an image) has open-externally before them. Click an icon, or
-press `→` to step into them and `Enter` to run the highlighted one.
+press `→` to step into them and `Enter` to run the highlighted one. `o` opens the selected file
+externally, and does nothing on a file without that icon.
 
 | Action | What runs | Runs by itself? |
 |---|---|---|
@@ -206,7 +207,7 @@ press `→` to step into them and `Enter` to run the highlighted one.
 | back to root (`-`) | `cd <root>` | yes |
 | search here | opens project search limited to that folder | n/a |
 | copy path | the absolute path onto the clipboard | n/a |
-| open externally | the file's default app, through the system opener | n/a |
+| open externally (`o`) | the file's default app, through the system opener | n/a |
 
 `Esc` in the name box runs nothing. Focus goes where the next step is. A `cd` that Varde typed moves
 focus to the terminal, because you have to press Enter there. A command that already ran leaves

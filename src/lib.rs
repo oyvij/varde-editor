@@ -2895,6 +2895,12 @@ fn on_key_4(state: &State, next: State, event: Event, _wheeled: bool) -> Answere
                 'n' => "new-file",
                 'N' => "new-directory",
                 'd' => "delete",
+                'o' if state.tree_selection.as_deref().is_some_and(|path| {
+                    tree::row_actions(state, path).contains(&"open-externally")
+                }) =>
+                {
+                    "open-externally"
+                }
                 _ => return Ok((next, vec![])),
             };
             Ok(update(state, Event::RowAction(action)))
@@ -11590,6 +11596,62 @@ mod tests {
         assert_eq!(armed.selected_action, Some(0));
         let clicked = update(&armed, Event::ClickPane(Pane::Breakpoints)).0;
         assert_eq!(clicked.selected_action, None);
+    }
+
+    #[test]
+    fn o_opens_only_a_selected_file_that_offers_open_externally_in_the_focused_tree() {
+        let mut tree = State {
+            root: PathBuf::from("/w"),
+            focus: Pane::Tree,
+            tree_selection: Some(PathBuf::from("/w/shot.png")),
+            ..State::default()
+        };
+        tree.contents.insert(
+            PathBuf::from("/w"),
+            vec![
+                tree::Entry {
+                    name: "pages".to_string(),
+                    is_dir: true,
+                },
+                tree::Entry {
+                    name: "shot.png".to_string(),
+                    is_dir: false,
+                },
+            ],
+        );
+        let opened = |state: &State| {
+            update(state, Event::Key('o'))
+                .1
+                .into_iter()
+                .filter(|effect| matches!(effect, Effect::OpenUrl(_)))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            opened(&tree),
+            vec![Effect::OpenUrl("file:///w/shot.png".to_string())]
+        );
+
+        let folder = State {
+            tree_selection: Some(PathBuf::from("/w/pages")),
+            ..tree.clone()
+        };
+        assert_eq!(update(&folder, Event::Key('o')).1, vec![]);
+        let nothing = State {
+            tree_selection: None,
+            ..tree.clone()
+        };
+        assert_eq!(update(&nothing, Event::Key('o')).1, vec![]);
+
+        let modal = State {
+            modal: Modal::Palette,
+            ..tree.clone()
+        };
+        assert_eq!(opened(&modal), vec![]);
+        let unfocused = State {
+            focus: Pane::Editor,
+            ..tree
+        };
+        assert_eq!(opened(&unfocused), vec![]);
     }
 
     #[test]

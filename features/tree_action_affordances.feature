@@ -66,6 +66,18 @@ Feature: Reaching the tree actions
     When I click the "open-externally" action on "my page.html"
     Then the browser opens "file:///home/me/projects/varde/my%20page.html"
 
+  Scenario: o opens the selected image externally
+    Given "shot.png" is on disk under collapsed folders
+    And the tree selection is "shot.png"
+    When I press "o"
+    Then the browser opens "file:///home/me/projects/varde/shot.png"
+
+  Scenario: o on a source file opens nothing
+    Given "main.rs" is on disk under collapsed folders
+    And the tree selection is "main.rs"
+    When I press "o"
+    Then the browser opens nothing
+
   Scenario: Rows that are not focused offer nothing
     Given the tree selection is "src"
     Then the row "src/tree.js" offers no actions
