@@ -10,6 +10,7 @@ pub enum Action {
     SearchHere,
     BackToRoot,
     CopyPath,
+    OpenExternally,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

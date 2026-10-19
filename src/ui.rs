@@ -3923,6 +3923,7 @@ fn action_icon(action: &str) -> &'static str {
         "new-directory" => "\u{f07b}",
         "go-here" => "\u{f0a9}",
         "copy-path" => "\u{f0c5}",
+        "open-externally" => "\u{f08e}",
         "search-here" => "\u{f002}",
         varde::history::GO_TO => "\u{f0a9}",
         varde::debug::REMOVE => "\u{2715}",
@@ -5680,6 +5681,23 @@ mod tests {
             .find(|span| span.content.contains("main.rs"))
             .expect("the filename");
         assert_eq!(name.style.fg, None, "the name stays uncoloured");
+    }
+
+    #[test]
+    fn a_page_draws_the_external_link_glyph_first() {
+        let mut state = State::default();
+        state.root = std::path::PathBuf::from("/w");
+        state.contents.insert(
+            state.root.clone(),
+            vec![varde::tree::Entry {
+                name: "index.html".to_string(),
+                is_dir: false,
+            }],
+        );
+        let rows = varde::tree::rows(&state);
+        state.tree_selection = Some(rows[0].path.clone());
+        let line = tree_lines(&state, &rows, 40).remove(0);
+        assert_eq!(line.spans[4].content, "\u{f08e}");
     }
 
     #[test]
