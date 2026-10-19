@@ -256,6 +256,7 @@ pub fn draw(
     breakpoint_reason(frame, state, &areas.panes);
     diagnostic_box(frame, state, &areas.panes);
     candidates(frame, state, &areas.panes);
+    signature(frame, state, &areas.panes);
     command_list(
         frame,
         state,
@@ -506,7 +507,6 @@ fn draw_modal(frame: &mut Frame, state: &State, chrome: &Chrome) {
         Modal::StepDetail => overlay(frame, "STEP", step_detail_lines(state)),
         Modal::Prediction { .. } => overlay(frame, "PREDICTION", prediction_lines(state)),
         Modal::Candidates(_) => {}
-        Modal::Stops { .. } => {}
         Modal::None => {}
     }
 }
@@ -3296,6 +3296,40 @@ fn candidates(frame: &mut Frame, state: &State, panes: &layout::Layout) {
         })
         .collect();
     over_buffer_line(frame, state, panes, list.placement(), lines);
+}
+
+fn signature(frame: &mut Frame, state: &State, panes: &layout::Layout) {
+    let Some(signature) = state.signature.as_ref() else {
+        return;
+    };
+    let placement = signature.placement(state);
+    let columns = placement.width.saturating_sub(2);
+    let label: Vec<char> = signature.label.chars().collect();
+    let (start, end) = signature.highlighted.unwrap_or((0, 0));
+    let piece = |from: usize, to: usize| label[from..to].iter().collect::<String>();
+    let mut spans = vec![
+        Span::raw(piece(0, start)),
+        Span::styled(
+            piece(start, end),
+            Style::default().add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+        ),
+        Span::raw(piece(end, label.len())),
+    ];
+    if let Some(count) = signature.count() {
+        let gap = columns.saturating_sub(signature.label.width() + count.width());
+        spans.push(Span::raw(" ".repeat(gap)));
+        spans.push(Span::styled(count, Style::default().fg(Color::DarkGray)));
+    }
+    let dark = state.editor_theme != "light";
+    let lines = std::iter::once(Line::from(spans))
+        .chain(
+            signature
+                .docs
+                .iter()
+                .map(|row| preview_line(row, dark, columns)),
+        )
+        .collect();
+    over_buffer_line(frame, state, panes, placement, lines);
 }
 
 fn command_list(frame: &mut Frame, state: &State, chrome: &Chrome, editor: Area, height: u16) {

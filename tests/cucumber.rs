@@ -125,9 +125,12 @@ pub struct VardeWorld {
     lsp_logs: BTreeMap<String, PathBuf>,
     lsp_sent: Vec<(String, Value)>,
     lsp_answers: BTreeSet<String>,
+    lsp_capabilities: BTreeMap<String, Value>,
+    signature_answered: Value,
     lsp_fails: BTreeSet<String>,
     formatter_runs: Vec<Effect>,
     candidates_armed: bool,
+    signature_armed: bool,
     dwell_armed: Option<u64>,
     reported: Vec<String>,
     hold_site_texts: bool,
@@ -792,13 +795,20 @@ impl VardeWorld {
                 match self.lsp_running.contains_key(&language) {
                     true => {
                         if handshake && self.lsp_answers.contains(&language) {
+                            let capabilities = self
+                                .lsp_capabilities
+                                .get(&language)
+                                .cloned()
+                                .unwrap_or_else(|| {
+                                    json!({
+                                        "hoverProvider": true,
+                                        "definitionProvider": true,
+                                        "completionProvider": {},
+                                    })
+                                });
                             self.lsp_replies(
                                 &language,
-                                json!({"jsonrpc": "2.0", "id": id, "result": {"capabilities": {
-                                    "hoverProvider": true,
-                                    "definitionProvider": true,
-                                    "completionProvider": {},
-                                }}}),
+                                json!({"jsonrpc": "2.0", "id": id, "result": {"capabilities": capabilities}}),
                             );
                         }
                     }
@@ -806,6 +816,7 @@ impl VardeWorld {
                 }
             }
             Effect::DebounceCandidates(_) => self.candidates_armed = true,
+            Effect::DebounceSignature(_) => self.signature_armed = true,
             Effect::DwellHover(after_ms) => self.dwell_armed = Some(after_ms),
             Effect::Notify(notice) => {
                 self.notices.push(notice.to_string());
@@ -4292,6 +4303,7 @@ fn click_pane(world: &mut VardeWorld, pane: String) {
     world.send(Event::ClickThrough { pane, at: POINTER });
 }
 
+#[given(expr = "I click at line {int} column {int} in the editor")]
 #[when(expr = "I click at line {int} column {int} in the editor")]
 fn click_text(world: &mut VardeWorld, line: usize, column: usize) {
     world.click(Pane::Editor, (line, column), terminput::KeyModifiers::NONE);
@@ -5956,6 +5968,12 @@ fn set_mode(world: &mut VardeWorld, mode: String) {
         "normal" => world.send(Event::EditorEscape),
         other => panic!("unknown mode {other:?}"),
     }
+}
+
+#[given("I leave insert mode")]
+#[when("I leave insert mode")]
+fn leave_insert_mode(world: &mut VardeWorld) {
+    world.send(Event::EditorEscape);
 }
 
 #[then(expr = "the editor mode is {word}")]
@@ -9552,7 +9570,6 @@ fn modal_is(world: &mut VardeWorld, expected: String) {
         Modal::Prediction { .. } => "prediction",
         Modal::Diverged => "diverged",
         Modal::Candidates(_) => "candidates",
-        Modal::Stops { .. } => "stops",
         Modal::Restart => "restart",
         Modal::SetValue => "set-value",
         Modal::NewWatch => "new-watch",
@@ -11735,6 +11752,16 @@ fn server_is_ready(world: &mut VardeWorld, language: String) {
         });
 }
 
+#[given(expr = "a language server for {string} is ready with capabilities:")]
+fn server_is_ready_with(world: &mut VardeWorld, language: String, step: &Step) {
+    let capabilities: Value =
+        serde_json::from_str(step.docstring().expect("docstring")).expect("valid JSON");
+    world
+        .lsp_capabilities
+        .insert(language.clone(), capabilities);
+    server_is_ready(world, language);
+}
+
 #[given(expr = "a language server for {string} is already running")]
 fn server_is_already_running(world: &mut VardeWorld, language: String) {
     let command = format!("{language}-language-server");
@@ -12050,6 +12077,31 @@ fn initialize_declared_snippets(world: &mut VardeWorld, language: String) {
     );
 }
 
+#[then(expr = "the initialize request for {string} said Varde can read signature help")]
+fn initialize_declared_signature_help(world: &mut VardeWorld, language: String) {
+    let messages = sent(world, &language);
+    let handshake = messages
+        .iter()
+        .find(|message| message["method"] == "initialize")
+        .expect("initialize");
+    let signature = &handshake["params"]["capabilities"]["textDocument"]["signatureHelp"]
+        ["signatureInformation"];
+    assert_eq!(
+        (
+            &signature["documentationFormat"],
+            &signature["parameterInformation"]["labelOffsetSupport"],
+            &signature["activeParameterSupport"],
+        ),
+        (
+            &json!(["markdown", "plaintext"]),
+            &json!(true),
+            &json!(true)
+        ),
+        "{language} was told: {}",
+        handshake["params"]["capabilities"]
+    );
+}
+
 #[then(expr = "the initialize request for {string} said Varde can read markdown")]
 fn initialize_declared_markdown(world: &mut VardeWorld, language: String) {
     let handshake = handshake(world, &language);
@@ -12362,11 +12414,138 @@ fn was_sent_how_many(world: &mut VardeWorld, language: String, count: usize, met
     );
 }
 
+fn sent_context(world: &VardeWorld, language: &str, method: &str) -> Value {
+    sent(world, language)
+        .iter()
+        .rev()
+        .find(|message| message["method"] == method)
+        .unwrap_or_else(|| panic!("{language} was never sent a {method} request"))["params"]
+        ["context"]
+        .clone()
+}
+
+#[then(
+    expr = "the language server for {string} was sent a completion request with trigger character {string}"
+)]
+fn completion_was_triggered(world: &mut VardeWorld, language: String, character: String) {
+    assert_eq!(
+        sent_context(world, &language, "textDocument/completion"),
+        json!({"triggerKind": 2, "triggerCharacter": character})
+    );
+}
+
+#[then(expr = "the language server for {string} was sent an invoked completion request")]
+fn completion_was_invoked(world: &mut VardeWorld, language: String) {
+    assert_eq!(
+        sent_context(world, &language, "textDocument/completion"),
+        json!({"triggerKind": 1})
+    );
+}
+
+#[then(
+    expr = "the language server for {string} was sent a signature help request with trigger character {string}"
+)]
+fn signature_was_triggered(world: &mut VardeWorld, language: String, character: String) {
+    assert_eq!(
+        sent_context(world, &language, "textDocument/signatureHelp"),
+        json!({"triggerKind": 2, "triggerCharacter": character, "isRetrigger": false})
+    );
+}
+
+#[then(expr = "the language server for {string} was sent an invoked signature help request")]
+fn signature_was_invoked(world: &mut VardeWorld, language: String) {
+    let context = sent_context(world, &language, "textDocument/signatureHelp");
+    assert_eq!(
+        (&context["triggerKind"], &context["triggerCharacter"]),
+        (&json!(1), &Value::Null),
+        "{context}"
+    );
+}
+
+#[then(
+    expr = "the language server for {string} was sent a signature help retrigger with trigger character {string}"
+)]
+fn signature_was_retriggered(world: &mut VardeWorld, language: String, character: String) {
+    assert_eq!(
+        sent_context(world, &language, "textDocument/signatureHelp"),
+        json!({
+            "triggerKind": 2,
+            "triggerCharacter": character,
+            "isRetrigger": true,
+            "activeSignatureHelp": world.signature_answered,
+        })
+    );
+}
+
+#[given(expr = "the language server for {string} answers the signature help with:")]
+#[when(expr = "the language server for {string} answers the signature help with:")]
+fn answers_the_signature_help(world: &mut VardeWorld, language: String, step: &Step) {
+    let result: Value = serde_json::from_str(step.docstring().expect("docstring")).expect("json");
+    world.signature_answered = result.clone();
+    world.lsp_replies(
+        &language,
+        json!({"jsonrpc": "2.0", "id": asked(world, &language, "textDocument/signatureHelp"), "result": result}),
+    );
+}
+
+fn signature_box(world: &VardeWorld) -> &varde::lsp::Signature {
+    world
+        .state
+        .signature
+        .as_ref()
+        .expect("no signature box is open")
+}
+
+#[then(expr = "the signature box is open")]
+fn signature_box_is_open(world: &mut VardeWorld) {
+    signature_box(world);
+}
+
+#[then(expr = "the signature box is not open")]
+fn signature_box_is_not_open(world: &mut VardeWorld) {
+    assert_eq!(world.state.signature, None);
+}
+
+#[then(expr = "the highlighted parameter is {string}")]
+fn highlighted_parameter_is(world: &mut VardeWorld, parameter: String) {
+    let signature = signature_box(world);
+    let (start, end) = signature.highlighted.expect("no parameter is highlighted");
+    let highlighted: String = signature
+        .label
+        .chars()
+        .skip(start)
+        .take(end - start)
+        .collect();
+    assert_eq!(highlighted, parameter);
+}
+
+#[then(expr = "the signature box shows signature {int} of {int}")]
+fn signature_box_shows(world: &mut VardeWorld, shown: usize, of: usize) {
+    let signature = signature_box(world);
+    assert_eq!((signature.shown + 1, signature.of), (shown, of));
+}
+
+#[then(expr = "the signature box documents {string}")]
+fn signature_box_documents(world: &mut VardeWorld, documented: String) {
+    let said: Vec<String> = signature_box(world)
+        .docs
+        .iter()
+        .map(|row| row.text())
+        .collect();
+    assert!(
+        said.join(" ").contains(&documented),
+        "the box documents {said:?}"
+    );
+}
+
 #[when(expr = "the debounce window passes")]
 #[given(expr = "the debounce window passes")]
 fn debounce_passes(world: &mut VardeWorld) {
     if std::mem::take(&mut world.candidates_armed) {
         world.send(Event::CandidatesDue);
+    }
+    if std::mem::take(&mut world.signature_armed) {
+        world.send(Event::SignatureDue);
     }
 }
 
@@ -12658,11 +12837,12 @@ fn candidate_list_is_not_open(world: &mut VardeWorld) {
 
 #[then(expr = "no tab stops are pending")]
 fn no_tab_stops(world: &mut VardeWorld) {
-    assert!(
-        !matches!(world.state.modal, Modal::Stops { .. }),
-        "tab stops are pending: {:?}",
-        world.state.modal
-    );
+    assert_eq!(world.state.stops, None);
+}
+
+#[then(expr = "tab stops are pending")]
+fn tab_stops_pending(world: &mut VardeWorld) {
+    assert!(world.state.stops.is_some());
 }
 
 #[then(expr = "the candidates are:")]
@@ -15457,6 +15637,19 @@ fn cheatsheet_lists(world: &VardeWorld, key: &str) -> bool {
 #[then(expr = "the cheatsheet lists {string}")]
 fn cheatsheet_should_list(world: &mut VardeWorld, key: String) {
     assert!(cheatsheet_lists(world, &key), "{key:?} is not listed");
+}
+
+#[then(expr = "the cheatsheet lists {string} for {string}")]
+fn cheatsheet_lists_for(world: &mut VardeWorld, key: String, what: String) {
+    assert!(
+        keys::cheatsheet_rows(&world.state)
+            .iter()
+            .any(
+                |(keys, does)| keys.split_whitespace().any(|token| token == key)
+                    && does.contains(&what)
+            ),
+        "no {key:?} row for {what:?}"
+    );
 }
 
 #[then(expr = "the cheatsheet does not list {string}")]

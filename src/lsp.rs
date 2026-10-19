@@ -3,13 +3,16 @@ use crate::search::{Hit, Results};
 use crate::startup::Server;
 use crate::{preview, Effect, Place, Pointed, Search, State};
 use lsp_types::{
-    ClientCapabilities, CompletionClientCapabilities, CompletionItemCapability, CompletionResponse,
-    DiagnosticSeverity, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
-    DidOpenTextDocumentParams, DocumentFormattingParams, DocumentOnTypeFormattingOptions,
-    DocumentOnTypeFormattingParams, FormattingOptions, GotoDefinitionResponse,
-    Hover as ServerHover, HoverClientCapabilities, HoverContents, InitializeParams,
-    InitializedParams, InsertTextFormat, MarkedString, MarkupKind, Position,
+    ClientCapabilities, CompletionClientCapabilities, CompletionContext, CompletionItemCapability,
+    CompletionParams, CompletionResponse, CompletionTriggerKind, DiagnosticSeverity,
+    DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
+    DocumentFormattingParams, DocumentOnTypeFormattingOptions, DocumentOnTypeFormattingParams,
+    FormattingOptions, GotoDefinitionResponse, Hover as ServerHover, HoverClientCapabilities,
+    HoverContents, InitializeParams, InitializedParams, InsertTextFormat, MarkedString,
+    MarkupContent, MarkupKind, ParameterInformationSettings, ParameterLabel, Position,
     PublishDiagnosticsClientCapabilities, PublishDiagnosticsParams, Range,
+    SignatureHelp as ServerSignature, SignatureHelpClientCapabilities, SignatureHelpContext,
+    SignatureHelpParams, SignatureHelpTriggerKind, SignatureInformationSettings,
     TextDocumentClientCapabilities, TextDocumentContentChangeEvent, TextDocumentIdentifier,
     TextDocumentItem, TextDocumentPositionParams, TextEdit, Url, VersionedTextDocumentIdentifier,
 };
@@ -20,7 +23,7 @@ use std::path::{Path, PathBuf};
 
 const INITIALIZE: i64 = 1;
 
-const DEBOUNCE_MS: u64 = 120;
+pub const DEBOUNCE_MS: u64 = 120;
 
 pub const DWELL_MS: u64 = 500;
 
@@ -93,11 +96,19 @@ pub struct Ask {
     pub about: About,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Cause {
+    Typed,
+    Moved,
+    Landed,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum About {
     Hover,
     Definition,
     Candidates,
+    Signature,
     Formatting(char),
     Document,
 }
@@ -116,6 +127,7 @@ impl About {
                 Some("no-definition-support"),
             ),
             About::Candidates => ("textDocument/completion", "completionProvider", None),
+            About::Signature => ("textDocument/signatureHelp", "signatureHelpProvider", None),
             About::Formatting(_) => (
                 "textDocument/onTypeFormatting",
                 "documentOnTypeFormattingProvider",
@@ -133,6 +145,7 @@ impl About {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Question {
     asked: Ask,
+    cause: Cause,
     sent: BTreeMap<String, i64>,
     waiting: BTreeSet<String>,
     refused: bool,
@@ -511,8 +524,17 @@ pub fn read_for_review(state: &mut State, path: &Path, contents: &str) -> Vec<Ef
 
 pub fn typed(state: &mut State) -> Vec<Effect> {
     if !typing_a_name(state) {
-        if matches!(state.modal, crate::Modal::Candidates(_)) {
-            state.modal = crate::Modal::None;
+        let slot = match &state.modal {
+            crate::Modal::Candidates(list) => opens_slot(state, &list.asked.path, list.asked.place),
+            _ => false,
+        };
+        match (typed_word(state), &mut state.modal) {
+            (Some(word), _) if word.is_empty() => narrowed(state),
+            (Some(word), crate::Modal::Candidates(list)) if word.trim().is_empty() && slot => {
+                list.word_start += word.chars().count()
+            }
+            (_, crate::Modal::Candidates(_)) => state.modal = crate::Modal::None,
+            _ => {}
         }
         return Vec::new();
     }
@@ -531,17 +553,66 @@ pub fn typed(state: &mut State) -> Vec<Effect> {
     }
 }
 
+pub fn completes_after(state: &State, key: char) -> Vec<Effect> {
+    let Some(path) = state.current_buffer.as_deref() else {
+        return Vec::new();
+    };
+    let named = names(state, path, About::Candidates, "triggerCharacters", key)
+        && !names(state, path, About::Signature, "triggerCharacters", key);
+    match named {
+        true => vec![Effect::DebounceCandidates(DEBOUNCE_MS)],
+        false => Vec::new(),
+    }
+}
+
+fn names(state: &State, path: &Path, about: About, list: &str, key: char) -> bool {
+    let (_, capability, _) = about.asking();
+    capabilities_serving(state, path)
+        .into_iter()
+        .any(|capabilities| characters(&capabilities[capability], list).contains(&key))
+}
+
+fn opens_slot(state: &State, path: &Path, place: Place) -> bool {
+    state
+        .buffers
+        .get(path)
+        .and_then(|buffer| before(buffer.shown(), place))
+        .is_some_and(|key| names(state, path, About::Signature, "triggerCharacters", key))
+}
+
+pub fn lands_on_stop(state: &mut State) -> Vec<Effect> {
+    let mut effects = sync(state);
+    effects.extend(ask_for(state, About::Signature, None, Cause::Landed));
+    effects
+}
+
+pub fn signs_after(state: &mut State, key: char) -> Vec<Effect> {
+    let Some(path) = state.current_buffer.clone() else {
+        return Vec::new();
+    };
+    let listed = |list: &str| names(state, &path, About::Signature, list, key);
+    let (trigger, retrigger) = (listed("triggerCharacters"), listed("retriggerCharacters"));
+    if key == ')' && !trigger && !retrigger {
+        state.signature = None;
+        return Vec::new();
+    }
+    if !trigger && state.signature.is_none() {
+        return Vec::new();
+    }
+    let mut effects = sync(state);
+    effects.extend(ask(state, About::Signature));
+    effects
+}
+
 /// Sync first: a server asked before it hears the edit answers about stale text
 pub fn on_type(state: &mut State, key: char) -> Vec<Effect> {
     let Some(path) = state.current_buffer.clone() else {
         return Vec::new();
     };
     let (_, capability, _) = About::Formatting(key).asking();
-    let named = served_by(state, &path)
+    let named = capabilities_serving(state, &path)
         .into_iter()
-        .filter(|language| ready(state, language))
-        .filter_map(|language| state.lsp.get(&language))
-        .any(|conversation| triggers(&conversation.capabilities[capability]).contains(&key));
+        .any(|capabilities| triggers(&capabilities[capability]).contains(&key));
     if !named {
         return Vec::new();
     }
@@ -554,17 +625,24 @@ pub fn on_type(state: &mut State, key: char) -> Vec<Effect> {
 pub fn format(state: &mut State) -> Option<Vec<Effect>> {
     let path = state.current_buffer.clone()?;
     let (_, capability, _) = About::Document.asking();
-    let declared = served_by(state, &path)
+    let declared = capabilities_serving(state, &path)
         .into_iter()
-        .filter(|language| ready(state, language))
-        .filter_map(|language| state.lsp.get(&language))
-        .any(|conversation| declares(&conversation.capabilities, capability));
+        .any(|capabilities| declares(capabilities, capability));
     if !declared {
         return None;
     }
     let mut effects = sync(state);
     effects.extend(ask(state, About::Document));
     Some(effects)
+}
+
+fn capabilities_serving<'a>(state: &'a State, path: &Path) -> Vec<&'a Value> {
+    served_by(state, path)
+        .into_iter()
+        .filter(|language| ready(state, language))
+        .filter_map(|language| state.lsp.get(&language))
+        .map(|conversation| &conversation.capabilities)
+        .collect()
 }
 
 fn narrowed(state: &mut State) {
@@ -622,6 +700,14 @@ fn word_between(
     )
 }
 
+fn before(text: &str, place: Place) -> Option<char> {
+    let column = place.column.checked_sub(2)?;
+    text.lines()
+        .nth(place.line.saturating_sub(1))?
+        .chars()
+        .nth(column)
+}
+
 fn typing_a_name(state: &State) -> bool {
     let Some(buffer) = state
         .current_buffer
@@ -630,15 +716,14 @@ fn typing_a_name(state: &State) -> bool {
     else {
         return false;
     };
-    let Some(before) = buffer.column.checked_sub(2) else {
-        return false;
-    };
-    buffer
-        .shown()
-        .lines()
-        .nth(buffer.line.saturating_sub(1))
-        .and_then(|line| line.chars().nth(before))
-        .is_some_and(|character| character.is_alphanumeric() || character == '_')
+    before(
+        buffer.shown(),
+        Place {
+            line: buffer.line,
+            column: buffer.column,
+        },
+    )
+    .is_some_and(|character| character.is_alphanumeric() || character == '_')
 }
 
 fn closed(state: &mut State) -> Vec<Effect> {
@@ -984,6 +1069,10 @@ pub fn ask(state: &mut State, about: About) -> Vec<Effect> {
 }
 
 pub fn ask_at(state: &mut State, about: About, at: Option<Place>) -> Vec<Effect> {
+    ask_for(state, about, at, Cause::Typed)
+}
+
+pub fn ask_for(state: &mut State, about: About, at: Option<Place>, cause: Cause) -> Vec<Effect> {
     let Some(path) = state.current_buffer.clone() else {
         return Vec::new();
     };
@@ -1007,7 +1096,14 @@ pub fn ask_at(state: &mut State, about: About, at: Option<Place>) -> Vec<Effect>
         column: buffer.column,
     });
     let position = position(buffer.shown(), place);
+    let preceding = before(buffer.shown(), place)
+        .filter(|_| cause == Cause::Typed)
+        .filter(|_| about != About::Candidates || !opens_slot(state, &path, place));
     let revision = buffer.revision();
+    let shown = state
+        .signature
+        .as_ref()
+        .map(|signature| signature.reply.clone());
     let options = formatting(state);
     let mut sent = BTreeMap::new();
     let mut effects = Vec::new();
@@ -1030,6 +1126,13 @@ pub fn ask_at(state: &mut State, about: About, at: Option<Place>) -> Vec<Effect>
             text_document: TextDocumentIdentifier { uri: uri.clone() },
             position,
         };
+        let declared = &conversation.capabilities[capability];
+        let trigger = preceding.filter(|key| {
+            characters(declared, "triggerCharacters").contains(key)
+                || (about == About::Signature
+                    && shown.is_some()
+                    && characters(declared, "retriggerCharacters").contains(key))
+        });
         effects.push(Effect::LspSend {
             language,
             json: match about {
@@ -1051,6 +1154,42 @@ pub fn ask_at(state: &mut State, about: About, at: Option<Place>) -> Vec<Effect>
                         work_done_progress_params: Default::default(),
                     },
                 ),
+                About::Candidates => request(
+                    id,
+                    method,
+                    CompletionParams {
+                        text_document_position: at,
+                        work_done_progress_params: Default::default(),
+                        partial_result_params: Default::default(),
+                        context: Some(CompletionContext {
+                            trigger_kind: match trigger {
+                                Some(_) => CompletionTriggerKind::TRIGGER_CHARACTER,
+                                None => CompletionTriggerKind::INVOKED,
+                            },
+                            trigger_character: trigger.map(String::from),
+                        }),
+                    },
+                ),
+                About::Signature => request(
+                    id,
+                    method,
+                    SignatureHelpParams {
+                        text_document_position_params: at,
+                        work_done_progress_params: Default::default(),
+                        context: Some(SignatureHelpContext {
+                            trigger_kind: match (trigger, cause) {
+                                (Some(_), _) => SignatureHelpTriggerKind::TRIGGER_CHARACTER,
+                                (None, Cause::Typed) => SignatureHelpTriggerKind::CONTENT_CHANGE,
+                                (None, Cause::Moved | Cause::Landed) => {
+                                    SignatureHelpTriggerKind::INVOKED
+                                }
+                            },
+                            trigger_character: trigger.map(String::from),
+                            is_retrigger: shown.is_some(),
+                            active_signature_help: shown.clone(),
+                        }),
+                    },
+                ),
                 _ => request(id, method, at),
             },
         });
@@ -1067,6 +1206,7 @@ pub fn ask_at(state: &mut State, about: About, at: Option<Place>) -> Vec<Effect>
                 revision,
                 about,
             },
+            cause,
             waiting: sent.keys().cloned().collect(),
             sent,
             refused: false,
@@ -1113,6 +1253,7 @@ fn answered(state: &mut State, language: &str, id: i64, message: &Value) -> Vec<
     let error = message.get("error").is_some();
     question.refused |= error;
     let ask = question.asked.clone();
+    let cause = question.cause;
     let last = question.waiting.is_empty();
     let told = last.then(|| question.clone());
     if last {
@@ -1127,6 +1268,7 @@ fn answered(state: &mut State, language: &str, id: i64, message: &Value) -> Vec<
             About::Hover => hovered(state, ask, &message["result"]),
             About::Definition => jumped(state, ask, &message["result"]),
             About::Candidates => offered(state, ask, &message["result"]),
+            About::Signature => signed(state, ask, cause, &message["result"]),
             About::Formatting(_) | About::Document => formatted(state, ask, &message["result"]),
         },
     };
@@ -1150,6 +1292,10 @@ fn empty_handed(state: &mut State, question: &Question) -> Vec<Effect> {
             if matches!(state.modal, crate::Modal::Candidates(_)) {
                 state.modal = crate::Modal::None;
             }
+            return Vec::new();
+        }
+        About::Signature => {
+            state.signature = None;
             return Vec::new();
         }
         About::Formatting(_) => return Vec::new(),
@@ -1249,6 +1395,149 @@ fn offered(state: &mut State, ask: Ask, result: &Value) -> Told {
     }
     state.modal = crate::Modal::Candidates(list);
     Told::Something(Vec::new())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Signature {
+    pub asked: Ask,
+    pub label: String,
+    pub highlighted: Option<(usize, usize)>,
+    pub docs: Vec<preview::Row>,
+    pub shown: usize,
+    pub of: usize,
+    pub parameter: usize,
+    pub reply: ServerSignature,
+}
+
+const DOC_ROWS: usize = 4;
+
+impl Signature {
+    pub fn rows(&self) -> usize {
+        self.docs.len() + 3
+    }
+
+    pub fn count(&self) -> Option<String> {
+        (self.of > 1).then(|| format!("{}/{}", self.shown + 1, self.of))
+    }
+
+    pub fn placement(&self, state: &State) -> Placement {
+        let line = self.asked.place.line;
+        let rows = self.rows();
+        let (above, below) = match &state.modal {
+            crate::Modal::Candidates(list) if list.from > line => (line, list.from + list.rows()),
+            crate::Modal::Candidates(list) => (list.from, line + 1),
+            _ => (line, line + 1),
+        };
+        let titled = match self.count() {
+            Some(count) => format!("{} {count}", self.label),
+            None => self.label.clone(),
+        };
+        let docs: Vec<String> = self.docs.iter().map(preview::Row::text).collect();
+        let width =
+            measured(std::iter::once(titled.as_str()).chain(docs.iter().map(String::as_str)));
+        Placement {
+            from: match above > state.editor_scroll + rows {
+                true => above - rows,
+                false => below,
+            },
+            column: at_column(
+                self.asked.place.column,
+                width,
+                crate::fits(state).2,
+                state.editor_hscroll,
+            ),
+            width,
+            rows,
+        }
+    }
+}
+
+fn signed(state: &mut State, ask: Ask, cause: Cause, result: &Value) -> Told {
+    let Ok(Some(reply)) = serde_json::from_value::<Option<ServerSignature>>(result.clone()) else {
+        return Told::Nothing;
+    };
+    let Some((shown, parameter)) = active(&reply) else {
+        return Told::Nothing;
+    };
+    let signature = &reply.signatures[shown];
+    let held = signature
+        .parameters
+        .as_ref()
+        .and_then(|parameters| parameters.get(parameter));
+    let docs = held
+        .and_then(|parameter| parameter.documentation.clone())
+        .map(|documentation| {
+            let measure = measure(state.screen_width as usize);
+            let rows = match documentation {
+                lsp_types::Documentation::String(text) => preview::rows(&text, measure),
+                lsp_types::Documentation::MarkupContent(markup) => markup_rows(markup, measure),
+            };
+            fitted(rows, measure, DOC_ROWS)
+        })
+        .unwrap_or_default();
+    let new_slot = cause == Cause::Landed
+        || (cause == Cause::Typed && opens_slot(state, &ask.path, ask.place))
+        || state.signature.as_ref().map(|open| open.parameter) != Some(parameter);
+    state.signature = Some(Signature {
+        asked: ask,
+        highlighted: held.and_then(|parameter| span(&signature.label, &parameter.label)),
+        label: signature
+            .label
+            .chars()
+            .map(|character| match character.is_control() {
+                true => ' ',
+                false => character,
+            })
+            .collect(),
+        docs,
+        shown,
+        of: reply.signatures.len(),
+        parameter,
+        reply,
+    });
+    match new_slot {
+        true => Told::Something(self::ask(state, About::Candidates)),
+        false => Told::Something(Vec::new()),
+    }
+}
+
+fn active(reply: &ServerSignature) -> Option<(usize, usize)> {
+    let shown = reply
+        .active_signature
+        .map(|index| index as usize)
+        .filter(|index| *index < reply.signatures.len())
+        .unwrap_or(0);
+    let signature = reply.signatures.get(shown)?;
+    let parameter = signature
+        .active_parameter
+        .or(reply.active_parameter)
+        .unwrap_or(0);
+    Some((shown, parameter as usize))
+}
+
+fn span(label: &str, parameter: &ParameterLabel) -> Option<(usize, usize)> {
+    match parameter {
+        ParameterLabel::Simple(named) if !named.is_empty() => {
+            let at = label.find(named.as_str())?;
+            let start = label[..at].chars().count();
+            Some((start, start + named.chars().count()))
+        }
+        ParameterLabel::Simple(_) => None,
+        ParameterLabel::LabelOffsets([from, to]) => {
+            let column = |units: u32| {
+                let mut counted = 0;
+                for (at, character) in label.chars().enumerate() {
+                    if counted == units {
+                        return Some(at);
+                    }
+                    counted += character.len_utf16() as u32;
+                }
+                (counted == units).then(|| label.chars().count())
+            };
+            let (start, end) = (column(*from)?, column(*to)?);
+            (start < end).then_some((start, end))
+        }
+    }
 }
 
 fn formatted(state: &mut State, ask: Ask, result: &Value) -> Told {
@@ -1495,28 +1784,37 @@ const TALLEST: usize = 20;
 fn says(result: &Value, measure: usize) -> Option<Vec<preview::Row>> {
     let hover: ServerHover = serde_json::from_value(result.clone()).ok()?;
     let rows = match hover.contents {
-        HoverContents::Markup(markup) => match markup.kind {
-            MarkupKind::Markdown => preview::rows(&markup.value, measure),
-            MarkupKind::PlainText => plain_rows(&markup.value, measure),
-        },
+        HoverContents::Markup(markup) => markup_rows(markup, measure),
         HoverContents::Scalar(marked) => marked_rows(marked, measure),
         HoverContents::Array(marked) => marked
             .into_iter()
             .flat_map(|one| marked_rows(one, measure))
             .collect(),
     };
+    let rows = fitted(rows, measure, TALLEST);
+    if rows.iter().all(|row| row.text().trim().is_empty()) {
+        return None;
+    }
+    Some(rows)
+}
+
+fn markup_rows(markup: MarkupContent, measure: usize) -> Vec<preview::Row> {
+    match markup.kind {
+        MarkupKind::Markdown => preview::rows(&markup.value, measure),
+        MarkupKind::PlainText => plain_rows(&markup.value, measure),
+    }
+}
+
+fn fitted(rows: Vec<preview::Row>, measure: usize, tallest: usize) -> Vec<preview::Row> {
     let mut rows: Vec<preview::Row> = rows
         .into_iter()
         .flat_map(|row| broken(row, measure))
         .collect();
-    if rows.iter().all(|row| row.text().trim().is_empty()) {
-        return None;
-    }
-    if rows.len() > TALLEST {
-        rows.truncate(TALLEST - 1);
+    if rows.len() > tallest {
+        rows.truncate(tallest - 1);
         rows.push(cut_short(rows.last().map_or(1, |row| row.line)));
     }
-    Some(rows)
+    rows
 }
 
 fn marked_rows(marked: MarkedString, measure: usize) -> Vec<preview::Row> {
@@ -1687,8 +1985,22 @@ fn triggers(declared: &Value) -> Vec<char> {
     else {
         return Vec::new();
     };
-    std::iter::once(named.first_trigger_character)
-        .chain(named.more_trigger_character.unwrap_or_default())
+    single(
+        std::iter::once(named.first_trigger_character)
+            .chain(named.more_trigger_character.unwrap_or_default()),
+    )
+}
+
+fn characters(declared: &Value, list: &str) -> Vec<char> {
+    let Ok(named) = serde_json::from_value::<Vec<String>>(declared[list].clone()) else {
+        return Vec::new();
+    };
+    single(named)
+}
+
+fn single(named: impl IntoIterator<Item = String>) -> Vec<char> {
+    named
+        .into_iter()
         .filter_map(|named| match named.chars().collect::<Vec<char>>()[..] {
             [one] => Some(one),
             _ => None,
@@ -2007,6 +2319,20 @@ fn initialize(root: &Path, options: Option<Value>) -> InitializeParams {
                 hover: Some(HoverClientCapabilities {
                     content_format: Some(vec![MarkupKind::Markdown, MarkupKind::PlainText]),
                     ..HoverClientCapabilities::default()
+                }),
+                signature_help: Some(SignatureHelpClientCapabilities {
+                    signature_information: Some(SignatureInformationSettings {
+                        documentation_format: Some(vec![
+                            MarkupKind::Markdown,
+                            MarkupKind::PlainText,
+                        ]),
+                        parameter_information: Some(ParameterInformationSettings {
+                            label_offset_support: Some(true),
+                        }),
+                        active_parameter_support: Some(true),
+                    }),
+                    context_support: Some(true),
+                    ..SignatureHelpClientCapabilities::default()
                 }),
                 ..TextDocumentClientCapabilities::default()
             }),
@@ -3616,6 +3942,235 @@ mod tests {
             triggers(&json!({"firstTriggerCharacter": ";", "moreTriggerCharacter": ["", ">="]})),
             vec![';']
         );
+    }
+
+    #[test]
+    fn the_characters_that_open_the_list_are_the_servers_own() {
+        assert_eq!(
+            characters(
+                &json!({"triggerCharacters": [".", ":", "->", ""]}),
+                "triggerCharacters"
+            ),
+            vec!['.', ':']
+        );
+        assert_eq!(
+            characters(&json!({}), "triggerCharacters"),
+            Vec::<char>::new()
+        );
+        assert_eq!(
+            characters(&json!({"triggerCharacters": []}), "triggerCharacters"),
+            Vec::<char>::new()
+        );
+        assert_eq!(
+            characters(&json!(true), "triggerCharacters"),
+            Vec::<char>::new()
+        );
+        assert_eq!(
+            characters(&Value::Null, "triggerCharacters"),
+            Vec::<char>::new()
+        );
+    }
+
+    #[test]
+    fn a_signature_is_asked_on_one_list_and_asked_again_on_another() {
+        let declared = json!({"triggerCharacters": ["(", ","], "retriggerCharacters": [")", "=>"]});
+        assert_eq!(characters(&declared, "triggerCharacters"), vec!['(', ',']);
+        assert_eq!(characters(&declared, "retriggerCharacters"), vec![')']);
+        assert_eq!(
+            characters(&json!({"triggerCharacters": ["("]}), "retriggerCharacters"),
+            Vec::<char>::new()
+        );
+    }
+
+    #[test]
+    fn a_label_offset_pair_counts_utf16_units_and_spans_characters() {
+        let label = "größe(😀: i32, b: &str)";
+        assert_eq!(
+            span(label, &ParameterLabel::LabelOffsets([6, 13])),
+            Some((6, 12))
+        );
+        assert_eq!(
+            span(label, &ParameterLabel::LabelOffsets([15, 22])),
+            Some((14, 21))
+        );
+    }
+
+    #[test]
+    fn a_string_label_is_found_in_the_signature() {
+        assert_eq!(
+            span(
+                "method(first: i32, second: &str)",
+                &ParameterLabel::Simple("second: &str".to_string())
+            ),
+            Some((19, 31))
+        );
+        assert_eq!(
+            span("ünïcode(a, b)", &ParameterLabel::Simple("b".to_string())),
+            Some((11, 12))
+        );
+    }
+
+    #[test]
+    fn a_label_that_resolves_to_nothing_highlights_nothing() {
+        let label = "method(first: i32)";
+        assert_eq!(
+            span(label, &ParameterLabel::Simple("second".to_string())),
+            None
+        );
+        assert_eq!(span(label, &ParameterLabel::Simple(String::new())), None);
+        assert_eq!(span(label, &ParameterLabel::LabelOffsets([7, 99])), None);
+        assert_eq!(span(label, &ParameterLabel::LabelOffsets([9, 9])), None);
+    }
+
+    fn signatures_of(json: Value) -> ServerSignature {
+        serde_json::from_value(json).expect("a signature help reply")
+    }
+
+    #[test]
+    fn the_signature_says_its_own_active_parameter_before_the_reply_does() {
+        let signatures = json!([
+            {"label": "f(a)", "activeParameter": 2},
+            {"label": "f(a, b)"},
+        ]);
+        assert_eq!(
+            active(&signatures_of(
+                json!({"signatures": signatures, "activeParameter": 1})
+            )),
+            Some((0, 2))
+        );
+        assert_eq!(
+            active(&signatures_of(
+                json!({"signatures": signatures, "activeSignature": 1, "activeParameter": 1})
+            )),
+            Some((1, 1))
+        );
+        assert_eq!(
+            active(&signatures_of(
+                json!({"signatures": signatures, "activeSignature": 1})
+            )),
+            Some((1, 0))
+        );
+    }
+
+    #[test]
+    fn without_an_active_signature_the_first_is_shown() {
+        let signatures = json!([{"label": "f(a)"}, {"label": "f(a, b)"}]);
+        assert_eq!(
+            active(&signatures_of(json!({"signatures": signatures}))),
+            Some((0, 0))
+        );
+        assert_eq!(
+            active(&signatures_of(
+                json!({"signatures": signatures, "activeSignature": 7})
+            )),
+            Some((0, 0))
+        );
+        assert_eq!(active(&signatures_of(json!({"signatures": []}))), None);
+    }
+
+    fn signing(line: usize, docs: usize) -> (State, Signature) {
+        let state = workspace("rust", "rust-analyzer");
+        let path = state.root.join("src/lib.rs");
+        let signature = Signature {
+            asked: Ask {
+                path,
+                place: Place { line, column: 8 },
+                revision: 1,
+                about: About::Signature,
+            },
+            label: "method(first: i32)".to_string(),
+            highlighted: Some((7, 17)),
+            docs: plain_rows(&vec!["said"; docs].join("\n"), 40),
+            shown: 0,
+            of: 1,
+            parameter: 0,
+            reply: signatures_of(json!({"signatures": []})),
+        };
+        (state, signature)
+    }
+
+    #[test]
+    fn the_signature_sits_on_the_rows_above_the_line() {
+        let (state, signature) = signing(10, 2);
+        let placement = signature.placement(&state);
+        assert_eq!((placement.from, placement.rows), (5, 5));
+    }
+
+    #[test]
+    fn without_room_above_the_signature_sits_below_the_line() {
+        let (state, signature) = signing(3, 2);
+        assert_eq!(signature.placement(&state).from, 4);
+    }
+
+    #[test]
+    fn without_room_above_the_signature_sits_below_the_candidate_list() {
+        let (mut state, signature) = signing(3, 2);
+        let list = Candidates {
+            items: Vec::new(),
+            selected: 0,
+            first: 0,
+            from: 4,
+            column: 8,
+            asked: signature.asked.clone(),
+            word_start: 8,
+            ordered: false,
+            typed: String::new(),
+        };
+        let below = list.from + list.rows();
+        state.modal = crate::Modal::Candidates(list);
+        assert_eq!(signature.placement(&state).from, below);
+    }
+
+    #[test]
+    fn a_candidate_list_above_the_line_pushes_the_signature_above_it() {
+        let (mut state, signature) = signing(20, 2);
+        let list = Candidates {
+            items: Vec::new(),
+            selected: 0,
+            first: 0,
+            from: 18,
+            column: 8,
+            asked: signature.asked.clone(),
+            word_start: 8,
+            ordered: false,
+            typed: String::new(),
+        };
+        state.modal = crate::Modal::Candidates(list);
+        assert_eq!(signature.placement(&state).from, 13);
+    }
+
+    #[test]
+    fn a_signature_with_no_room_above_a_list_above_the_line_goes_below_the_line() {
+        let (mut state, signature) = signing(8, 2);
+        let list = Candidates {
+            items: Vec::new(),
+            selected: 0,
+            first: 0,
+            from: 5,
+            column: 8,
+            asked: signature.asked.clone(),
+            word_start: 8,
+            ordered: false,
+            typed: String::new(),
+        };
+        state.modal = crate::Modal::Candidates(list);
+        assert_eq!(signature.placement(&state).from, 9);
+    }
+
+    #[test]
+    fn a_scrolled_pane_has_no_room_above_its_top_line() {
+        let (mut state, signature) = signing(12, 2);
+        state.editor_scroll = 8;
+        assert_eq!(signature.placement(&state).from, 13);
+    }
+
+    #[test]
+    fn the_overload_count_widens_the_box() {
+        let (state, mut signature) = signing(10, 0);
+        let alone = signature.placement(&state).width;
+        signature.of = 3;
+        assert_eq!(signature.count().as_deref(), Some("1/3"));
+        assert_eq!(signature.placement(&state).width, alone + 4);
     }
 
     #[test]

@@ -572,6 +572,7 @@ struct Edge {
     searching: Option<(u64, Receiver<Vec<varde::search::Hit>>, Arc<()>)>,
     indexing: Option<(u64, Receiver<String>)>,
     candidates_due: Option<Instant>,
+    signature_due: Option<Instant>,
     hover_due: Option<Instant>,
     hand: bool,
     analysed: Sender<(u64, Figures, Option<Figures>)>,
@@ -712,6 +713,7 @@ fn run(
         searching: None,
         indexing: None,
         candidates_due: None,
+        signature_due: None,
         hover_due: None,
         hand: false,
         servers: BTreeMap::new(),
@@ -969,6 +971,11 @@ fn queue_due_windows(edge: &mut Edge, queue: &mut VecDeque<Event>) -> bool {
     if edge.candidates_due.is_some_and(|due| now >= due) {
         edge.candidates_due = None;
         queue.push_back(Event::CandidatesDue);
+        fired = true;
+    }
+    if edge.signature_due.is_some_and(|due| now >= due) {
+        edge.signature_due = None;
+        queue.push_back(Event::SignatureDue);
         fired = true;
     }
     if edge.hover_due.is_some_and(|due| now >= due) {
@@ -2627,6 +2634,9 @@ fn perform_session(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>)
         },
         Effect::DebounceCandidates(after_ms) => {
             edge.candidates_due = Some(Instant::now() + Duration::from_millis(after_ms));
+        }
+        Effect::DebounceSignature(after_ms) => {
+            edge.signature_due = Some(Instant::now() + Duration::from_millis(after_ms));
         }
         Effect::DwellHover(after_ms) => {
             edge.hover_due = Some(Instant::now() + Duration::from_millis(after_ms));

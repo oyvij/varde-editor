@@ -330,10 +330,6 @@ pub enum Modal {
         text: Buffer,
         tag: story::Tag,
     },
-    Stops {
-        path: PathBuf,
-        at: Vec<editor::Tail>,
-    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -682,6 +678,7 @@ pub enum Event {
     HotReplace,
     LeaveStepping,
     CandidatesDue,
+    SignatureDue,
     PointerMoved(Pointed),
     HoverDue,
     MoveCandidate(Direction),
@@ -919,6 +916,7 @@ pub enum Effect {
     ReadForReview(PathBuf),
     ReadBreakpointFile(PathBuf),
     DebounceCandidates(u64),
+    DebounceSignature(u64),
     DwellHover(u64),
     Exit,
     Relaunch,
@@ -1264,6 +1262,8 @@ pub struct State {
     pub diagnostics: BTreeMap<PathBuf, BTreeMap<String, Vec<lsp::Diagnostic>>>,
     pub diagnostic_totals: [usize; 4],
     pub hover: Option<lsp::Hover>,
+    pub stops: Option<editor::Stops>,
+    pub signature: Option<lsp::Signature>,
     pub pointed_at: Pointed,
 }
 
@@ -1495,6 +1495,8 @@ impl Default for State {
             diagnostics: BTreeMap::new(),
             diagnostic_totals: [0; 4],
             hover: None,
+            stops: None,
+            signature: None,
             hovered_action: None,
             transport_lit: None,
             preview_width: PreviewWidth::Reading,
@@ -1650,17 +1652,34 @@ fn settle(mut next: State, mut effects: Vec<Effect>, wheeled: bool) -> (State, V
         if next.hover.is_some() && !lsp::hover_stands(&next) {
             next.hover = None;
         }
-        let elsewhere = match &next.modal {
+        let left_behind = match &next.modal {
             Modal::Candidates(list) => {
-                next.focus != Pane::Editor || next.current_buffer.as_ref() != Some(&list.asked.path)
-            }
-            Modal::Stops { path, .. } => {
-                next.focus != Pane::Editor || next.current_buffer.as_ref() != Some(path)
+                elsewhere(&next, &list.asked.path)
+                    || next.buffers.get(&list.asked.path).is_some_and(|buffer| {
+                        (buffer.line, buffer.column)
+                            < (list.asked.place.line, list.asked.place.column)
+                    })
             }
             _ => false,
         };
-        if elsewhere {
+        if left_behind {
             next.modal = Modal::None;
+        }
+        if next.signature.as_ref().is_some_and(|signature| {
+            elsewhere(&next, &signature.asked.path)
+                || next
+                    .buffers
+                    .get(&signature.asked.path)
+                    .is_none_or(|buffer| buffer.mode != editor::Mode::Insert)
+        }) {
+            next.signature = None;
+        }
+        if next
+            .stops
+            .as_ref()
+            .is_some_and(|stops| elsewhere(&next, &stops.path))
+        {
+            next.stops = None;
         }
         if !matches!(next.modal, Modal::Comment) {
             next.comment = None;
@@ -1744,6 +1763,10 @@ pub type Traced = (PathBuf, u64, std::sync::Arc<[Option<usize>]>);
 type Declined = (State, Event);
 
 type Answered = Result<(State, Vec<Effect>), Declined>;
+
+fn elsewhere(state: &State, path: &Path) -> bool {
+    state.focus != Pane::Editor || state.current_buffer.as_deref() != Some(path)
+}
 
 fn clamp_buffers(next: &mut State) {
     let rows = next.buffers.len();
@@ -2645,7 +2668,11 @@ fn on_enter_name(state: &State, mut next: State, event: Event, wheeled: bool) ->
             vec![]
         }
         Event::Cancel => {
+            if state.modal == Modal::None && state.signature.is_none() {
+                next.stops = None;
+            }
             next.modal = Modal::None;
+            next.signature = None;
             next.selected_action = None;
             if !matches!(state.modal, Modal::StepDetail | Modal::Prediction { .. }) {
                 next.walking = None;
@@ -4092,7 +4119,7 @@ fn on_editor_arrow_2(state: &State, mut next: State, event: Event, wheeled: bool
             if let Some(buffer) = edited_mut(&mut next) {
                 buffer.arrow(direction);
             }
-            vec![]
+            signature_follows(&next)
         }
 
         Event::EditorWord(direction) => {
@@ -4101,7 +4128,7 @@ fn on_editor_arrow_2(state: &State, mut next: State, event: Event, wheeled: bool
             if let Some(buffer) = edited_mut(&mut next) {
                 buffer.word_motion(editor::Word::toward(direction));
             }
-            vec![]
+            signature_follows(&next)
         }
 
         Event::EditorExtend(direction) => {
@@ -4693,7 +4720,9 @@ fn editor_key(state: &State, next: State, key: char, wheeled: bool) -> (State, V
     let mut typed = vec![];
     if inserting {
         typed = lsp::typed(&mut next);
+        typed.extend(lsp::completes_after(&next, key));
         typed.extend(lsp::on_type(&mut next, key));
+        typed.extend(lsp::signs_after(&mut next, key));
     }
     let mut effects = match register_of(&next) {
         Some(text) if key == 'y' && Some(&text) != held.as_ref() => to_clipboard(state, text),
@@ -5218,6 +5247,10 @@ fn on_lsp(state: &State, mut next: State, event: Event, wheeled: bool) -> Answer
         }
 
         Event::CandidatesDue => lsp::ask(&mut next, lsp::About::Candidates),
+        Event::SignatureDue => match editor_inserting(state) {
+            true => lsp::ask_for(&mut next, lsp::About::Signature, None, lsp::Cause::Moved),
+            false => Vec::new(),
+        },
 
         Event::PointerMoved(pointed) => {
             next.pointed_at = pointed;
@@ -5271,42 +5304,55 @@ fn on_lsp(state: &State, mut next: State, event: Event, wheeled: bool) -> Answer
         }
 
         Event::AcceptCandidate => {
-            if let Modal::Candidates(list) = &next.modal {
-                let chosen = list.chosen().clone();
-                next.modal = Modal::None;
-                let (text, stops) = match chosen.snippet {
-                    true => lsp::snippet(&chosen.insert),
-                    false => (chosen.insert, Vec::new()),
-                };
-                let left = current(&mut next)
-                    .map(|buffer| buffer.complete(&text, &stops))
-                    .unwrap_or_default();
-                if let (Some(path), false) = (next.current_buffer.clone(), left.is_empty()) {
-                    next.modal = Modal::Stops { path, at: left };
-                }
+            let Modal::Candidates(list) = &next.modal else {
+                return Ok(settle(next, vec![], wheeled));
+            };
+            let chosen = list.chosen().clone();
+            next.modal = Modal::None;
+            let (text, stops) = match chosen.snippet {
+                true => lsp::snippet(&chosen.insert),
+                false => (chosen.insert, Vec::new()),
+            };
+            let left = current(&mut next)
+                .map(|buffer| buffer.complete(&text, &stops))
+                .unwrap_or_default();
+            let held = next.stops.take().map(|stops| stops.at).unwrap_or_default();
+            let at: Vec<editor::Tail> = left.into_iter().chain(held).collect();
+            if let (Some(path), false) = (next.current_buffer.clone(), at.is_empty()) {
+                next.stops = Some(editor::Stops { path, at });
             }
-            vec![]
+            match stops.is_empty() {
+                true => vec![],
+                false => lsp::lands_on_stop(&mut next),
+            }
         }
 
         Event::NextStop => {
-            if let Modal::Stops { path, at } = next.modal.clone() {
-                let (next_stop, rest) = at.split_first().expect("a stop left to visit");
-                let place = next
-                    .buffers
-                    .get(&path)
-                    .and_then(|buffer| buffer.place_before(*next_stop));
-                next.modal = match (place, rest.is_empty()) {
-                    (Some(_), false) => Modal::Stops {
-                        path: path.clone(),
-                        at: rest.to_vec(),
-                    },
-                    _ => Modal::None,
-                };
-                if let (Some(place), Some(buffer)) = (place, next.buffers.get_mut(&path)) {
-                    buffer.go_to_place(place);
-                }
+            let Some(editor::Stops { path, at }) = next.stops.clone() else {
+                return Ok(settle(next, vec![], wheeled));
+            };
+            if matches!(next.modal, Modal::Candidates(_)) {
+                next.modal = Modal::None;
             }
-            vec![]
+            let (next_stop, rest) = at.split_first().expect("a stop left to visit");
+            let place = next
+                .buffers
+                .get(&path)
+                .and_then(|buffer| buffer.place_before(*next_stop));
+            next.stops = match (place, rest.is_empty()) {
+                (Some(_), false) => Some(editor::Stops {
+                    path: path.clone(),
+                    at: rest.to_vec(),
+                }),
+                _ => None,
+            };
+            match (place, next.buffers.get_mut(&path)) {
+                (Some(place), Some(buffer)) => {
+                    buffer.go_to_place(place);
+                    lsp::lands_on_stop(&mut next)
+                }
+                _ => vec![],
+            }
         }
 
         Event::MoveToolRow(direction) => {
@@ -5900,7 +5946,7 @@ fn on_rebuild(state: &State, mut next: State, event: Event, wheeled: bool) -> An
             } else if let Some(buffer) = current(&mut next) {
                 buffer.go_to_place(at);
             }
-            vec![]
+            signature_follows(&next)
         }
 
         Event::HoverLink(at) => {
@@ -8511,6 +8557,13 @@ pub(crate) fn editor_inserting(state: &State) -> bool {
         .is_some_and(|buffer| buffer.mode == editor::Mode::Insert)
 }
 
+fn signature_follows(state: &State) -> Vec<Effect> {
+    match editor_inserting(state) {
+        true => vec![Effect::DebounceSignature(lsp::DEBOUNCE_MS)],
+        false => Vec::new(),
+    }
+}
+
 fn selected_row(state: &State) -> Option<tree::Row> {
     let selection = state.tree_selection.as_ref()?;
     tree::visible_rows(state)
@@ -9162,28 +9215,28 @@ mod tests {
     fn a_snippet_sequence_goes_when_the_keyboard_leaves_the_editor() {
         let path = std::path::PathBuf::from("/src/lib.rs");
         let filling = State {
-            modal: Modal::Stops {
+            stops: Some(editor::Stops {
                 path: path.clone(),
                 at: vec![editor::Tail(0)],
-            },
+            }),
             current_buffer: Some(path),
             focus: Pane::Editor,
             ..State::default()
         };
         let typed = update(&filling, Event::EditorKey('x')).0;
-        assert!(matches!(typed.modal, Modal::Stops { .. }));
+        assert!(typed.stops.is_some());
         let elsewhere = update(&filling, Event::ClickPane(Pane::Terminal)).0;
-        assert_eq!(elsewhere.modal, Modal::None);
+        assert_eq!(elsewhere.stops, None);
     }
 
     #[test]
     fn a_stop_the_buffer_can_no_longer_name_ends_the_sequence() {
         let path = std::path::PathBuf::from("/src/lib.rs");
         let mut state = State {
-            modal: Modal::Stops {
+            stops: Some(editor::Stops {
                 path: path.clone(),
                 at: vec![editor::Tail(40), editor::Tail(0)],
-            },
+            }),
             current_buffer: Some(path.clone()),
             focus: Pane::Editor,
             ..State::default()
@@ -9192,7 +9245,7 @@ mod tests {
         buffer.go_to_place(Place { line: 2, column: 2 });
         state.buffers.insert(path.clone(), buffer);
         let after = update(&state, Event::NextStop).0;
-        assert_eq!(after.modal, Modal::None);
+        assert_eq!(after.stops, None);
         let left = &after.buffers[&path];
         assert_eq!((left.line, left.column), (2, 2));
         assert_eq!(left.shown(), "one\ntwo");
@@ -11045,6 +11098,25 @@ mod tests {
         assert_eq!(buffer.mode, editor::Mode::Insert);
         assert_eq!((buffer.line, buffer.column), (3, 5));
         assert_eq!(after.refusal, None);
+    }
+
+    #[test]
+    fn only_a_move_in_insert_mode_arms_the_signature_window() {
+        let normal = opened(&State::default(), "/w/src/lib.rs");
+        let inserting = update(&normal, Event::EditorKey('i')).0;
+        let at = Place { line: 1, column: 3 };
+        let armed = vec![Effect::DebounceSignature(lsp::DEBOUNCE_MS)];
+        for (state, expected) in [(&normal, vec![]), (&inserting, armed)] {
+            assert_eq!(
+                update(state, Event::EditorArrow(Direction::Right)).1,
+                expected
+            );
+            assert_eq!(
+                update(state, Event::EditorWord(Direction::Right)).1,
+                expected
+            );
+            assert_eq!(update(state, Event::ClickText(at)).1, expected);
+        }
     }
 
     #[test]

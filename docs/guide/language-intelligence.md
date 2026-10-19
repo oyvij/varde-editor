@@ -82,6 +82,15 @@ Dismissing the list never changes what you wrote. If the word matches no Candida
 rather than showing empty, and it also closes when you jump to another file. Where the server gave
 an order, the list keeps it.
 
+**After a dot.** A server names the characters after which it has something to offer, such as `.`
+for a member, or `:` in Rust's `std::`. Type one of them and, after the same short pause, the list
+opens with nothing typed, holding everything the server offered: after `object.method().` you see
+every method the returned object has without knowing a name first. Letters narrow it and
+`Backspace` widens it as above, and backspacing or moving back over the `.` closes it. `Esc`
+leaves the `.` where you typed it, and `Enter` puts the Candidate after it. The characters are the
+server's own list, so they differ from language to language, and a server that names none opens
+the list only while you type a name.
+
 **Blanks.** Some Candidates are templates with places for values, such as `println!("…")` or
 `foo(…, …)`. Accepting one inserts the text without the placeholders and puts the cursor on the
 first blank. `Tab` moves to the next blank. At the last one, the cursor lands where the code
@@ -89,6 +98,43 @@ continues and the sequence ends. `Esc` ends the sequence and keeps the text, bec
 Candidate is not undoing it. Opening another file ends it too. While blanks remain, `Tab` means
 "next blank". The rest of the time it indents, as [Editing](editing.md#typing) describes. A plain
 Candidate has no sequence: its text goes in and the cursor lands after it.
+
+### Signature
+
+Type `(` after a method name in insert mode and, if the server has something to say about the
+call, a **Signature** box opens on the rows above your line. It shows the call's signature with the
+parameter you are filling in highlighted, that parameter's documentation under it (a few rows at
+most), and `1/3` at the right when the method has overloads. Type `,` and the highlight moves to the
+next parameter. While the box is open, every character you type asks the server again, so it
+follows what you write. `)` closes the box, and so does the server saying the cursor is no longer
+in a call.
+
+Each argument also gets its own Candidate list below the line, with nothing typed: after `(` it holds
+what the server offers for the first argument, and after `,` a fresh list opens for the next one.
+Letters narrow it as usual. A space after the comma keeps the list open, but a space after a word
+you typed closes it, as it does anywhere. Which argument you are on is the server's answer, not a
+count of brackets, and while you stay on the same argument the list is not asked again.
+
+The help follows the cursor too. Move it in insert mode with the arrow keys or a click, and once it
+rests for a moment Varde asks the server where it is, box or no box. Landing in another argument
+moves the highlight and opens that argument's list; moving out of the call closes the box. Normal
+mode asks nothing.
+
+A template's blanks get the same help. Accepting `foo(…, …)` asks for the Signature at the first
+blank and opens that blank's list, and `Tab` to the next blank asks again there, so each blank gets
+a list of its own. Accepting a Candidate into a blank keeps the sequence, so `Tab` still goes on to
+the next one. Accepting a plain Candidate asks for nothing.
+
+The box never takes a key: the arrows and `Enter` stay with the Candidate list. Near the top of the
+pane, where there is no room above the line, it goes below the Candidate list instead, and it never
+covers the line you are typing on. The characters that open it are the server's own list, usually
+`(` and `,`, and a server that does not offer signatures shows no box at all. When two servers
+serve the file, the first one with an answer supplies the Signature.
+
+`Esc` closes the box, and the Candidate list with it when both are open, leaving the text as you
+typed it and you in insert mode; the next `Esc` leaves insert mode, or ends a Tab stop sequence you
+are in. Leaving insert mode, jumping to another file or moving focus out of the editor takes the
+box away too.
 
 ### Formatting as you type
 

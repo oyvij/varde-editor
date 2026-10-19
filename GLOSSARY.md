@@ -655,6 +655,21 @@ leaves the Buffer holding exactly the characters that were typed, which is the p
 feature stands on.
 _Avoid_: completion (that is the act), suggestion, item, proposal
 
+**Signature**:
+What a Language server says about the call the cursor is inside: the call's signature, the Active
+parameter it highlights, that parameter's documentation, and how many overloads there are. Asked
+for in insert mode when a signature help Trigger character such as `(` or `,` is typed, and again
+on every character while it is shown; shown above the line, beside the Candidate list rather than
+instead of it, and taking none of its keys. `)` closes it, and so does a reply that says the cursor
+is in no call; an empty box is not an answer.
+_Avoid_: signature help popup, parameter hints, tooltip, popup
+
+**Active parameter**:
+The parameter of a Signature the cursor's argument fills, highlighted in its label. The server
+decides which it is — the signature's own `activeParameter`, otherwise the reply's — and Varde never
+counts commas to work it out.
+_Avoid_: current argument, selected parameter, argument index
+
 **Tab stop**:
 A place an expanded Candidate left for a value to go, and the sequence of them Tab walks. The
 protocol's own word, and the one thing here that outlives the keystroke that made it: while stops
@@ -665,13 +680,18 @@ _Avoid_: placeholder (that is the `${1:…}` in the reply, not the place in the 
 (the cheatsheet's word for the gesture, not the thing), marker, anchor
 
 **Trigger character**:
-A character a Language server named as one it wants to be told about, so that it can lay out the text
-around it the moment it is typed. The server's own list, read off its `initialize` reply and never
-spelled in Varde: rust-analyzer names `.`, `=`, `<`, `>`, `{`, `(`, `|` and `+`, jdtls names `;`, `}`
-and a newline, clangd names a newline alone, and gopls and the TypeScript server name none. What
-comes back is edits, applied as one thing to undo — and dropped when the reader has typed on since,
-which is the Document version rule read the other way round.
-_Avoid_: format key, hotkey, on-type character, brace (that is one of them, not the idea), autoformat
+A character a Language server named as one it wants to be asked about the moment it is typed. A
+server names one list per question — completion, signature help, on-type formatting — and each is
+the server's own, read off its `initialize` reply and never spelled in Varde. For completion it is
+`completionProvider.triggerCharacters`, usually `.` and often `:` or `>` besides: typing one opens
+the Candidate list with nothing typed after the usual debounce, and the request says which character
+asked. For on-type formatting rust-analyzer names `.`, `=`, `<`, `>`, `{`, `(`, `|` and `+`, jdtls
+names `;`, `}` and a newline, clangd names a newline alone, and gopls and the TypeScript server name
+none; what comes back is edits, applied as one thing to undo — and dropped when the reader has typed
+on since, which is the Document version rule read the other way round. A character on two lists asks
+both questions, independently. Only single characters count: an entry like `->` is ignored.
+_Avoid_: format key, hotkey, on-type character, brace (that is one of them, not the idea),
+autoformat, dot completion
 
 **Formatter**:
 An external command a project names to lay one language's files out — `prettier`, `black`, `gofmt`.

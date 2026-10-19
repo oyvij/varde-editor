@@ -242,7 +242,7 @@ pub const COMMANDS: [(&str, &str, &[View], &[Event]); 37] = [
     ),
 ];
 
-pub const CHEATSHEET: [(&str, &str, &[View]); 46] = [
+pub const CHEATSHEET: [(&str, &str, &[View]); 47] = [
     ("i a o O x", "edit", &[View::Edit]),
     ("w b e", "word", &[View::Edit, View::Knowledge]),
     ("gg G", "file ends", &[View::Edit, View::Knowledge]),
@@ -294,6 +294,7 @@ pub const CHEATSHEET: [(&str, &str, &[View]); 46] = [
         &[View::Edit, View::Review, View::Story, View::Knowledge],
     ),
     ("Enter Esc", "candidates", &[View::Edit]),
+    ("Esc", "close the signature", &[View::Edit]),
     ("Tab", "indent / next blank", &[View::Edit]),
     (
         "C-d D-d gm",
@@ -732,11 +733,6 @@ fn modal_key(state: &State, drafts: &mut Drafts, event: KeyEvent, at_ms: u64) ->
         Modal::Inquiry { .. } => inquiry_box(event, at_ms),
         Modal::Breakpoint { field, draft, .. } => breakpoint_box(*field, draft, event),
         Modal::Candidates(_) => candidate_list(state, drafts, event),
-        Modal::Stops { .. } => match event.code {
-            KeyCode::Tab => vec![Event::NextStop],
-            KeyCode::Esc => vec![Event::Cancel],
-            _ => routed(state, drafts, event),
-        },
         Modal::ConfirmSubmit
         | Modal::Diverged
         | Modal::StepDetail
@@ -752,6 +748,14 @@ fn modal_key(state: &State, drafts: &mut Drafts, event: KeyEvent, at_ms: u64) ->
                 _ => vec![],
             }
         }
+        Modal::None if state.signature.is_some() && event.code == KeyCode::Esc => {
+            vec![Event::Cancel]
+        }
+        Modal::None if state.stops.is_some() => match event.code {
+            KeyCode::Tab => vec![Event::NextStop],
+            KeyCode::Esc => vec![Event::Cancel],
+            _ => routed(state, drafts, event),
+        },
         Modal::None => routed(state, drafts, event),
     }
 }
@@ -765,6 +769,7 @@ fn candidate_list(state: &State, drafts: &mut Drafts, event: KeyEvent) -> Vec<Ev
         KeyCode::Down => vec![Event::MoveCandidate(Direction::Down)],
         KeyCode::Enter => vec![Event::AcceptCandidate],
         KeyCode::Esc => vec![Event::Cancel],
+        KeyCode::Tab if state.stops.is_some() => vec![Event::NextStop],
         _ => routed(state, drafts, event),
     }
 }
@@ -794,8 +799,7 @@ fn answered(modal: &Modal, event: KeyEvent) -> Vec<Event> {
         | Modal::SkillQuestion { .. }
         | Modal::Inquiry { .. }
         | Modal::Comment
-        | Modal::Candidates(_)
-        | Modal::Stops { .. } => {
+        | Modal::Candidates(_) => {
             unreachable!("{modal:?} is not answered")
         }
     }
@@ -4238,10 +4242,10 @@ mod tests {
     fn filling_in_a_snippet(state: &State) -> State {
         match state.current_buffer.clone() {
             Some(path) => State {
-                modal: crate::Modal::Stops {
+                stops: Some(crate::editor::Stops {
                     path,
                     at: vec![crate::editor::Tail(0)],
-                },
+                }),
                 ..state.clone()
             },
             None => state.clone(),
