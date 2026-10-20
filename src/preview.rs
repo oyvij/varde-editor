@@ -737,7 +737,7 @@ fn flush(frame: &mut Frame, columns: usize) {
     if frame.segments == [Vec::new()] {
         return;
     }
-    let mut laid = match frame.kind {
+    let laid = match frame.kind {
         RowKind::Code => code_rows(
             RowKind::Code,
             frame.line,
@@ -745,18 +745,13 @@ fn flush(frame: &mut Frame, columns: usize) {
             &frame.segments,
         ),
         RowKind::Diagram => diagram_rows(frame.line, columns, &frame.segments),
-        RowKind::Metadata => code_rows(RowKind::Metadata, frame.line, "", &frame.segments),
+        RowKind::Metadata => metadata_rows(frame.line, columns, &frame.segments),
+        RowKind::List(item) => {
+            let marked = frame.own_rows.is_empty();
+            list_rows(item, marked, frame.line, &frame.segments, columns)
+        }
         _ => laid_out(frame.kind, frame.line, &frame.segments, columns),
     };
-    if let RowKind::List(item) = frame.kind {
-        let already_marked = !frame.own_rows.is_empty();
-        for row in laid.iter_mut().skip(usize::from(!already_marked)) {
-            row.kind = RowKind::List(ListItem {
-                marker: None,
-                ..item
-            });
-        }
-    }
     frame.own_rows.extend(laid);
     frame.segments = vec![Vec::new()];
 }
@@ -810,6 +805,27 @@ fn code_rows(kind: RowKind, line: usize, language: &str, segments: &[Vec<Piece>]
                 })
                 .collect(),
             refused: None,
+        })
+        .collect()
+}
+
+fn metadata_rows(line: usize, columns: usize, segments: &[Vec<Piece>]) -> Vec<Row> {
+    code_rows(RowKind::Metadata, line, "", segments)
+        .into_iter()
+        .flat_map(|row| {
+            if row.text().width() <= columns {
+                return vec![row];
+            }
+            wrapped(
+                &row.pieces,
+                textwrap::Options::new(columns).subsequent_indent("  "),
+            )
+            .into_iter()
+            .map(|pieces| Row {
+                pieces,
+                ..row.clone()
+            })
+            .collect()
         })
         .collect()
 }
@@ -879,6 +895,67 @@ fn laid_out(kind: RowKind, line: usize, segments: &[Vec<Piece>], columns: usize)
         .collect()
 }
 
+fn list_rows(
+    item: ListItem,
+    marked: bool,
+    line: usize,
+    segments: &[Vec<Piece>],
+    columns: usize,
+) -> Vec<Row> {
+    let hanging = ListItem {
+        marker: None,
+        ..item
+    };
+    let budget = |item: ListItem| match columns {
+        0 => 0,
+        _ => columns.saturating_sub(item_prefix(item).width()).max(1),
+    };
+    let later = budget(hanging);
+    segments
+        .iter()
+        .enumerate()
+        .flat_map(|(index, pieces)| {
+            let first_item = if marked && index == 0 { item } else { hanging };
+            let mut laid = wrapped(pieces, textwrap::Options::new(budget(first_item)));
+            if laid.len() > 1 {
+                let rest = after_row(pieces, &laid[0]);
+                laid.truncate(1);
+                laid.extend(wrapped(&rest, textwrap::Options::new(later)));
+            }
+            laid.into_iter()
+                .enumerate()
+                .map(|(row, pieces)| Row {
+                    kind: RowKind::List(if row == 0 { first_item } else { hanging }),
+                    line,
+                    pieces,
+                    refused: None,
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+fn after_row(pieces: &[Piece], row: &[Piece]) -> Vec<Piece> {
+    let flat: String = pieces.iter().map(|piece| piece.text.as_str()).collect();
+    let shown: String = row.iter().map(|piece| piece.text.as_str()).collect();
+    let start = flat
+        .find(&shown)
+        .expect("a wrapped row is a substring of what was wrapped");
+    let end = flat.len() - flat[start + shown.len()..].trim_start().len();
+    let mut at = 0;
+    pieces
+        .iter()
+        .filter_map(|piece| {
+            let from = end.saturating_sub(at);
+            at += piece.text.len();
+            (from < piece.text.len()).then(|| Piece {
+                text: piece.text[from..].to_string(),
+                ..piece.clone()
+            })
+        })
+        .collect()
+}
+
 pub(crate) fn wrapped(pieces: &[Piece], options: textwrap::Options<'_>) -> Vec<Vec<Piece>> {
     if options.width == 0 {
         return vec![pieces.to_vec()];
@@ -896,20 +973,35 @@ pub(crate) fn wrapped(pieces: &[Piece], options: textwrap::Options<'_>) -> Vec<V
             span
         })
         .collect();
+    let (first_indent, later_indent) = (options.initial_indent, options.subsequent_indent);
     let mut rows = Vec::new();
     let mut cursor = 0;
-    for line in textwrap::wrap(&flat, options) {
+    for (index, line) in textwrap::wrap(&flat, options).iter().enumerate() {
+        let indent = if index == 0 {
+            first_indent
+        } else {
+            later_indent
+        };
+        let line = line
+            .strip_prefix(indent)
+            .expect("a wrapped line starts with its indent");
         // textwrap may trim whitespace at a break, so search forward for each line rather than slicing
         let offset = flat[cursor..]
-            .find(line.as_ref())
+            .find(line)
             .expect("a wrapped line is a substring of what was wrapped");
         let start = cursor + offset;
         let end = start + line.len();
         cursor = end;
+        let indent_piece = (!indent.is_empty()).then(|| Piece {
+            text: indent.to_string(),
+            emphasis: Emphasis::default(),
+            token: None,
+            note: None,
+        });
         rows.push(
-            spans
-                .iter()
-                .filter_map(|(piece_start, piece_end, piece)| {
+            indent_piece
+                .into_iter()
+                .chain(spans.iter().filter_map(|(piece_start, piece_end, piece)| {
                     let from = start.max(*piece_start);
                     let to = end.min(*piece_end);
                     (from < to).then(|| Piece {
@@ -918,7 +1010,7 @@ pub(crate) fn wrapped(pieces: &[Piece], options: textwrap::Options<'_>) -> Vec<V
                         token: piece.token,
                         note: piece.note.clone(),
                     })
-                })
+                }))
                 .collect(),
         );
     }
@@ -1097,9 +1189,13 @@ pub fn note_at(text: &str, line: usize, column: usize) -> Option<String> {
 }
 
 pub fn prefix(row: &Row) -> String {
-    let RowKind::List(item) = row.kind else {
-        return String::new();
-    };
+    match row.kind {
+        RowKind::List(item) => item_prefix(item),
+        _ => String::new(),
+    }
+}
+
+fn item_prefix(item: ListItem) -> String {
     let marker = match item.marker {
         Some(Marker::Bullet) => "\u{2022} ".to_string(),
         Some(Marker::Ordinal(ordinal)) => format!("{ordinal}. "),
@@ -1700,6 +1796,99 @@ mod tests {
         }
     }
 
+    fn drawn_width(row: &Row) -> usize {
+        format!("{}{}", prefix(row), row.text()).width()
+    }
+
+    #[test]
+    fn a_ten_ordinals_marker_takes_four_columns_and_its_hanging_indent_two() {
+        let rows = rows("10. aaaa bbb cc cccccccccc\n", 12);
+        assert!(rows[0].text().width() <= 8, "{rows:?}");
+        assert!(texts(&rows).contains(&"cccccccccc".to_string()), "{rows:?}");
+        assert!(rows.iter().all(|row| drawn_width(row) <= 12), "{rows:?}");
+    }
+
+    #[test]
+    fn a_wide_ordinals_marker_row_always_holds_text() {
+        for source in [
+            "100. one two three four five six\n",
+            "10. a bb ccc dddd eeeee\n",
+        ] {
+            for columns in 6..=12 {
+                let rows = rows(source, columns);
+                assert!(!rows[0].text().is_empty(), "{columns}: {rows:?}");
+                assert!(
+                    rows.iter().all(|row| drawn_width(row) <= columns),
+                    "{columns}: {rows:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_long_task_item_and_a_loose_items_second_paragraph_fit_with_their_prefix() {
+        let source =
+            "- [ ] one two three four five six\n- first\n\n  two three four five six seven\n";
+        let rows = rows(source, 12);
+        let second_paragraph: Vec<&Row> = rows
+            .iter()
+            .skip_while(|row| row.text() != "first")
+            .skip(1)
+            .collect();
+        assert!(second_paragraph.len() > 1, "{rows:?}");
+        assert!(
+            second_paragraph.iter().all(|row| prefix(row) == "  "),
+            "{rows:?}"
+        );
+        assert!(rows.iter().all(|row| drawn_width(row) <= 12), "{rows:?}");
+    }
+
+    #[test]
+    fn a_pane_no_wider_than_the_prefix_still_wraps_one_column_to_a_row() {
+        let rows = rows("10. one two three\n", 3);
+        assert_eq!(texts(&rows).len(), 11, "{rows:?}");
+        assert_eq!(texts(&rows).concat(), "onetwothree");
+    }
+
+    #[test]
+    fn at_width_zero_list_items_and_definitions_stay_one_row_each() {
+        let rows = rows(
+            "- one two three four five six\n\nterm one two three\n: meaning one two three four\n",
+            0,
+        );
+        assert_eq!(
+            texts(&rows),
+            vec![
+                "one two three four five six",
+                "term one two three",
+                "meaning one two three four"
+            ]
+        );
+    }
+
+    #[test]
+    fn every_wrapped_row_keeps_its_items_line_and_only_the_first_is_marked() {
+        let rows = rows("- short\n- [x] one two three four five six\n", 10);
+        let item: Vec<&Row> = rows.iter().filter(|row| row.line == 2).collect();
+        assert!(item.len() > 2, "{rows:?}");
+        assert_eq!(rows.len(), item.len() + 1, "{rows:?}");
+        let markers: Vec<Option<Marker>> = item
+            .iter()
+            .map(|row| match row.kind {
+                RowKind::List(ListItem { marker, .. }) => marker,
+                other => panic!("expected a list row, got {other:?}"),
+            })
+            .collect();
+        assert_eq!(markers[0], Some(Marker::Task(true)));
+        assert!(markers[1..].iter().all(Option::is_none), "{rows:?}");
+    }
+
+    #[test]
+    fn list_items_and_definitions_that_fit_render_as_they_do_unwrapped() {
+        let source = "- one\n  - nested\n10. ten\n- [ ] todo\n\nterm\n: meaning\n";
+        assert_eq!(rows(source, 20), rows(source, 0));
+    }
+
     #[test]
     fn a_block_quote_is_set_apart_from_the_prose_around_it() {
         let rows = rows("Intro.\n\n> quoted\n", 80);
@@ -2250,6 +2439,85 @@ mod tests {
         let text = texts(&rows).join("\n");
         assert!(text.contains("title = \"Setup\""), "{text}");
         assert!(!text.contains("+++"), "{text}");
+    }
+
+    fn metadata_texts(rows: &[Row]) -> Vec<String> {
+        rows.iter()
+            .filter(|row| row.kind == RowKind::Metadata)
+            .map(Row::text)
+            .collect()
+    }
+
+    #[test]
+    fn a_long_frontmatter_line_wraps_with_its_continuations_indented_two_spaces() {
+        let rows = rows("---\ndescription: one two three four five\n---\n", 16);
+        assert_eq!(
+            metadata_texts(&rows),
+            vec!["description: one", "  two three four", "  five"]
+        );
+    }
+
+    #[test]
+    fn a_frontmatter_url_longer_than_the_width_is_broken_to_fit() {
+        let url = "https://example.com/a/very/long/path/to/somewhere";
+        let rows = rows(&format!("---\nlink: {url}\n---\n"), 20);
+        let texts = metadata_texts(&rows);
+        assert!(texts.len() > 2, "{texts:?}");
+        assert!(texts.iter().all(|text| text.width() <= 20), "{texts:?}");
+        let joined: String = texts.iter().map(|text| text.trim_start()).collect();
+        assert!(joined.contains(url), "{texts:?}");
+    }
+
+    #[test]
+    fn toml_frontmatter_wraps_the_same_as_yamls() {
+        let rows = rows("+++\ndescription = \"one two three four\"\n+++\n", 16);
+        assert_eq!(
+            metadata_texts(&rows),
+            vec!["description =", "  \"one two three", "  four\""]
+        );
+    }
+
+    #[test]
+    fn every_row_of_a_wrapped_metadata_block_keeps_the_blocks_line() {
+        let rows = rows(
+            "Intro.\n\n---\ntitle: Setup\ndescription: one two three four five\n---\n",
+            16,
+        );
+        let metadata: Vec<&Row> = rows
+            .iter()
+            .skip_while(|row| row.kind != RowKind::Metadata)
+            .collect();
+        assert_eq!(metadata.len(), 4, "{rows:?}");
+        assert!(
+            metadata
+                .iter()
+                .all(|row| row.kind == RowKind::Metadata && row.line == 3),
+            "{rows:?}"
+        );
+    }
+
+    #[test]
+    fn at_width_zero_a_long_frontmatter_line_stays_one_row() {
+        let rows = rows("---\ndescription: one two three four five\n---\n", 0);
+        assert_eq!(
+            metadata_texts(&rows),
+            vec!["description: one two three four five"]
+        );
+    }
+
+    #[test]
+    fn frontmatter_that_fits_renders_as_it_does_unwrapped() {
+        let source = "---\ntitle: Setup\ntags:\n  - one   \n\nauthor: me\n---\n";
+        assert_eq!(rows(source, 20), rows(source, 0));
+    }
+
+    #[test]
+    fn frontmatter_in_a_pane_narrower_than_its_indent_still_wraps() {
+        let rows = rows("---\nab cd\n---\n", 1);
+        let texts = metadata_texts(&rows);
+        assert!(texts.len() >= 4, "{texts:?}");
+        let joined: String = texts.iter().map(|text| text.trim_start()).collect();
+        assert_eq!(joined, "abcd");
     }
 
     #[test]

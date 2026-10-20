@@ -10146,6 +10146,40 @@ fn every_row_comes_from_line(world: &mut VardeWorld, line: usize) {
     assert!(rows.iter().all(|row| row.line == line), "{rows:?}");
 }
 
+#[then(expr = "no drawn row is wider than the preview text")]
+fn no_drawn_row_is_wider_than_the_preview_text(world: &mut VardeWorld) {
+    let columns = varde::preview_columns(&world.state);
+    for row in preview_rows(world) {
+        let drawn = format!("{}{}", varde::preview::prefix(&row), row.text());
+        assert!(
+            UnicodeWidthStr::width(drawn.as_str()) <= columns,
+            "{drawn:?} is wider than {columns} columns"
+        );
+    }
+}
+
+#[then(expr = "every metadata row comes from source line {int}")]
+fn every_metadata_row_comes_from_line(world: &mut VardeWorld, line: usize) {
+    let rows: Vec<_> = preview_rows(world)
+        .into_iter()
+        .filter(|row| row.kind == varde::preview::RowKind::Metadata)
+        .collect();
+    assert!(!rows.is_empty(), "no metadata rows");
+    assert!(rows.iter().all(|row| row.line == line), "{rows:?}");
+}
+
+#[then(expr = "every list row at depth {int} comes from source line {int}")]
+fn every_list_row_at_depth_comes_from_line(world: &mut VardeWorld, depth: usize, line: usize) {
+    let rows: Vec<_> = preview_rows(world)
+        .into_iter()
+        .filter(
+            |row| matches!(row.kind, varde::preview::RowKind::List(item) if item.depth == depth),
+        )
+        .collect();
+    assert!(!rows.is_empty(), "no list rows at depth {depth}");
+    assert!(rows.iter().all(|row| row.line == line), "{rows:?}");
+}
+
 #[then(expr = "every row is a diagram")]
 fn every_row_is_a_diagram(world: &mut VardeWorld) {
     let rows = preview_rows(world);
