@@ -821,13 +821,8 @@ fn metadata_rows(line: usize, columns: usize, segments: &[Vec<Piece>]) -> Vec<Ro
                 textwrap::Options::new(columns).subsequent_indent("  "),
             )
             .into_iter()
-            .enumerate()
-            .map(|(index, pieces)| Row {
-                pieces: (index > 0)
-                    .then(|| plain_spaces(2))
-                    .into_iter()
-                    .chain(pieces)
-                    .collect(),
+            .map(|pieces| Row {
+                pieces,
                 ..row.clone()
             })
             .collect()
@@ -921,15 +916,13 @@ fn list_rows(
         .enumerate()
         .flat_map(|(index, pieces)| {
             let first_item = if marked && index == 0 { item } else { hanging };
-            let first = budget(first_item);
-            let width = first.max(later);
-            let (first_indent, later_indent) =
-                (" ".repeat(width - first), " ".repeat(width - later));
-            let options = textwrap::Options::new(width)
-                .initial_indent(&first_indent)
-                .subsequent_indent(&later_indent);
-            wrapped(pieces, options)
-                .into_iter()
+            let mut laid = wrapped(pieces, textwrap::Options::new(budget(first_item)));
+            if laid.len() > 1 {
+                let rest = after_row(pieces, &laid[0]);
+                laid.truncate(1);
+                laid.extend(wrapped(&rest, textwrap::Options::new(later)));
+            }
+            laid.into_iter()
                 .enumerate()
                 .map(|(row, pieces)| Row {
                     kind: RowKind::List(if row == 0 { first_item } else { hanging }),
@@ -938,6 +931,27 @@ fn list_rows(
                     refused: None,
                 })
                 .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+fn after_row(pieces: &[Piece], row: &[Piece]) -> Vec<Piece> {
+    let flat: String = pieces.iter().map(|piece| piece.text.as_str()).collect();
+    let shown: String = row.iter().map(|piece| piece.text.as_str()).collect();
+    let start = flat
+        .find(&shown)
+        .expect("a wrapped row is a substring of what was wrapped");
+    let end = flat.len() - flat[start + shown.len()..].trim_start().len();
+    let mut at = 0;
+    pieces
+        .iter()
+        .filter_map(|piece| {
+            let from = end.saturating_sub(at);
+            at += piece.text.len();
+            (from < piece.text.len()).then(|| Piece {
+                text: piece.text[from..].to_string(),
+                ..piece.clone()
+            })
         })
         .collect()
 }
@@ -978,10 +992,16 @@ pub(crate) fn wrapped(pieces: &[Piece], options: textwrap::Options<'_>) -> Vec<V
         let start = cursor + offset;
         let end = start + line.len();
         cursor = end;
+        let indent_piece = (!indent.is_empty()).then(|| Piece {
+            text: indent.to_string(),
+            emphasis: Emphasis::default(),
+            token: None,
+            note: None,
+        });
         rows.push(
-            spans
-                .iter()
-                .filter_map(|(piece_start, piece_end, piece)| {
+            indent_piece
+                .into_iter()
+                .chain(spans.iter().filter_map(|(piece_start, piece_end, piece)| {
                     let from = start.max(*piece_start);
                     let to = end.min(*piece_end);
                     (from < to).then(|| Piece {
@@ -990,7 +1010,7 @@ pub(crate) fn wrapped(pieces: &[Piece], options: textwrap::Options<'_>) -> Vec<V
                         token: piece.token,
                         note: piece.note.clone(),
                     })
-                })
+                }))
                 .collect(),
         );
     }
@@ -1781,7 +1801,7 @@ mod tests {
     }
 
     #[test]
-    fn a_ten_ordinals_first_row_leaves_four_columns_and_its_continuations_two() {
+    fn a_ten_ordinals_marker_takes_four_columns_and_its_hanging_indent_two() {
         let rows = rows("10. aaaa bbb cc cccccccccc\n", 12);
         assert!(rows[0].text().width() <= 8, "{rows:?}");
         assert!(texts(&rows).contains(&"cccccccccc".to_string()), "{rows:?}");
@@ -1789,11 +1809,37 @@ mod tests {
     }
 
     #[test]
+    fn a_wide_ordinals_marker_row_always_holds_text() {
+        for source in [
+            "100. one two three four five six\n",
+            "10. a bb ccc dddd eeeee\n",
+        ] {
+            for columns in 6..=12 {
+                let rows = rows(source, columns);
+                assert!(!rows[0].text().is_empty(), "{columns}: {rows:?}");
+                assert!(
+                    rows.iter().all(|row| drawn_width(row) <= columns),
+                    "{columns}: {rows:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn a_long_task_item_and_a_loose_items_second_paragraph_fit_with_their_prefix() {
         let source =
             "- [ ] one two three four five six\n- first\n\n  two three four five six seven\n";
         let rows = rows(source, 12);
-        assert!(rows.len() > 6, "{rows:?}");
+        let second_paragraph: Vec<&Row> = rows
+            .iter()
+            .skip_while(|row| row.text() != "first")
+            .skip(1)
+            .collect();
+        assert!(second_paragraph.len() > 1, "{rows:?}");
+        assert!(
+            second_paragraph.iter().all(|row| prefix(row) == "  "),
+            "{rows:?}"
+        );
         assert!(rows.iter().all(|row| drawn_width(row) <= 12), "{rows:?}");
     }
 
