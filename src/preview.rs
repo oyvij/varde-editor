@@ -936,14 +936,14 @@ pub(crate) fn wrapped(pieces: &[Piece], options: textwrap::Options<'_>) -> Vec<V
         let start = cursor + offset;
         let end = start + line.len();
         cursor = end;
-        let indented = (!indent.is_empty()).then(|| Piece {
+        let indent_piece = (!indent.is_empty()).then(|| Piece {
             text: indent.to_string(),
             emphasis: Emphasis::default(),
             token: None,
             note: None,
         });
         rows.push(
-            indented
+            indent_piece
                 .into_iter()
                 .chain(spans.iter().filter_map(|(piece_start, piece_end, piece)| {
                     let from = start.max(*piece_start);
@@ -2330,7 +2330,10 @@ mod tests {
             "Intro.\n\n---\ntitle: Setup\ndescription: one two three four five\n---\n",
             16,
         );
-        let metadata: Vec<&Row> = rows.iter().skip(2).collect();
+        let metadata: Vec<&Row> = rows
+            .iter()
+            .skip_while(|row| row.kind != RowKind::Metadata)
+            .collect();
         assert_eq!(metadata.len(), 4, "{rows:?}");
         assert!(
             metadata
