@@ -119,6 +119,20 @@ Feature: Markdown preview
     And every row is a paragraph
     And every row comes from source line 1
 
+  Scenario: A frontmatter line wider than the pane wraps inside it
+    Given the editor pane is 20 columns wide
+    And "README.md" is open in the editor holding:
+      """
+      ---
+      title: Setup
+      description: one two three four five six seven eight
+      ---
+
+      Prose.
+      """
+    Then no drawn row is wider than the preview text
+    And every metadata row comes from source line 1
+
   Scenario Outline: A wide pane centres the text at a reading width, as Obsidian does
     Given the editor pane is <pane> columns wide
     And "README.md" is open in the editor holding:

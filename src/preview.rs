@@ -745,7 +745,7 @@ fn flush(frame: &mut Frame, columns: usize) {
             &frame.segments,
         ),
         RowKind::Diagram => diagram_rows(frame.line, columns, &frame.segments),
-        RowKind::Metadata => code_rows(RowKind::Metadata, frame.line, "", &frame.segments),
+        RowKind::Metadata => metadata_rows(frame.line, columns, &frame.segments),
         _ => laid_out(frame.kind, frame.line, &frame.segments, columns),
     };
     if let RowKind::List(item) = frame.kind {
@@ -810,6 +810,27 @@ fn code_rows(kind: RowKind, line: usize, language: &str, segments: &[Vec<Piece>]
                 })
                 .collect(),
             refused: None,
+        })
+        .collect()
+}
+
+fn metadata_rows(line: usize, columns: usize, segments: &[Vec<Piece>]) -> Vec<Row> {
+    code_rows(RowKind::Metadata, line, "", segments)
+        .into_iter()
+        .flat_map(|row| {
+            if row.text().width() <= columns {
+                return vec![row];
+            }
+            wrapped(
+                &row.pieces,
+                textwrap::Options::new(columns).subsequent_indent("  "),
+            )
+            .into_iter()
+            .map(|pieces| Row {
+                pieces,
+                ..row.clone()
+            })
+            .collect()
         })
         .collect()
 }
@@ -896,20 +917,35 @@ pub(crate) fn wrapped(pieces: &[Piece], options: textwrap::Options<'_>) -> Vec<V
             span
         })
         .collect();
+    let (first_indent, later_indent) = (options.initial_indent, options.subsequent_indent);
     let mut rows = Vec::new();
     let mut cursor = 0;
-    for line in textwrap::wrap(&flat, options) {
+    for (index, line) in textwrap::wrap(&flat, options).iter().enumerate() {
+        let indent = if index == 0 {
+            first_indent
+        } else {
+            later_indent
+        };
+        let line = line
+            .strip_prefix(indent)
+            .expect("a wrapped line starts with its indent");
         // textwrap may trim whitespace at a break, so search forward for each line rather than slicing
         let offset = flat[cursor..]
-            .find(line.as_ref())
+            .find(line)
             .expect("a wrapped line is a substring of what was wrapped");
         let start = cursor + offset;
         let end = start + line.len();
         cursor = end;
+        let indented = (!indent.is_empty()).then(|| Piece {
+            text: indent.to_string(),
+            emphasis: Emphasis::default(),
+            token: None,
+            note: None,
+        });
         rows.push(
-            spans
-                .iter()
-                .filter_map(|(piece_start, piece_end, piece)| {
+            indented
+                .into_iter()
+                .chain(spans.iter().filter_map(|(piece_start, piece_end, piece)| {
                     let from = start.max(*piece_start);
                     let to = end.min(*piece_end);
                     (from < to).then(|| Piece {
@@ -918,7 +954,7 @@ pub(crate) fn wrapped(pieces: &[Piece], options: textwrap::Options<'_>) -> Vec<V
                         token: piece.token,
                         note: piece.note.clone(),
                     })
-                })
+                }))
                 .collect(),
         );
     }
@@ -2250,6 +2286,82 @@ mod tests {
         let text = texts(&rows).join("\n");
         assert!(text.contains("title = \"Setup\""), "{text}");
         assert!(!text.contains("+++"), "{text}");
+    }
+
+    fn metadata_texts(rows: &[Row]) -> Vec<String> {
+        rows.iter()
+            .filter(|row| row.kind == RowKind::Metadata)
+            .map(Row::text)
+            .collect()
+    }
+
+    #[test]
+    fn a_long_frontmatter_line_wraps_with_its_continuations_indented_two_spaces() {
+        let rows = rows("---\ndescription: one two three four five\n---\n", 16);
+        assert_eq!(
+            metadata_texts(&rows),
+            vec!["description: one", "  two three four", "  five"]
+        );
+    }
+
+    #[test]
+    fn a_frontmatter_url_longer_than_the_width_is_broken_to_fit() {
+        let url = "https://example.com/a/very/long/path/to/somewhere";
+        let rows = rows(&format!("---\nlink: {url}\n---\n"), 20);
+        let texts = metadata_texts(&rows);
+        assert!(texts.len() > 2, "{texts:?}");
+        assert!(texts.iter().all(|text| text.width() <= 20), "{texts:?}");
+        let joined: String = texts.iter().map(|text| text.trim_start()).collect();
+        assert!(joined.contains(url), "{texts:?}");
+    }
+
+    #[test]
+    fn toml_frontmatter_wraps_the_same_as_yamls() {
+        let rows = rows("+++\ndescription = \"one two three four\"\n+++\n", 16);
+        assert_eq!(
+            metadata_texts(&rows),
+            vec!["description =", "  \"one two three", "  four\""]
+        );
+    }
+
+    #[test]
+    fn every_row_of_a_wrapped_metadata_block_keeps_the_blocks_line() {
+        let rows = rows(
+            "Intro.\n\n---\ntitle: Setup\ndescription: one two three four five\n---\n",
+            16,
+        );
+        let metadata: Vec<&Row> = rows.iter().skip(2).collect();
+        assert_eq!(metadata.len(), 4, "{rows:?}");
+        assert!(
+            metadata
+                .iter()
+                .all(|row| row.kind == RowKind::Metadata && row.line == 3),
+            "{rows:?}"
+        );
+    }
+
+    #[test]
+    fn at_width_zero_a_long_frontmatter_line_stays_one_row() {
+        let rows = rows("---\ndescription: one two three four five\n---\n", 0);
+        assert_eq!(
+            metadata_texts(&rows),
+            vec!["description: one two three four five"]
+        );
+    }
+
+    #[test]
+    fn frontmatter_that_fits_renders_as_it_does_unwrapped() {
+        let source = "---\ntitle: Setup\ntags:\n  - one   \n\nauthor: me\n---\n";
+        assert_eq!(rows(source, 20), rows(source, 0));
+    }
+
+    #[test]
+    fn frontmatter_in_a_pane_narrower_than_its_indent_still_wraps() {
+        let rows = rows("---\nab cd\n---\n", 1);
+        let texts = metadata_texts(&rows);
+        assert!(texts.len() >= 4, "{texts:?}");
+        let joined: String = texts.iter().map(|text| text.trim_start()).collect();
+        assert_eq!(joined, "abcd");
     }
 
     #[test]
