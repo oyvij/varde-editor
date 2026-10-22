@@ -87,7 +87,9 @@ While it waits, a line under the message says how long authoring has run and whe
 changed on disk, for example `authoring · 04:12 · last file activity 0:40 ago · usually 5–11 min,
 no timeout`. A change anywhere in the working tree or in `.varde/stories` counts; `.git/`, ignored
 paths such as `target/` and Varde's own files do not. Until something changes it reads
-`no file activity yet`. The line is only information: it never turns into a warning, and nothing
+`no file activity yet`. On a network or FUSE filesystem such as NFS, SMB or sshfs, or when Varde
+can't watch a folder in the working tree, it reads `file activity unknown` instead, because silence
+there proves nothing. The line is only information: it never turns into a warning, and nothing
 cuts authoring short however long it runs. It reads the files on disk, never what the AI prints.
 
 When the file arrives, Varde checks four things that need no judgement. Every Site's file exists,

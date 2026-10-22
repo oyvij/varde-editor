@@ -611,3 +611,38 @@ Feature: Authoring a story set for a change
       When the clock reads 600 seconds
       Then the wait has run for 0 seconds
       And the wait's file activity is "none-yet"
+
+  Rule: A watcher that can't be trusted makes the wait's file activity unknown
+
+    On a network or FUSE filesystem, or when watching a folder the wait depends on fails, silence
+    on disk proves nothing. The wait says its file activity is unknown rather than showing a figure.
+
+    Scenario: With the watcher blind, authoring's file activity is unknown even after a change
+      Given the file watcher is "blind"
+      And authoring has begun for "main..HEAD"
+      And the clock reads 30 seconds
+      When a change to "src/keys.rs" is seen on disk
+      Then the wait's file activity is "unknown"
+      And the story view state is "authoring"
+
+    Scenario: With the watcher trusted, authoring's file activity is seen as before
+      Given the file watcher is "trusted"
+      And authoring has begun for "main..HEAD"
+      And the clock reads 30 seconds
+      When a change to "src/keys.rs" is seen on disk
+      Then the wait's file activity is "seen"
+
+    Scenario Outline: A failed watch of a folder the wait depends on makes the watcher blind
+      Given git ignores "target"
+      And the file watcher is "trusted"
+      And authoring has begun for "main..HEAD"
+      When watching the folder "<folder>" fails
+      Then the file watcher is "<watcher>"
+
+      Examples:
+        | folder         | watcher |
+        | src            | blind   |
+        | .varde/stories | blind   |
+        | .git           | trusted |
+        | target         | trusted |
+        | /etc           | trusted |

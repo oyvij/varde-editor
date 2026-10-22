@@ -732,6 +732,7 @@ pub enum Event {
         at_ms: u64,
     },
     FileActivity(PathBuf),
+    WatchFailed(PathBuf),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1239,6 +1240,7 @@ pub struct State {
     pub stepping: bool,
     pub tick: u64,
     pub clock_ms: u64,
+    pub watcher: wait::Watcher,
     pub risk_threshold: u32,
     pub refactor: risk::Refactor,
     pub max_iterations: u32,
@@ -1474,6 +1476,7 @@ impl Default for State {
             risk: risk::Risk::default(),
             tick: 0,
             clock_ms: 0,
+            watcher: wait::Watcher::Trusted,
             risk_threshold: risk::DEFAULT_THRESHOLD,
             refactor: risk::Refactor::default(),
             max_iterations: risk::DEFAULT_MAX_ITERATIONS,
@@ -6507,6 +6510,13 @@ fn on_pane_action(state: &State, mut next: State, event: Event, wheeled: bool) -
                 if wait.since_ms.is_some() && wait::counts(state, kind, &path) {
                     wait.activity_ms = Some(state.clock_ms);
                 }
+            }
+            return Ok((next, vec![]));
+        }
+
+        Event::WatchFailed(folder) => {
+            if wait::depends_on(state, &folder) {
+                next.watcher = wait::Watcher::Blind;
             }
             return Ok((next, vec![]));
         }

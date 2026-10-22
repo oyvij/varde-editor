@@ -8923,6 +8923,30 @@ fn wait_activity_ago(world: &mut VardeWorld, seconds: u64) {
     );
 }
 
+fn watcher_named(name: &str) -> wait::Watcher {
+    match name {
+        "trusted" => wait::Watcher::Trusted,
+        "blind" => wait::Watcher::Blind,
+        other => panic!("no watcher state {other:?}"),
+    }
+}
+
+#[given(expr = "the file watcher is {string}")]
+fn file_watcher_is(world: &mut VardeWorld, watcher: String) {
+    world.state.watcher = watcher_named(&watcher);
+}
+
+#[when(expr = "watching the folder {string} fails")]
+fn watching_fails(world: &mut VardeWorld, folder: String) {
+    let folder = abs(world, &folder);
+    world.send(Event::WatchFailed(folder));
+}
+
+#[then(expr = "the file watcher is {string}")]
+fn file_watcher_now(world: &mut VardeWorld, watcher: String) {
+    assert_eq!(world.state.watcher, watcher_named(&watcher));
+}
+
 #[then("no wait is in progress")]
 fn no_wait_in_progress(world: &mut VardeWorld) {
     assert_eq!(wait::every(&world.state).next(), None);

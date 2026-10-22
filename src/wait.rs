@@ -23,6 +23,36 @@ fn all(state: &State) -> impl Iterator<Item = (Kind, &Wait)> {
     authoring.into_iter().chain(install)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Watcher {
+    Trusted,
+    Blind,
+}
+
+pub fn linux_watcher(f_type: u32) -> Watcher {
+    match f_type {
+        0x6969 | 0x517b | 0xff53_4d42 | 0xfe53_4d42 | 0x6573_5546 | 0x0102_1997 | 0x5346_414f
+        | 0x6b41_4653 | 0x00c3_6400 => Watcher::Blind,
+        _ => Watcher::Trusted,
+    }
+}
+
+pub fn macos_watcher(fstypename: &str) -> Watcher {
+    match fstypename {
+        "nfs" | "smbfs" | "afpfs" | "webdav" => Watcher::Blind,
+        fuse if fuse.contains("fuse") => Watcher::Blind,
+        _ => Watcher::Trusted,
+    }
+}
+
+pub fn depends_on(state: &State, path: &Path) -> bool {
+    path.starts_with(&state.root)
+        && !path.starts_with(state.root.join(".git"))
+        && !path
+            .ancestors()
+            .any(|folder| state.ignored.contains(folder))
+}
+
 pub fn all_mut(state: &mut State) -> impl Iterator<Item = (Kind, &mut Wait)> {
     let authoring = match &mut state.story_set {
         story::Set::Authoring { wait, .. } => Some((Kind::Authoring, wait)),
@@ -37,12 +67,7 @@ pub fn counts(state: &State, kind: Kind, path: &Path) -> bool {
     if kind == Kind::Authoring && path.starts_with(varde.join("stories")) {
         return true;
     }
-    path.starts_with(&state.root)
-        && !path.starts_with(state.root.join(".git"))
-        && !path.starts_with(&varde)
-        && !path
-            .ancestors()
-            .any(|folder| state.ignored.contains(folder))
+    depends_on(state, path) && !path.starts_with(&varde)
 }
 
 pub fn hunk_activity(before: &Arc<[story::FileHunks]>, state: &State) -> Vec<Event> {
@@ -75,9 +100,10 @@ pub fn every(state: &State) -> impl Iterator<Item = Progress> + '_ {
         elapsed_ms: wait
             .since_ms
             .map_or(0, |since| state.clock_ms.saturating_sub(since)),
-        activity: match wait.activity_ms {
-            None => Activity::NoneYet,
-            Some(at) => Activity::Ago(state.clock_ms.saturating_sub(at)),
+        activity: match (state.watcher, wait.activity_ms) {
+            (Watcher::Blind, _) => Activity::Unknown,
+            (Watcher::Trusted, None) => Activity::NoneYet,
+            (Watcher::Trusted, Some(at)) => Activity::Ago(state.clock_ms.saturating_sub(at)),
         },
     })
 }
@@ -181,6 +207,42 @@ mod tests {
                 }),
                 "installing · 01:47 · no timeout"
             );
+        }
+    }
+
+    #[test]
+    fn network_and_fuse_filesystems_on_linux_make_the_watcher_blind() {
+        let nfs = 0x6969;
+        let smb = 0x517b;
+        let cifs = 0xff53_4d42;
+        let smb2 = 0xfe53_4d42;
+        let fuse = 0x6573_5546;
+        let v9fs = 0x0102_1997;
+        let afs = 0x5346_414f;
+        let kafs = 0x6b41_4653;
+        let ceph = 0x00c3_6400;
+        for f_type in [nfs, smb, cifs, smb2, fuse, v9fs, afs, kafs, ceph] {
+            assert_eq!(linux_watcher(f_type), Watcher::Blind, "{f_type:#x}");
+        }
+        let ext4 = 0xef53;
+        let btrfs = 0x9123_683e;
+        let xfs = 0x5846_5342;
+        let tmpfs = 0x0102_1994;
+        let overlay = 0x794c_7630;
+        for f_type in [ext4, btrfs, xfs, tmpfs, overlay] {
+            assert_eq!(linux_watcher(f_type), Watcher::Trusted, "{f_type:#x}");
+        }
+    }
+
+    #[test]
+    fn network_and_fuse_filesystems_on_macos_make_the_watcher_blind() {
+        for name in [
+            "nfs", "smbfs", "afpfs", "webdav", "macfuse", "osxfuse", "fusefs",
+        ] {
+            assert_eq!(macos_watcher(name), Watcher::Blind, "{name}");
+        }
+        for name in ["apfs", "hfs", "msdos", "exfat"] {
+            assert_eq!(macos_watcher(name), Watcher::Trusted, "{name}");
         }
     }
 

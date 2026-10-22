@@ -753,8 +753,10 @@ fn run(
     let (watch_tx, watch_rx) = channel();
     let mut watcher = notify::recommended_watcher(watch_tx)?;
     let mut watched: BTreeSet<(PathBuf, varde::Watch)> = BTreeSet::new();
+    let mut refused: BTreeSet<PathBuf> = BTreeSet::new();
 
     state.system_clipboard = edge.clipboard.is_some();
+    state.watcher = workspace_watcher(&state.root);
     state.branch = head_branch(&root);
     state.file_hunks = file_hunks(
         state.repo_root(),
@@ -795,7 +797,7 @@ fn run(
             break Ok(());
         }
 
-        sync_watches(&state, &mut watcher, &mut watched);
+        sync_watches(&state, &mut watcher, &mut watched, &mut refused, &mut queue);
         let before = queue.len();
         collect_watch_events(&watch_rx, &state, &mut queue);
         collect_job_events(
@@ -4054,6 +4056,8 @@ fn sync_watches(
     state: &State,
     watcher: &mut notify::RecommendedWatcher,
     watched: &mut BTreeSet<(PathBuf, varde::Watch)>,
+    refused: &mut BTreeSet<PathBuf>,
+    queue: &mut VecDeque<Event>,
 ) {
     let wanted = varde::watched_folders(state);
     for held in watched.difference(&wanted).cloned().collect::<Vec<_>>() {
@@ -4066,9 +4070,50 @@ fn sync_watches(
             varde::Watch::Tree => RecursiveMode::Recursive,
         };
         if watcher.watch(&path, mode).is_ok() {
+            refused.remove(&path);
             watched.insert((path, watch));
+        } else if refused.insert(path.clone()) {
+            queue.push_back(Event::WatchFailed(path));
         }
     }
+}
+
+#[cfg(target_os = "linux")]
+fn workspace_watcher(root: &Path) -> varde::wait::Watcher {
+    statfs(root).map_or(varde::wait::Watcher::Blind, |found| {
+        varde::wait::linux_watcher(found.f_type as u32)
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn workspace_watcher(root: &Path) -> varde::wait::Watcher {
+    statfs(root).map_or(varde::wait::Watcher::Blind, |found| {
+        let name = unsafe { std::ffi::CStr::from_ptr(found.f_fstypename.as_ptr()) };
+        name.to_str()
+            .map_or(varde::wait::Watcher::Blind, varde::wait::macos_watcher)
+    })
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn workspace_watcher(_root: &Path) -> varde::wait::Watcher {
+    varde::wait::Watcher::Blind
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn statfs(root: &Path) -> std::io::Result<libc::statfs> {
+    use std::os::unix::ffi::OsStrExt;
+    let path = std::ffi::CString::new(root.as_os_str().as_bytes())?;
+    let mut found = std::mem::MaybeUninit::<libc::statfs>::uninit();
+    match unsafe { libc::statfs(path.as_ptr(), found.as_mut_ptr()) } {
+        0 => Ok(unsafe { found.assume_init() }),
+        _ => Err(std::io::Error::last_os_error()),
+    }
+    .inspect_err(|error| {
+        eprintln!(
+            "varde: reading the filesystem of {}: {error}",
+            root.display()
+        )
+    })
 }
 
 fn collect_watch_events(
