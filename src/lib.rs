@@ -5512,7 +5512,7 @@ fn on_lsp(state: &State, mut next: State, event: Event, wheeled: bool) -> Answer
                         next.install_failed.remove(&(kind, name.clone()));
                         next.installing = Some(tools::Install {
                             row: (kind, name),
-                            split: next.split(),
+                            split: next.idle_split().unwrap_or(next.split() + 1),
                             wait: wait::Wait::default(),
                         });
                         next.focus = Pane::Terminal;
@@ -9538,24 +9538,34 @@ mod tests {
 
     #[test]
     fn an_install_waits_on_the_shell_that_runs_it() {
-        let state = State {
-            os: "linux".to_string(),
-            terminals: vec![Shell::Idle, Shell::Idle],
-            terminal_split: 1,
-            clock_ms: 30_000,
-            ..State::default()
-        };
-        let (taken, _) = update(
-            &state,
-            Event::GlobalConfigRead {
-                kind: tools::Kind::Server,
-                name: "go".to_string(),
-                write: tools::Write::Row,
-                text: Some(String::new()),
-            },
-        );
-        let install = taken.installing.expect("the install runs");
-        assert_eq!((install.split, install.wait), (1, wait::Wait::default()));
+        for (terminals, runs_in) in [
+            (vec![Shell::Idle, Shell::Idle], 1),
+            (vec![Shell::Idle, Shell::Busy], 0),
+            (vec![Shell::Busy, Shell::Busy], 2),
+        ] {
+            let state = State {
+                os: "linux".to_string(),
+                terminals,
+                terminal_split: 1,
+                clock_ms: 30_000,
+                ..State::default()
+            };
+            let (taken, _) = update(
+                &state,
+                Event::GlobalConfigRead {
+                    kind: tools::Kind::Server,
+                    name: "go".to_string(),
+                    write: tools::Write::Row,
+                    text: Some(String::new()),
+                },
+            );
+            assert_eq!(taken.terminal_split, runs_in);
+            let install = taken.installing.expect("the install runs");
+            assert_eq!(
+                (install.split, install.wait),
+                (runs_in, wait::Wait::default())
+            );
+        }
     }
 
     #[test]
