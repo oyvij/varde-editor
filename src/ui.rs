@@ -154,10 +154,7 @@ pub fn draw(
     match state.strip {
         layout::Group::Shells => {
             for (k, (shell, area)) in shells.iter().zip(&areas.splits).enumerate() {
-                let title = match shells.len() {
-                    1 => "terminal".to_string(),
-                    _ => format!("terminal {}", k + 1),
-                };
+                let title = shell_title(state, k, shells.len());
                 let focused = state.focus == Pane::Terminal && k == state.split();
                 frame.render_widget(
                     terminal_widget(
@@ -1439,6 +1436,19 @@ fn review_title(state: &State) -> String {
     }
 }
 
+fn shell_title(state: &State, k: usize, shells: usize) -> String {
+    let title = match shells {
+        1 => "terminal".to_string(),
+        _ => format!("terminal {}", k + 1),
+    };
+    match wait::progress(state, wait::Kind::Install) {
+        Some(progress) if state.installing.as_ref().map(|install| install.split) == Some(k) => {
+            format!("{title}  {}", wait::line(progress))
+        }
+        _ => title,
+    }
+}
+
 fn story_title(state: &State) -> String {
     let Some(left) = &state.left_branch else {
         return "story".to_string();
@@ -1553,11 +1563,9 @@ fn spine_widget(state: &State) -> Paragraph<'static> {
             "The AI exited before the story arrived.\nNothing was authored.".to_string()
         }
     };
-    let message = match wait::progress(state) {
-        Some(progress) if progress.kind == wait::Kind::Authoring => {
-            format!("{message}\n{}", wait::line(progress))
-        }
-        _ => message,
+    let message = match wait::progress(state, wait::Kind::Authoring) {
+        Some(progress) => format!("{message}\n{}", wait::line(progress)),
+        None => message,
     };
     Paragraph::new(message).block(pane_block(story_title(state), state, Pane::Tree))
 }
@@ -4630,6 +4638,34 @@ mod tests {
         assert_eq!(story_title(&state), "story  on feature (was main)");
         state.branch = Some("something-else".to_string());
         assert_eq!(story_title(&state), "story  on something-else (was main)");
+    }
+
+    #[test]
+    fn the_shell_running_an_install_carries_the_wait_line_on_its_border() {
+        let mut state = State::default();
+        state.clock_ms = 117_000;
+        state.installing = Some(varde::tools::Install {
+            row: (varde::tools::Kind::Server, "go".to_string()),
+            split: 1,
+            wait: varde::wait::Wait {
+                since_ms: Some(10_000),
+                activity_ms: Some(100_000),
+            },
+        });
+        assert_eq!(
+            (0..2)
+                .map(|k| super::shell_title(&state, k, 2))
+                .collect::<Vec<_>>(),
+            ["terminal 1", "terminal 2  installing · 01:47 · no timeout"]
+        );
+        state.installing = None;
+        assert_eq!(
+            (0..2)
+                .map(|k| super::shell_title(&state, k, 2))
+                .collect::<Vec<_>>(),
+            ["terminal 1", "terminal 2"]
+        );
+        assert_eq!(super::shell_title(&state, 0, 1), "terminal");
     }
 
     #[test]

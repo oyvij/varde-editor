@@ -11,19 +11,28 @@ pub struct Wait {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
     Authoring,
+    Install,
 }
 
-fn of(state: &State) -> Option<(Kind, &Wait)> {
-    match &state.story_set {
+fn all(state: &State) -> impl Iterator<Item = (Kind, &Wait)> {
+    let authoring = match &state.story_set {
         story::Set::Authoring { wait, .. } => Some((Kind::Authoring, wait)),
         _ => None,
-    }
+    };
+    let install = (state.installing.as_ref()).map(|install| (Kind::Install, &install.wait));
+    authoring.into_iter().chain(install)
 }
 
-pub fn counts(state: &State, path: &Path) -> bool {
-    let Some((kind, _)) = of(state) else {
-        return false;
+pub fn all_mut(state: &mut State) -> impl Iterator<Item = (Kind, &mut Wait)> {
+    let authoring = match &mut state.story_set {
+        story::Set::Authoring { wait, .. } => Some((Kind::Authoring, wait)),
+        _ => None,
     };
+    let install = (state.installing.as_mut()).map(|install| (Kind::Install, &mut install.wait));
+    authoring.into_iter().chain(install)
+}
+
+pub fn counts(state: &State, kind: Kind, path: &Path) -> bool {
     let varde = crate::varde_dir(&state.root, state.sidecar.as_deref());
     if kind == Kind::Authoring && path.starts_with(varde.join("stories")) {
         return true;
@@ -53,13 +62,6 @@ pub fn hunk_activity(before: &Arc<[story::FileHunks]>, state: &State) -> Vec<Eve
         .collect()
 }
 
-pub fn of_mut(state: &mut State) -> Option<&mut Wait> {
-    match &mut state.story_set {
-        story::Set::Authoring { wait, .. } => Some(wait),
-        _ => None,
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Progress {
     pub kind: Kind,
@@ -67,20 +69,21 @@ pub struct Progress {
     pub activity: Activity,
 }
 
-pub fn progress(state: &State) -> Option<Progress> {
-    let (kind, wait) = of(state)?;
-    let elapsed_ms = wait
-        .since_ms
-        .map_or(0, |since| state.clock_ms.saturating_sub(since));
-    let activity = match wait.activity_ms {
-        None => Activity::NoneYet,
-        Some(at) => Activity::Ago(state.clock_ms.saturating_sub(at)),
-    };
-    Some(Progress {
+pub fn every(state: &State) -> impl Iterator<Item = Progress> + '_ {
+    all(state).map(|(kind, wait)| Progress {
         kind,
-        elapsed_ms,
-        activity,
+        elapsed_ms: wait
+            .since_ms
+            .map_or(0, |since| state.clock_ms.saturating_sub(since)),
+        activity: match wait.activity_ms {
+            None => Activity::NoneYet,
+            Some(at) => Activity::Ago(state.clock_ms.saturating_sub(at)),
+        },
     })
+}
+
+pub fn progress(state: &State, kind: Kind) -> Option<Progress> {
+    every(state).find(|progress| progress.kind == kind)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,18 +94,18 @@ pub enum Activity {
 }
 
 pub fn line(progress: Progress) -> String {
-    let (word, usually) = match progress.kind {
-        Kind::Authoring => ("authoring", "usually 5–11 min, no timeout"),
-    };
+    let elapsed = clock(progress.elapsed_ms, 2);
     let activity = match progress.activity {
         Activity::NoneYet => "no file activity yet".to_string(),
         Activity::Ago(ms) => format!("last file activity {} ago", clock(ms, 1)),
         Activity::Unknown => "file activity unknown".to_string(),
     };
-    format!(
-        "{word} · {} · {activity} · {usually}",
-        clock(progress.elapsed_ms, 2)
-    )
+    match progress.kind {
+        Kind::Authoring => {
+            format!("authoring · {elapsed} · {activity} · usually 5–11 min, no timeout")
+        }
+        Kind::Install => format!("installing · {elapsed} · no timeout"),
+    }
 }
 
 fn clock(ms: u64, minute_digits: usize) -> String {
@@ -165,6 +168,20 @@ mod tests {
             line(authoring(754_999, Activity::Ago(661_000))),
             "authoring · 12:34 · last file activity 11:01 ago · usually 5–11 min, no timeout"
         );
+    }
+
+    #[test]
+    fn an_install_says_its_elapsed_time_and_no_timeout_but_never_its_file_activity() {
+        for activity in [Activity::NoneYet, Activity::Ago(40_000), Activity::Unknown] {
+            assert_eq!(
+                line(Progress {
+                    kind: Kind::Install,
+                    elapsed_ms: 107_000,
+                    activity,
+                }),
+                "installing · 01:47 · no timeout"
+            );
+        }
     }
 
     #[test]

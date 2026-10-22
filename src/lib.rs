@@ -1260,7 +1260,7 @@ pub struct State {
     pub reading: Option<reading::Reading>,
     pub workspace_facts: BTreeMap<String, String>,
     pub recheck: Option<(tools::Kind, String)>,
-    pub installing: Option<(tools::Kind, String)>,
+    pub installing: Option<tools::Install>,
     pub install_failed: BTreeSet<(tools::Kind, String)>,
     pub os: String,
     pub arch: String,
@@ -5510,7 +5510,11 @@ fn on_lsp(state: &State, mut next: State, event: Event, wheeled: bool) -> Answer
                         let sentinel =
                             varde_dir(&next.root, next.sidecar.as_deref()).join(tools::SENTINEL);
                         next.install_failed.remove(&(kind, name.clone()));
-                        next.installing = Some((kind, name));
+                        next.installing = Some(tools::Install {
+                            row: (kind, name),
+                            split: next.split(),
+                            wait: wait::Wait::default(),
+                        });
                         next.focus = Pane::Terminal;
                         effects.push(Effect::RunInTerminal(tools::reported(&install, &sentinel)));
                     }
@@ -5519,7 +5523,7 @@ fn on_lsp(state: &State, mut next: State, event: Event, wheeled: bool) -> Answer
             effects
         }
 
-        Event::InstallEnded(status) => match next.installing.take() {
+        Event::InstallEnded(status) => match next.installing.take().map(|install| install.row) {
             Some(row) if status.as_deref().map(str::trim) == Some("0") => {
                 let configures = (row.0 == tools::Kind::Speech).then(|| Effect::ReadGlobalConfig {
                     path: next.varde_home.join(startup::CONFIG_FILE),
@@ -6492,18 +6496,17 @@ fn on_pane_action(state: &State, mut next: State, event: Event, wheeled: bool) -
         Event::Tick { at_ms } => {
             next.tick = state.tick.wrapping_add(1);
             next.clock_ms = at_ms;
-            if let Some(wait) = wait::of_mut(&mut next) {
+            for (_, wait) in wait::all_mut(&mut next) {
                 wait.since_ms.get_or_insert(at_ms);
             }
             return Ok((next, vec![]));
         }
 
         Event::FileActivity(path) => {
-            let counted = wait::counts(state, &path);
-            if let Some(wait) =
-                wait::of_mut(&mut next).filter(|wait| counted && wait.since_ms.is_some())
-            {
-                wait.activity_ms = Some(state.clock_ms);
+            for (kind, wait) in wait::all_mut(&mut next) {
+                if wait.since_ms.is_some() && wait::counts(state, kind, &path) {
+                    wait.activity_ms = Some(state.clock_ms);
+                }
             }
             return Ok((next, vec![]));
         }
@@ -8041,7 +8044,9 @@ pub fn tick_every(state: &State) -> Option<std::time::Duration> {
     if state.risk.in_flight() || state.index.walking || search::running(state).is_some() {
         Some(std::time::Duration::from_millis(80))
     } else {
-        wait::progress(state).map(|_| std::time::Duration::from_secs(1))
+        wait::every(state)
+            .next()
+            .map(|_| std::time::Duration::from_secs(1))
     }
 }
 
@@ -9524,11 +9529,33 @@ mod tests {
         );
         assert!(taken.servers.contains_key("go"));
         assert!(taken.install_failed.is_empty());
-        assert_eq!(taken.installing, Some(go));
+        assert_eq!(taken.installing.map(|install| install.row), Some(go));
         assert!(matches!(
             effects.as_slice(),
             [Effect::WriteFile { .. }, Effect::RunInTerminal(_)]
         ));
+    }
+
+    #[test]
+    fn an_install_waits_on_the_shell_that_runs_it() {
+        let state = State {
+            os: "linux".to_string(),
+            terminals: vec![Shell::Idle, Shell::Idle],
+            terminal_split: 1,
+            clock_ms: 30_000,
+            ..State::default()
+        };
+        let (taken, _) = update(
+            &state,
+            Event::GlobalConfigRead {
+                kind: tools::Kind::Server,
+                name: "go".to_string(),
+                write: tools::Write::Row,
+                text: Some(String::new()),
+            },
+        );
+        let install = taken.installing.expect("the install runs");
+        assert_eq!((install.split, install.wait), (1, wait::Wait::default()));
     }
 
     #[test]
@@ -9549,7 +9576,11 @@ mod tests {
     #[test]
     fn an_install_that_worked_asks_path_again_about_its_row() {
         let state = State {
-            installing: Some((tools::Kind::Server, "go".to_string())),
+            installing: Some(tools::Install {
+                row: (tools::Kind::Server, "go".to_string()),
+                split: 0,
+                wait: wait::Wait::default(),
+            }),
             ..State::default()
         };
         let (asked, effects) = update(&state, Event::InstallEnded(Some("0\n".to_string())));
@@ -9964,6 +9995,15 @@ mod tests {
             ..State::default()
         };
         assert_eq!(tick_every(&authoring), Some(Duration::from_secs(1)));
+        let installing = State {
+            installing: Some(tools::Install {
+                row: (tools::Kind::Server, "go".to_string()),
+                split: 0,
+                wait: wait::Wait::default(),
+            }),
+            ..State::default()
+        };
+        assert_eq!(tick_every(&installing), Some(Duration::from_secs(1)));
         let spinning = Some(Duration::from_millis(80));
         let mut measuring = State::default();
         measuring.risk.asked = 1;

@@ -8888,7 +8888,9 @@ fn clock_reads(world: &mut VardeWorld, seconds: u64) {
 }
 
 fn wait_progress(world: &VardeWorld) -> wait::Progress {
-    wait::progress(&world.state).expect("a wait in progress")
+    wait::every(&world.state)
+        .next()
+        .expect("a wait in progress")
 }
 
 #[then(expr = "the wait has run for {int} seconds")]
@@ -8923,7 +8925,7 @@ fn wait_activity_ago(world: &mut VardeWorld, seconds: u64) {
 
 #[then("no wait is in progress")]
 fn no_wait_in_progress(world: &mut VardeWorld) {
-    assert_eq!(wait::progress(&world.state), None);
+    assert_eq!(wait::every(&world.state).next(), None);
 }
 
 #[then(expr = "the refusal names step {string} as {string}")]

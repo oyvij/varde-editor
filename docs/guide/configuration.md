@@ -291,6 +291,11 @@ was built for. Once the command exists, the next check finds it with no restart.
 an installer that only added to your shell profile. Then Varde offers a restart and never restarts
 on its own.
 
+While the install runs, the border of the terminal pane running it says how long it has run, for
+example `installing · 01:47 · no timeout`, and goes back to its usual title when the install ends.
+The line is only information: an install writes outside anything Varde watches, so it shows no file
+activity, and nothing cuts an install short however long it runs.
+
 ## What else lives in `.varde/`
 
 A project's `.varde/` folder holds more than the config. Which of it belongs in version control is
