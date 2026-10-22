@@ -8887,18 +8887,18 @@ fn clock_reads(world: &mut VardeWorld, seconds: u64) {
     });
 }
 
-fn wait_progress(world: &VardeWorld) -> (wait::Kind, u64, wait::Activity) {
+fn wait_progress(world: &VardeWorld) -> wait::Progress {
     wait::progress(&world.state).expect("a wait in progress")
 }
 
 #[then(expr = "the wait has run for {int} seconds")]
 fn wait_has_run(world: &mut VardeWorld, seconds: u64) {
-    assert_eq!(wait_progress(world).1, seconds * 1_000);
+    assert_eq!(wait_progress(world).elapsed_ms, seconds * 1_000);
 }
 
 #[then(expr = "the wait's file activity is {string}")]
 fn wait_activity_is(world: &mut VardeWorld, expected: String) {
-    let said = match wait_progress(world).2 {
+    let said = match wait_progress(world).activity {
         wait::Activity::NoneYet => "none-yet",
         wait::Activity::Ago(_) => "seen",
         wait::Activity::Unknown => "unknown",
@@ -8915,13 +8915,17 @@ fn change_seen_on_disk(world: &mut VardeWorld, path: String) {
 
 #[then(expr = "the wait's last file activity was {int} seconds ago")]
 fn wait_activity_ago(world: &mut VardeWorld, seconds: u64) {
-    assert_eq!(wait_progress(world).2, wait::Activity::Ago(seconds * 1_000));
+    assert_eq!(
+        wait_progress(world).activity,
+        wait::Activity::Ago(seconds * 1_000)
+    );
 }
 
 #[then("no wait is in progress")]
 fn no_wait_in_progress(world: &mut VardeWorld) {
     assert_eq!(wait::progress(&world.state), None);
 }
+
 #[then(expr = "the refusal names step {string} as {string}")]
 fn refusal_names_step(world: &mut VardeWorld, id: String, fault: String) {
     let story::Set::Refused { because } = &world.state.story_set else {

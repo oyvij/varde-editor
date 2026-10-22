@@ -833,7 +833,7 @@ fn run(
             &mut last_git,
             &mut last_shape,
         );
-        queue_hunk_activity(&hunks, &state, &mut queue);
+        queue.extend(varde::wait::hunk_activity(&hunks, &state));
         set_cursor_style(&state, &mut edge);
         dirty |= cache_highlight(&state, &mut edge, &highlit_rx);
         dirty |= tell_traced(&mut state, &mut edge);
@@ -1412,22 +1412,6 @@ fn refresh_git(
         });
     }));
     dirty
-}
-
-fn queue_hunk_activity(
-    before: &Arc<[story::FileHunks]>,
-    state: &State,
-    queue: &mut VecDeque<Event>,
-) {
-    if Arc::ptr_eq(before, &state.file_hunks) {
-        return;
-    }
-    let after = &state.file_hunks;
-    let moved = after
-        .iter()
-        .filter(|file| !before.contains(file))
-        .chain(before.iter().filter(|file| !after.contains(file)));
-    queue.extend(moved.map(|file| Event::FileActivity(state.repo_root().join(&file.file))));
 }
 
 fn committed<'a>(

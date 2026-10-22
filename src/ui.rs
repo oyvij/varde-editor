@@ -1554,10 +1554,10 @@ fn spine_widget(state: &State) -> Paragraph<'static> {
         }
     };
     let message = match wait::progress(state) {
-        Some((kind @ wait::Kind::Authoring, elapsed, activity)) => {
-            format!("{message}\n{}", wait::line(kind, elapsed, activity))
+        Some(progress) if progress.kind == wait::Kind::Authoring => {
+            format!("{message}\n{}", wait::line(progress))
         }
-        None => message,
+        _ => message,
     };
     Paragraph::new(message).block(pane_block(story_title(state), state, Pane::Tree))
 }

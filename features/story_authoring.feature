@@ -599,8 +599,8 @@ Feature: Authoring a story set for a change
       And the clock reads 30 seconds
       And a change to "src/keys.rs" is seen on disk
       And the AI session exits
-      When authoring begins again for "main..HEAD"
       And the clock reads 90 seconds
+      When authoring begins again for "main..HEAD"
       Then the wait's file activity is "none-yet"
       And the wait has run for 0 seconds
 
