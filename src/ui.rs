@@ -12,8 +12,8 @@ use varde::lsp;
 use varde::minimap;
 use varde::tree::Row;
 use varde::{
-    filter, keys, mark, palette_rows, reading, review, story, tools, tree, FilterKeys, Mark, Modal,
-    Pane, Place, Selection, State, View,
+    filter, keys, mark, palette_rows, reading, review, story, tools, tree, wait, FilterKeys, Mark,
+    Modal, Pane, Place, Selection, State, View,
 };
 
 const DIRTY: Color = Color::LightYellow;
@@ -1535,8 +1535,9 @@ fn spine_widget(state: &State) -> Paragraph<'static> {
         story::Set::Loaded(_) => "The story set holds no stories.".to_string(),
         story::Set::Authoring {
             spelling: Some(spelling),
+            ..
         } => format!("Authoring a story for \"{spelling}\"…"),
-        story::Set::Authoring { spelling: None } => {
+        story::Set::Authoring { spelling: None, .. } => {
             "Authoring a story for your Inquiry — five to eleven minutes is expected…".to_string()
         }
         story::Set::Filling { .. } => "Reading what the story's sites hold…".to_string(),
@@ -1551,6 +1552,12 @@ fn spine_widget(state: &State) -> Paragraph<'static> {
         story::Set::AuthoringAbandoned => {
             "The AI exited before the story arrived.\nNothing was authored.".to_string()
         }
+    };
+    let message = match wait::progress(state) {
+        Some((kind @ wait::Kind::Authoring, elapsed, activity)) => {
+            format!("{message}\n{}", wait::line(kind, elapsed, activity))
+        }
+        None => message,
     };
     Paragraph::new(message).block(pane_block(story_title(state), state, Pane::Tree))
 }
@@ -4623,6 +4630,49 @@ mod tests {
         assert_eq!(story_title(&state), "story  on feature (was main)");
         state.branch = Some("something-else".to_string());
         assert_eq!(story_title(&state), "story  on something-else (was main)");
+    }
+
+    #[test]
+    fn the_authoring_caption_carries_the_wait_line_only_while_authoring() {
+        use ratatui::widgets::Widget;
+        let rows = |state: &State| -> Vec<String> {
+            let area = ratatui::layout::Rect::new(0, 0, 100, 5);
+            let mut buffer = ratatui::buffer::Buffer::empty(area);
+            super::spine_widget(state).render(area, &mut buffer);
+            (1..3)
+                .map(|row| {
+                    (1..99)
+                        .map(|column| buffer[(column, row)].symbol())
+                        .collect::<String>()
+                        .trim_end()
+                        .to_string()
+                })
+                .collect()
+        };
+        let mut state = State::default();
+        state.clock_ms = 262_000;
+        state.story_set = varde::story::Set::Authoring {
+            spelling: Some("main..HEAD".to_string()),
+            wait: varde::wait::Wait {
+                since_ms: Some(10_000),
+                activity_ms: Some(222_000),
+            },
+        };
+        assert_eq!(
+            rows(&state),
+            [
+                "Authoring a story for \"main..HEAD\"…",
+                "authoring · 04:12 · last file activity 0:40 ago · usually 5–11 min, no timeout",
+            ]
+        );
+        state.story_set = varde::story::Set::AuthoringAbandoned;
+        assert_eq!(
+            rows(&state),
+            [
+                "The AI exited before the story arrived.",
+                "Nothing was authored.",
+            ]
+        );
     }
 
     fn decorated() -> Vec<(State, Vec<Vec<highlight::Token>>, Vec<usize>)> {

@@ -810,7 +810,7 @@ fn run(
         dirty |= queue.len() != before;
         dirty |= resize_panes(&mut terminal, &state, &mut edge, &mut queue);
 
-        queue_tick(&state, &mut last_tick, &mut queue);
+        queue_tick(&state, started, &mut last_tick, &mut queue);
         dirty |= queue_held_drag(&state, &mut edge, &mut last_drag, &mut queue);
         dirty |= queue_search(&state, &mut edge, &mut queue);
         dirty |= queue_index(&state, &mut edge, &mut queue);
@@ -823,6 +823,7 @@ fn run(
         reap_player(&mut edge, &mut queue);
         queue_position(&edge, &mut last_position, &mut queue);
         tell_core(&mut state, &mut edge);
+        let hunks = state.file_hunks.clone();
         dirty |= refresh_git(
             &root,
             &mut state,
@@ -832,6 +833,7 @@ fn run(
             &mut last_git,
             &mut last_shape,
         );
+        queue_hunk_activity(&hunks, &state, &mut queue);
         set_cursor_style(&state, &mut edge);
         dirty |= cache_highlight(&state, &mut edge, &highlit_rx);
         dirty |= tell_traced(&mut state, &mut edge);
@@ -865,12 +867,17 @@ fn run(
     Err(anyhow::anyhow!("relaunching {}: {error}", exe.display()))
 }
 
-fn queue_tick(state: &State, last_tick: &mut Instant, queue: &mut VecDeque<Event>) {
-    let spinning =
-        state.risk.in_flight() || state.index.walking || varde::search::running(state).is_some();
-    if spinning && last_tick.elapsed() >= SPIN {
+fn queue_tick(
+    state: &State,
+    started: Instant,
+    last_tick: &mut Instant,
+    queue: &mut VecDeque<Event>,
+) {
+    if varde::tick_every(state).is_some_and(|every| last_tick.elapsed() >= every) {
         *last_tick = Instant::now();
-        queue.push_back(Event::Tick);
+        queue.push_back(Event::Tick {
+            at_ms: started.elapsed().as_millis() as u64,
+        });
     }
 }
 
@@ -1405,6 +1412,22 @@ fn refresh_git(
         });
     }));
     dirty
+}
+
+fn queue_hunk_activity(
+    before: &Arc<[story::FileHunks]>,
+    state: &State,
+    queue: &mut VecDeque<Event>,
+) {
+    if Arc::ptr_eq(before, &state.file_hunks) {
+        return;
+    }
+    let after = &state.file_hunks;
+    let moved = after
+        .iter()
+        .filter(|file| !before.contains(file))
+        .chain(before.iter().filter(|file| !after.contains(file)));
+    queue.extend(moved.map(|file| Event::FileActivity(state.repo_root().join(&file.file))));
 }
 
 fn committed<'a>(
@@ -4078,8 +4101,11 @@ fn collect_watch_events(
         let notify::Event { kind, paths, .. } = event;
         for path in paths {
             // Not Access: inotify reports opens, and reloading the config opens it, looping forever
-            edited |= !matches!(kind, notify::EventKind::Access(_))
-                && (path == global || path == project);
+            let written = !matches!(kind, notify::EventKind::Access(_));
+            edited |= written && (path == global || path == project);
+            if written {
+                queue.push_back(Event::FileActivity(path.clone()));
+            }
             if path.parent() == Some(state.varde_home.as_path())
                 && !path.starts_with(state.shown_root())
             {

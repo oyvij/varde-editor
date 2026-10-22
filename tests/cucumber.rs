@@ -18,6 +18,7 @@ use varde::story;
 use varde::tools;
 use varde::tree::{self, Entry};
 use varde::tree_actions::{Action, Target};
+use varde::wait;
 use varde::{
     layout, mouse, reading, update, DiffLine, Direction, Effect, Event, FilterKeys, Modal, Opened,
     Pane, Place, ReplaceFailed, Selection, State, Tap, View, PALETTE,
@@ -417,6 +418,11 @@ impl VardeWorld {
         self.state = state;
         self.apply(effects);
         self.tell_core();
+    }
+
+    fn tick_after(&mut self, ms: u64) {
+        let at_ms = self.state.clock_ms + ms;
+        self.send(Event::Tick { at_ms });
     }
 
     fn tell_core(&mut self) {
@@ -8702,6 +8708,7 @@ fn working_tree_is_committed(world: &mut VardeWorld) {
 }
 
 #[given(expr = "authoring has begun for {string}")]
+#[when(expr = "authoring begins again for {string}")]
 fn authoring_begun(world: &mut VardeWorld, spelling: String) {
     world.repo_before = Some(review::list(&world.state));
     world.state.modal = Modal::ConfirmStory {
@@ -8872,6 +8879,49 @@ fn story_view_state(world: &mut VardeWorld, expected: String) {
     assert_eq!(story::view_state(&world.state), expected);
 }
 
+#[given(expr = "the clock reads {int} seconds")]
+#[when(expr = "the clock reads {int} seconds")]
+fn clock_reads(world: &mut VardeWorld, seconds: u64) {
+    world.send(Event::Tick {
+        at_ms: seconds * 1_000,
+    });
+}
+
+fn wait_progress(world: &VardeWorld) -> (wait::Kind, u64, wait::Activity) {
+    wait::progress(&world.state).expect("a wait in progress")
+}
+
+#[then(expr = "the wait has run for {int} seconds")]
+fn wait_has_run(world: &mut VardeWorld, seconds: u64) {
+    assert_eq!(wait_progress(world).1, seconds * 1_000);
+}
+
+#[then(expr = "the wait's file activity is {string}")]
+fn wait_activity_is(world: &mut VardeWorld, expected: String) {
+    let said = match wait_progress(world).2 {
+        wait::Activity::NoneYet => "none-yet",
+        wait::Activity::Ago(_) => "seen",
+        wait::Activity::Unknown => "unknown",
+    };
+    assert_eq!(said, expected);
+}
+
+#[given(expr = "a change to {string} is seen on disk")]
+#[when(expr = "a change to {string} is seen on disk")]
+fn change_seen_on_disk(world: &mut VardeWorld, path: String) {
+    let path = abs(world, &path);
+    world.send(Event::FileActivity(path));
+}
+
+#[then(expr = "the wait's last file activity was {int} seconds ago")]
+fn wait_activity_ago(world: &mut VardeWorld, seconds: u64) {
+    assert_eq!(wait_progress(world).2, wait::Activity::Ago(seconds * 1_000));
+}
+
+#[then("no wait is in progress")]
+fn no_wait_in_progress(world: &mut VardeWorld) {
+    assert_eq!(wait::progress(&world.state), None);
+}
 #[then(expr = "the refusal names step {string} as {string}")]
 fn refusal_names_step(world: &mut VardeWorld, id: String, fault: String) {
     let story::Set::Refused { because } = &world.state.story_set else {
@@ -11245,7 +11295,7 @@ fn sentinel_appears(world: &mut VardeWorld, path: String) {
 #[when(expr = "the clock advances {int} minutes")]
 fn clock_advances(world: &mut VardeWorld, minutes: u64) {
     for _ in 0..minutes {
-        world.send(Event::Tick);
+        world.tick_after(60_000);
     }
 }
 
@@ -13438,7 +13488,7 @@ fn restored_to_head(world: &mut VardeWorld, path: String) {
         .collect();
     world.state.repo = Some(kept);
     world.recompute_file_hunks();
-    world.send(Event::Tick);
+    world.tick_after(0);
 }
 
 #[then(expr = "the gutter mark on line {int} of {string} is {string}")]
@@ -16776,7 +16826,7 @@ fn chip_is_not_lit(world: &mut VardeWorld, name: String) {
 #[when(expr = "{int} seconds pass")]
 fn seconds_pass(world: &mut VardeWorld, seconds: u64) {
     for _ in 0..(seconds * 1_000 / 80) {
-        world.send(Event::Tick);
+        world.tick_after(80);
     }
 }
 

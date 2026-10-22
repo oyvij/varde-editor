@@ -30,6 +30,7 @@ pub mod story;
 pub mod tools;
 pub mod tree;
 pub mod tree_actions;
+pub mod wait;
 
 use editor::Buffer;
 use review::{Comment, GitFile};
@@ -727,7 +728,10 @@ pub enum Event {
         offsets: Vec<u32>,
     },
     Restart,
-    Tick,
+    Tick {
+        at_ms: u64,
+    },
+    FileActivity(PathBuf),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1234,6 +1238,7 @@ pub struct State {
     pub debug: Option<debug::Session>,
     pub stepping: bool,
     pub tick: u64,
+    pub clock_ms: u64,
     pub risk_threshold: u32,
     pub refactor: risk::Refactor,
     pub max_iterations: u32,
@@ -1468,6 +1473,7 @@ impl Default for State {
             predictions_put: BTreeSet::new(),
             risk: risk::Risk::default(),
             tick: 0,
+            clock_ms: 0,
             risk_threshold: risk::DEFAULT_THRESHOLD,
             refactor: risk::Refactor::default(),
             max_iterations: risk::DEFAULT_MAX_ITERATIONS,
@@ -2157,7 +2163,10 @@ fn on_inquiry(mut next: State, event: Event, wheeled: bool) -> Answered {
                 next.last_inquiry_ms,
             );
             move_to_view(&mut next, View::Story);
-            next.story_set = story::Set::Authoring { spelling: None };
+            next.story_set = story::Set::Authoring {
+                spelling: None,
+                wait: wait::Wait::default(),
+            };
             let mut effects = vec![Effect::RenderView(View::Story)];
             effects.extend(queue_for_ai(
                 &mut next,
@@ -6173,6 +6182,7 @@ fn on_story_resolved(state: &State, mut next: State, event: Event, wheeled: bool
                 move_to_view(&mut next, View::Story);
                 next.story_set = story::Set::Authoring {
                     spelling: Some(spelling.clone()),
+                    wait: wait::Wait::default(),
                 };
                 let context = story::context_path(&out);
                 let mut effects = vec![
@@ -6479,8 +6489,22 @@ fn on_pane_action(state: &State, mut next: State, event: Event, wheeled: bool) -
         Event::TestsFinished { passed, output } => risk::tests_finished(&mut next, passed, output),
 
         // Returns before the clamp: a tick must not pull a wheeled view back to the cursor
-        Event::Tick => {
+        Event::Tick { at_ms } => {
             next.tick = state.tick.wrapping_add(1);
+            next.clock_ms = at_ms;
+            if let Some(wait) = wait::of_mut(&mut next) {
+                wait.since_ms.get_or_insert(at_ms);
+            }
+            return Ok((next, vec![]));
+        }
+
+        Event::FileActivity(path) => {
+            let counted = wait::counts(state, &path);
+            if let Some(wait) =
+                wait::of_mut(&mut next).filter(|wait| counted && wait.since_ms.is_some())
+            {
+                wait.activity_ms = Some(state.clock_ms);
+            }
             return Ok((next, vec![]));
         }
 
@@ -8011,6 +8035,14 @@ const SPINNER: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '�
 
 pub fn spinner(tick: u64) -> char {
     SPINNER[(tick % SPINNER.len() as u64) as usize]
+}
+
+pub fn tick_every(state: &State) -> Option<std::time::Duration> {
+    if state.risk.in_flight() || state.index.walking || search::running(state).is_some() {
+        Some(std::time::Duration::from_millis(80))
+    } else {
+        wait::progress(state).map(|_| std::time::Duration::from_secs(1))
+    }
 }
 
 pub fn links(state: &State) -> Vec<(usize, usize, usize)> {
@@ -9905,18 +9937,48 @@ mod tests {
             tree_scroll: 12,
             ..State::default()
         };
-        let (after, effects) = update(&scrolled, Event::Tick);
-        assert_eq!(after.tick, 1);
+        let (after, effects) = update(&scrolled, Event::Tick { at_ms: 4_000 });
+        assert_eq!((after.tick, after.clock_ms), (1, 4_000));
         assert_eq!(after.tree_scroll, 12, "the tick pulled the wheel back");
         assert!(effects.is_empty(), "a tick asked the edge for something");
         assert_eq!(
             State {
                 tick: 0,
+                clock_ms: 0,
                 ..after.clone()
             },
             scrolled,
             "a tick changed something other than the frame"
         );
+    }
+
+    #[test]
+    fn ticks_come_only_while_a_job_spins_or_a_wait_runs() {
+        use std::time::Duration;
+        assert_eq!(tick_every(&State::default()), None);
+        let authoring = State {
+            story_set: story::Set::Authoring {
+                spelling: None,
+                wait: wait::Wait::default(),
+            },
+            ..State::default()
+        };
+        assert_eq!(tick_every(&authoring), Some(Duration::from_secs(1)));
+        let spinning = Some(Duration::from_millis(80));
+        let mut measuring = State::default();
+        measuring.risk.asked = 1;
+        assert_eq!(tick_every(&measuring), spinning);
+        let mut indexing = State::default();
+        indexing.index.walking = true;
+        assert_eq!(tick_every(&indexing), spinning);
+        let searching = State {
+            search: Some(Search {
+                asked: 1,
+                ..Search::default()
+            }),
+            ..State::default()
+        };
+        assert_eq!(tick_every(&searching), spinning);
     }
 
     #[test]
@@ -10983,7 +11045,7 @@ mod tests {
         let (stopped, _) = update(&state, Event::StopReading);
         assert_eq!(stopped.transport_lit, Some(reading::STOP));
         assert_eq!(
-            update(&stopped, Event::Tick).0.transport_lit,
+            update(&stopped, Event::Tick { at_ms: 0 }).0.transport_lit,
             Some(reading::STOP)
         );
         let (ended, _) = update(&state, Event::ReadingEnded);
@@ -11115,6 +11177,7 @@ mod tests {
             view: View::Story,
             story_set: story::Set::Authoring {
                 spelling: Some("HEAD".to_string()),
+                wait: wait::Wait::default(),
             },
             ..hovering(3)
         };

@@ -83,6 +83,13 @@ real changes, and a guessed limit would be wrong on a slow run and slow on a fas
 when the file arrives, when the AI exits (the view says `authoring-abandoned`), or when you press
 `Esc`.
 
+While it waits, a line under the message says how long authoring has run and when a file last
+changed on disk, for example `authoring · 04:12 · last file activity 0:40 ago · usually 5–11 min,
+no timeout`. A change anywhere in the working tree or in `.varde/stories` counts; `.git/`, ignored
+paths such as `target/` and Varde's own files do not. Until something changes it reads
+`no file activity yet`. The line is only information: it never turns into a warning, and nothing
+cuts authoring short however long it runs. It reads the files on disk, never what the AI prints.
+
 When the file arrives, Varde checks four things that need no judgement. Every Site's file exists,
 its line range fits inside the file, a Site that claims a change really overlaps one, and a cited
 value really appears on the line it cites. If the set fails, Varde **hands it back** to the AI with

@@ -154,7 +154,9 @@ its modes — comes back in as an `Event` or is answered as data the library dec
   exception is bounded by construction rather than by discipline, and with nothing in flight the
   rule above is the whole of it. All three are on the same 80ms cadence: a spinner's blade, a mark
   that moves once a sentence and a selection creeping a line at a time are none of them worth sixty
-  frames a second. A tick is an event like any other, so
+  frames a second. A long wait with no job behind it, such as Story authoring, ticks once a second
+  instead, while — and only while — it runs, so its elapsed time moves; `varde::tick_every` decides
+  both cadences, and the tick carries the clock as `at_ms`. A tick is an event like any other, so
   it is batched, not drawn on its own.
 - **One frame per batch of input, never one per event.** `pump` drains everything crossterm already
   has (up to `INPUT_BATCH`) before drawing. A trackpad flick arrives as hundreds of wheel events and
