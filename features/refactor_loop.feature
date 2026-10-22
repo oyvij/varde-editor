@@ -364,7 +364,7 @@ Feature: The Refactor loop
     And the Refactor loop refusal is "loop-already-running"
     And exactly 1 prompt was sent to the AI
 
-  Scenario: The session wait counts its elapsed time from the Ticks
+  Scenario: The session wait counts how long it has run by the clock
     Given the Refactor loop is on Iteration 1 over the scope "workspace"
     And the clock reads 10 seconds
     When the clock reads 161 seconds
@@ -383,15 +383,27 @@ Feature: The Refactor loop
     Given the Refactor loop is on Iteration 1 over the scope "workspace"
     And the clock reads 30 seconds
     And a change to "src/keys.rs" is seen on disk
-    And the tests finished passing
+    And the Refactor loop is on Iteration 2 over the scope "workspace"
     And the clock reads 300 seconds
-    When the figures arrive for the scope "workspace":
-      | file        | function | line | cyclomatic | cognitive |
-      | src/keys.rs | route    | 88   | 14         | 11        |
-      | src/ui.rs   | draw     | 17   | 22         | 18        |
-    Then the Refactor loop is on Iteration 2
-    And the wait has run for 0 seconds
+    When the clock reads 310 seconds
+    Then the wait has run for 10 seconds
     And the wait's file activity is "none-yet"
+
+  Scenario Outline: Git, ignored paths and Varde's own files are not the session wait's activity
+    Given git ignores "target"
+    And the Refactor loop is on Iteration 1 over the scope "workspace"
+    And the clock reads 30 seconds
+    When a change to "<path>" is seen on disk
+    Then the wait's file activity is "<activity>"
+
+    Examples:
+      | path                           | activity |
+      | src/ui.rs                      | seen     |
+      | .varde/stories/main..HEAD.json | none-yet |
+      | .varde/refactor-done           | none-yet |
+      | .git/index                     | none-yet |
+      | target/debug/varde             | none-yet |
+      | .varde/config.toml             | none-yet |
 
   Scenario: The sentinel ends the session wait as before, and the wait's count with it
     Given the Refactor loop is on Iteration 1 over the scope "workspace"

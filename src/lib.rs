@@ -10010,6 +10010,51 @@ mod tests {
     }
 
     #[test]
+    fn authoring_and_a_session_wait_at_once_keep_their_own_clocks() {
+        let root = PathBuf::from("/w");
+        let both = State {
+            root: root.clone(),
+            story_set: story::Set::Authoring {
+                spelling: None,
+                wait: wait::Wait::default(),
+            },
+            refactor: risk::Refactor {
+                running: Some(risk::Iteration {
+                    scope: risk::Scope::Workspace,
+                    number: 1,
+                    test_command: "cargo test".to_string(),
+                    wait: risk::Wait::Session(wait::Wait::default()),
+                    before: None,
+                }),
+                ..risk::Refactor::default()
+            },
+            ..State::default()
+        };
+        let (both, _) = update(&both, Event::Tick { at_ms: 10_000 });
+        let (both, _) = update(
+            &both,
+            Event::FileActivity(root.join(".varde/stories/main..HEAD.json")),
+        );
+        let (both, _) = update(&both, Event::Tick { at_ms: 25_000 });
+        assert_eq!(
+            wait::every(&both).collect::<Vec<_>>(),
+            [
+                wait::Progress {
+                    kind: wait::Kind::Authoring,
+                    elapsed_ms: 15_000,
+                    activity: wait::Activity::Ago(15_000),
+                },
+                wait::Progress {
+                    kind: wait::Kind::Session,
+                    elapsed_ms: 15_000,
+                    activity: wait::Activity::NoneYet,
+                },
+            ],
+            "the stories folder is activity for authoring only"
+        );
+    }
+
+    #[test]
     fn ticks_come_only_while_a_job_spins_or_a_wait_runs() {
         use std::time::Duration;
         assert_eq!(tick_every(&State::default()), None);
