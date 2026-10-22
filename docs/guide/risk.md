@@ -202,6 +202,14 @@ test result, and the tree border shows the live count. Once the loop is over, it
 the pane until the next measurement. A recompute is a fresh measurement, so it clears a finished
 run's verdict. It leaves a running loop's verdict alone.
 
+While an Iteration waits for the session, the pane's border says how long that wait has run and when
+a file in the working tree last changed on disk, for example
+`1/10 session · 02:31 · last file activity 0:12 ago · no timeout`. Each Iteration starts its own
+count, and reads `no file activity yet` until something changes; `.git/`, ignored paths such as
+`target/` and Varde's own files do not count. The line is only information: it never turns into a
+warning, and nothing cuts the wait short however long it runs. It reads the files on disk, never what
+the AI prints. Once the tests start, the border goes back to `tests` and then `measuring`.
+
 **Varde never commits anything.** The loop's only output is a dirty working tree, and you judge it
 in [Review view](review.md).
 

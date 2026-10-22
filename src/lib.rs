@@ -10030,6 +10030,24 @@ mod tests {
             ..State::default()
         };
         assert_eq!(tick_every(&installing), Some(Duration::from_secs(1)));
+        let iterating = |wait| State {
+            refactor: risk::Refactor {
+                running: Some(risk::Iteration {
+                    scope: risk::Scope::Workspace,
+                    number: 1,
+                    test_command: "cargo test".to_string(),
+                    wait,
+                    before: None,
+                }),
+                ..risk::Refactor::default()
+            },
+            ..State::default()
+        };
+        assert_eq!(
+            tick_every(&iterating(risk::Wait::Session(wait::Wait::default()))),
+            Some(Duration::from_secs(1))
+        );
+        assert_eq!(tick_every(&iterating(risk::Wait::Tests)), None);
         let spinning = Some(Duration::from_millis(80));
         let mut measuring = State::default();
         measuring.risk.asked = 1;
@@ -12012,7 +12030,7 @@ mod tests {
             scope: risk::Scope::Workspace,
             number: 2,
             test_command: "cargo test".to_string(),
-            wait: risk::Wait::Session,
+            wait: risk::Wait::Session(wait::Wait::default()),
             before: None,
         });
         running.refactor.stopped = None;

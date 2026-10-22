@@ -1,4 +1,4 @@
-use crate::{story, Event, State};
+use crate::{risk, story, Event, State};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -12,6 +12,7 @@ pub struct Wait {
 pub enum Kind {
     Authoring,
     Install,
+    Session,
 }
 
 fn all(state: &State) -> impl Iterator<Item = (Kind, &Wait)> {
@@ -20,7 +21,14 @@ fn all(state: &State) -> impl Iterator<Item = (Kind, &Wait)> {
         _ => None,
     };
     let install = (state.installing.as_ref()).map(|install| (Kind::Install, &install.wait));
-    authoring.into_iter().chain(install)
+    let session = match &state.refactor.running {
+        Some(risk::Iteration {
+            wait: risk::Wait::Session(wait),
+            ..
+        }) => Some((Kind::Session, wait)),
+        _ => None,
+    };
+    authoring.into_iter().chain(install).chain(session)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -76,7 +84,14 @@ pub fn all_mut(state: &mut State) -> impl Iterator<Item = (Kind, &mut Wait)> {
         _ => None,
     };
     let install = (state.installing.as_mut()).map(|install| (Kind::Install, &mut install.wait));
-    authoring.into_iter().chain(install)
+    let session = match &mut state.refactor.running {
+        Some(risk::Iteration {
+            wait: risk::Wait::Session(wait),
+            ..
+        }) => Some((Kind::Session, wait)),
+        _ => None,
+    };
+    authoring.into_iter().chain(install).chain(session)
 }
 
 pub fn counts(state: &State, kind: Kind, path: &Path) -> bool {
@@ -148,6 +163,7 @@ pub fn line(progress: Progress) -> String {
             format!("authoring · {elapsed} · {activity} · usually 5–11 min, no timeout")
         }
         Kind::Install => format!("installing · {elapsed} · no timeout"),
+        Kind::Session => format!("session · {elapsed} · {activity} · no timeout"),
     }
 }
 
@@ -178,6 +194,18 @@ mod tests {
         assert_eq!(
             line(authoring(252_000, Activity::Ago(40_000))),
             "authoring · 04:12 · last file activity 0:40 ago · usually 5–11 min, no timeout"
+        );
+    }
+
+    #[test]
+    fn the_session_wait_says_no_timeout_and_claims_no_usual_range() {
+        assert_eq!(
+            line(Progress {
+                kind: Kind::Session,
+                elapsed_ms: 151_000,
+                activity: Activity::Ago(12_000),
+            }),
+            "session · 02:31 · last file activity 0:12 ago · no timeout"
         );
     }
 

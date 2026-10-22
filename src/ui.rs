@@ -5255,7 +5255,7 @@ mod tests {
             scope: varde::risk::Scope::Workspace,
             number: 1,
             test_command: "cargo test".to_string(),
-            wait: varde::risk::Wait::Session,
+            wait: varde::risk::Wait::Session(varde::wait::Wait::default()),
             before: Some(Figures::default()),
         });
         let area = ratatui::layout::Rect::new(0, 0, 30, 4);

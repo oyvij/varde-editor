@@ -347,7 +347,7 @@ const SHAPES: [(&str, &str); 8] = [
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Wait {
-    Session,
+    Session(crate::wait::Wait),
     Tests,
     Figures(u64),
 }
@@ -355,7 +355,7 @@ pub enum Wait {
 impl Wait {
     pub fn as_str(self) -> &'static str {
         match self {
-            Wait::Session => "waiting-for-session",
+            Wait::Session(_) => "waiting-for-session",
             Wait::Tests => "waiting-for-tests",
             Wait::Figures(_) => "waiting-for-figures",
         }
@@ -363,7 +363,7 @@ impl Wait {
 
     fn caption(self) -> &'static str {
         match self {
-            Wait::Session => "session",
+            Wait::Session(_) => "session",
             Wait::Tests => "tests",
             Wait::Figures(_) => "measuring",
         }
@@ -437,7 +437,7 @@ pub fn start(state: &mut State, scope: Scope) -> Vec<Effect> {
             scope,
             number: 1,
             test_command,
-            wait: Wait::Session,
+            wait: Wait::Session(crate::wait::Wait::default()),
             before: for_scope(&state.risk, scope).cloned(),
         }),
         ..Refactor::default()
@@ -454,7 +454,7 @@ pub fn pass_reported(state: &mut State) -> Vec<Effect> {
     let Some(iteration) = state.refactor.running.as_mut() else {
         return vec![];
     };
-    if iteration.wait != Wait::Session {
+    if !matches!(iteration.wait, Wait::Session(_)) {
         return vec![];
     }
     iteration.wait = Wait::Tests;
@@ -515,11 +515,12 @@ pub fn status(state: &State) -> Option<String> {
             .stopped
             .map(|condition| condition.replace('-', " "));
     };
+    let wait = crate::wait::progress(state, crate::wait::Kind::Session)
+        .map_or_else(|| iteration.wait.caption().to_string(), crate::wait::line);
     let mut said = format!(
         "{number}/{cap} {wait}",
         number = iteration.number,
         cap = state.max_iterations,
-        wait = iteration.wait.caption(),
     );
     if let Some((passed, _)) = state.refactor.tests {
         said.push(' ');
@@ -602,7 +603,9 @@ pub fn figures_arrived(
         .refactor
         .running
         .as_ref()
-        .filter(|iteration| iteration.wait == Wait::Session && iteration.before.is_none())
+        .filter(|iteration| {
+            matches!(iteration.wait, Wait::Session(_)) && iteration.before.is_none()
+        })
         .map(|iteration| iteration.scope);
     if let Some(scope) = waiting {
         let measured = for_scope(&state.risk, scope).cloned();
@@ -666,7 +669,7 @@ fn accept(state: &mut State, iteration: &Iteration, after: Figures) -> Vec<Effec
     let number = iteration.number + 1;
     state.refactor.running = Some(Iteration {
         number,
-        wait: Wait::Session,
+        wait: Wait::Session(crate::wait::Wait::default()),
         before: Some(after),
         ..iteration.clone()
     });
@@ -1029,6 +1032,29 @@ mod tests {
             frames[0],
             frames[crate::SPINNER.len()],
             "the frames do not cycle"
+        );
+    }
+
+    #[test]
+    fn the_session_caption_says_how_long_it_has_waited_and_when_a_file_last_changed() {
+        let mut state = State {
+            max_iterations: 3,
+            clock_ms: 161_000,
+            ..State::default()
+        };
+        state.refactor.running = Some(Iteration {
+            scope: Scope::Workspace,
+            number: 1,
+            test_command: "cargo test".to_string(),
+            wait: Wait::Session(crate::wait::Wait {
+                since_ms: Some(10_000),
+                activity_ms: Some(149_000),
+            }),
+            before: None,
+        });
+        assert_eq!(
+            status(&state).as_deref(),
+            Some("1/3 session · 02:31 · last file activity 0:12 ago · no timeout")
         );
     }
 
@@ -1468,7 +1494,10 @@ mod tests {
         };
         assert_eq!(status(&state), None, "an idle pane says nothing");
         start(&mut state, Scope::Workspace);
-        assert_eq!(status(&state).as_deref(), Some("1/3 session"));
+        assert_eq!(
+            status(&state).as_deref(),
+            Some("1/3 session · 00:00 · no file activity yet · no timeout")
+        );
         pass_reported(&mut state);
         assert_eq!(status(&state).as_deref(), Some("1/3 tests"));
         tests_finished(&mut state, true, "ok".to_string());
