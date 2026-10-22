@@ -732,6 +732,7 @@ pub enum Event {
         at_ms: u64,
     },
     FileActivity(PathBuf),
+    FilesystemClassified(wait::Watcher),
     WatchFailed(PathBuf),
 }
 
@@ -6511,6 +6512,11 @@ fn on_pane_action(state: &State, mut next: State, event: Event, wheeled: bool) -
                     wait.activity_ms = Some(state.clock_ms);
                 }
             }
+            return Ok((next, vec![]));
+        }
+
+        Event::FilesystemClassified(watcher) => {
+            next.watcher = watcher;
             return Ok((next, vec![]));
         }
 

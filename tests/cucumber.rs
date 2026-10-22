@@ -8933,7 +8933,7 @@ fn watcher_named(name: &str) -> wait::Watcher {
 
 #[given(expr = "the file watcher is {string}")]
 fn file_watcher_is(world: &mut VardeWorld, watcher: String) {
-    world.state.watcher = watcher_named(&watcher);
+    world.send(Event::FilesystemClassified(watcher_named(&watcher)));
 }
 
 #[when(expr = "watching the folder {string} fails")]

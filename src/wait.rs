@@ -29,10 +29,22 @@ pub enum Watcher {
     Blind,
 }
 
+const NFS_SUPER_MAGIC: u32 = 0x6969;
+const SMB_SUPER_MAGIC: u32 = 0x517b;
+const CIFS_MAGIC_NUMBER: u32 = 0xff53_4d42;
+const SMB2_MAGIC_NUMBER: u32 = 0xfe53_4d42;
+const FUSE_SUPER_MAGIC: u32 = 0x6573_5546;
+const V9FS_MAGIC: u32 = 0x0102_1997;
+const AFS_SUPER_MAGIC: u32 = 0x5346_414f;
+const AFS_FS_MAGIC: u32 = 0x6b41_4653;
+const CEPH_SUPER_MAGIC: u32 = 0x00c3_6400;
+
 pub fn linux_watcher(f_type: u32) -> Watcher {
     match f_type {
-        0x6969 | 0x517b | 0xff53_4d42 | 0xfe53_4d42 | 0x6573_5546 | 0x0102_1997 | 0x5346_414f
-        | 0x6b41_4653 | 0x00c3_6400 => Watcher::Blind,
+        NFS_SUPER_MAGIC | SMB_SUPER_MAGIC | CIFS_MAGIC_NUMBER | SMB2_MAGIC_NUMBER
+        | FUSE_SUPER_MAGIC | V9FS_MAGIC | AFS_SUPER_MAGIC | AFS_FS_MAGIC | CEPH_SUPER_MAGIC => {
+            Watcher::Blind
+        }
         _ => Watcher::Trusted,
     }
 }
@@ -45,12 +57,17 @@ pub fn macos_watcher(fstypename: &str) -> Watcher {
     }
 }
 
-pub fn depends_on(state: &State, path: &Path) -> bool {
+fn in_working_tree(state: &State, path: &Path) -> bool {
     path.starts_with(&state.root)
         && !path.starts_with(state.root.join(".git"))
         && !path
             .ancestors()
             .any(|folder| state.ignored.contains(folder))
+}
+
+pub fn depends_on(state: &State, folder: &Path) -> bool {
+    in_working_tree(state, folder)
+        || folder.starts_with(crate::varde_dir(&state.root, state.sidecar.as_deref()))
 }
 
 pub fn all_mut(state: &mut State) -> impl Iterator<Item = (Kind, &mut Wait)> {
@@ -67,7 +84,7 @@ pub fn counts(state: &State, kind: Kind, path: &Path) -> bool {
     if kind == Kind::Authoring && path.starts_with(varde.join("stories")) {
         return true;
     }
-    depends_on(state, path) && !path.starts_with(&varde)
+    in_working_tree(state, path) && !path.starts_with(&varde)
 }
 
 pub fn hunk_activity(before: &Arc<[story::FileHunks]>, state: &State) -> Vec<Event> {
@@ -208,6 +225,20 @@ mod tests {
                 "installing · 01:47 · no timeout"
             );
         }
+    }
+
+    #[test]
+    fn a_failed_watch_of_the_sidecar_stories_folder_makes_the_watcher_blind() {
+        let state = State {
+            root: PathBuf::from("/w"),
+            sidecar: Some(PathBuf::from("/elsewhere/w")),
+            watcher: Watcher::Trusted,
+            ..State::default()
+        };
+        let failed = Event::WatchFailed(PathBuf::from("/elsewhere/w/stories"));
+        assert_eq!(crate::update(&state, failed).0.watcher, Watcher::Blind);
+        let elsewhere = Event::WatchFailed(PathBuf::from("/elsewhere/other"));
+        assert_eq!(crate::update(&state, elsewhere).0.watcher, Watcher::Trusted);
     }
 
     #[test]

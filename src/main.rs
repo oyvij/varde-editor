@@ -756,7 +756,6 @@ fn run(
     let mut refused: BTreeSet<PathBuf> = BTreeSet::new();
 
     state.system_clipboard = edge.clipboard.is_some();
-    state.watcher = workspace_watcher(&state.root);
     state.branch = head_branch(&root);
     state.file_hunks = file_hunks(
         state.repo_root(),
@@ -765,6 +764,7 @@ fn run(
     )
     .into();
     let mut queue: VecDeque<Event> = VecDeque::new();
+    queue.push_back(Event::FilesystemClassified(workspace_watcher(&state.root)));
     for effect in startup_effects {
         perform(effect, state.split(), &mut edge, &mut queue);
     }
@@ -4069,11 +4069,17 @@ fn sync_watches(
             varde::Watch::Folder => RecursiveMode::NonRecursive,
             varde::Watch::Tree => RecursiveMode::Recursive,
         };
-        if watcher.watch(&path, mode).is_ok() {
-            refused.remove(&path);
-            watched.insert((path, watch));
-        } else if refused.insert(path.clone()) {
-            queue.push_back(Event::WatchFailed(path));
+        match watcher.watch(&path, mode) {
+            Ok(()) => {
+                refused.remove(&path);
+                watched.insert((path, watch));
+            }
+            Err(error) => {
+                if refused.insert(path.clone()) {
+                    eprintln!("varde: cannot watch {}: {error}", path.display());
+                    queue.push_back(Event::WatchFailed(path));
+                }
+            }
         }
     }
 }
