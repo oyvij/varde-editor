@@ -30,6 +30,7 @@ pub mod story;
 pub mod tools;
 pub mod tree;
 pub mod tree_actions;
+pub mod wait;
 
 use editor::Buffer;
 use review::{Comment, GitFile};
@@ -727,7 +728,12 @@ pub enum Event {
         offsets: Vec<u32>,
     },
     Restart,
-    Tick,
+    Tick {
+        at_ms: u64,
+    },
+    FileActivity(PathBuf),
+    FilesystemClassified(wait::Watcher),
+    WatchFailed(PathBuf),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1234,6 +1240,8 @@ pub struct State {
     pub debug: Option<debug::Session>,
     pub stepping: bool,
     pub tick: u64,
+    pub clock_ms: u64,
+    pub watcher: wait::Watcher,
     pub risk_threshold: u32,
     pub refactor: risk::Refactor,
     pub max_iterations: u32,
@@ -1255,7 +1263,7 @@ pub struct State {
     pub reading: Option<reading::Reading>,
     pub workspace_facts: BTreeMap<String, String>,
     pub recheck: Option<(tools::Kind, String)>,
-    pub installing: Option<(tools::Kind, String)>,
+    pub installing: Option<tools::Install>,
     pub install_failed: BTreeSet<(tools::Kind, String)>,
     pub os: String,
     pub arch: String,
@@ -1468,6 +1476,8 @@ impl Default for State {
             predictions_put: BTreeSet::new(),
             risk: risk::Risk::default(),
             tick: 0,
+            clock_ms: 0,
+            watcher: wait::Watcher::Trusted,
             risk_threshold: risk::DEFAULT_THRESHOLD,
             refactor: risk::Refactor::default(),
             max_iterations: risk::DEFAULT_MAX_ITERATIONS,
@@ -2157,7 +2167,10 @@ fn on_inquiry(mut next: State, event: Event, wheeled: bool) -> Answered {
                 next.last_inquiry_ms,
             );
             move_to_view(&mut next, View::Story);
-            next.story_set = story::Set::Authoring { spelling: None };
+            next.story_set = story::Set::Authoring {
+                spelling: None,
+                wait: wait::Wait::default(),
+            };
             let mut effects = vec![Effect::RenderView(View::Story)];
             effects.extend(queue_for_ai(
                 &mut next,
@@ -5501,7 +5514,11 @@ fn on_lsp(state: &State, mut next: State, event: Event, wheeled: bool) -> Answer
                         let sentinel =
                             varde_dir(&next.root, next.sidecar.as_deref()).join(tools::SENTINEL);
                         next.install_failed.remove(&(kind, name.clone()));
-                        next.installing = Some((kind, name));
+                        next.installing = Some(tools::Install {
+                            row: (kind, name),
+                            split: next.idle_split().unwrap_or(next.split() + 1),
+                            wait: wait::Wait::default(),
+                        });
                         next.focus = Pane::Terminal;
                         effects.push(Effect::RunInTerminal(tools::reported(&install, &sentinel)));
                     }
@@ -5510,7 +5527,7 @@ fn on_lsp(state: &State, mut next: State, event: Event, wheeled: bool) -> Answer
             effects
         }
 
-        Event::InstallEnded(status) => match next.installing.take() {
+        Event::InstallEnded(status) => match next.installing.take().map(|install| install.row) {
             Some(row) if status.as_deref().map(str::trim) == Some("0") => {
                 let configures = (row.0 == tools::Kind::Speech).then(|| Effect::ReadGlobalConfig {
                     path: next.varde_home.join(startup::CONFIG_FILE),
@@ -6173,6 +6190,7 @@ fn on_story_resolved(state: &State, mut next: State, event: Event, wheeled: bool
                 move_to_view(&mut next, View::Story);
                 next.story_set = story::Set::Authoring {
                     spelling: Some(spelling.clone()),
+                    wait: wait::Wait::default(),
                 };
                 let context = story::context_path(&out);
                 let mut effects = vec![
@@ -6479,8 +6497,33 @@ fn on_pane_action(state: &State, mut next: State, event: Event, wheeled: bool) -
         Event::TestsFinished { passed, output } => risk::tests_finished(&mut next, passed, output),
 
         // Returns before the clamp: a tick must not pull a wheeled view back to the cursor
-        Event::Tick => {
+        Event::Tick { at_ms } => {
             next.tick = state.tick.wrapping_add(1);
+            next.clock_ms = at_ms;
+            for (_, wait) in wait::all_mut(&mut next) {
+                wait.since_ms.get_or_insert(at_ms);
+            }
+            return Ok((next, vec![]));
+        }
+
+        Event::FileActivity(path) => {
+            for (kind, wait) in wait::all_mut(&mut next) {
+                if wait.since_ms.is_some() && wait::counts(state, kind, &path) {
+                    wait.activity_ms = Some(state.clock_ms);
+                }
+            }
+            return Ok((next, vec![]));
+        }
+
+        Event::FilesystemClassified(watcher) => {
+            next.watcher = watcher;
+            return Ok((next, vec![]));
+        }
+
+        Event::WatchFailed(folder) => {
+            if wait::depends_on(state, &folder) {
+                next.watcher = wait::Watcher::Blind;
+            }
             return Ok((next, vec![]));
         }
 
@@ -8013,6 +8056,16 @@ pub fn spinner(tick: u64) -> char {
     SPINNER[(tick % SPINNER.len() as u64) as usize]
 }
 
+pub fn tick_every(state: &State) -> Option<std::time::Duration> {
+    if state.risk.in_flight() || state.index.walking || search::running(state).is_some() {
+        Some(std::time::Duration::from_millis(80))
+    } else {
+        wait::every(state)
+            .next()
+            .map(|_| std::time::Duration::from_secs(1))
+    }
+}
+
 pub fn links(state: &State) -> Vec<(usize, usize, usize)> {
     if previewing(state) {
         return preview_rows(state)
@@ -9492,11 +9545,43 @@ mod tests {
         );
         assert!(taken.servers.contains_key("go"));
         assert!(taken.install_failed.is_empty());
-        assert_eq!(taken.installing, Some(go));
+        assert_eq!(taken.installing.map(|install| install.row), Some(go));
         assert!(matches!(
             effects.as_slice(),
             [Effect::WriteFile { .. }, Effect::RunInTerminal(_)]
         ));
+    }
+
+    #[test]
+    fn an_install_waits_on_the_shell_that_runs_it() {
+        for (terminals, runs_in) in [
+            (vec![Shell::Idle, Shell::Idle], 1),
+            (vec![Shell::Idle, Shell::Busy], 0),
+            (vec![Shell::Busy, Shell::Busy], 2),
+        ] {
+            let state = State {
+                os: "linux".to_string(),
+                terminals,
+                terminal_split: 1,
+                clock_ms: 30_000,
+                ..State::default()
+            };
+            let (taken, _) = update(
+                &state,
+                Event::GlobalConfigRead {
+                    kind: tools::Kind::Server,
+                    name: "go".to_string(),
+                    write: tools::Write::Row,
+                    text: Some(String::new()),
+                },
+            );
+            assert_eq!(taken.terminal_split, runs_in);
+            let install = taken.installing.expect("the install runs");
+            assert_eq!(
+                (install.split, install.wait),
+                (runs_in, wait::Wait::default())
+            );
+        }
     }
 
     #[test]
@@ -9517,7 +9602,11 @@ mod tests {
     #[test]
     fn an_install_that_worked_asks_path_again_about_its_row() {
         let state = State {
-            installing: Some((tools::Kind::Server, "go".to_string())),
+            installing: Some(tools::Install {
+                row: (tools::Kind::Server, "go".to_string()),
+                split: 0,
+                wait: wait::Wait::default(),
+            }),
             ..State::default()
         };
         let (asked, effects) = update(&state, Event::InstallEnded(Some("0\n".to_string())));
@@ -9905,18 +9994,120 @@ mod tests {
             tree_scroll: 12,
             ..State::default()
         };
-        let (after, effects) = update(&scrolled, Event::Tick);
-        assert_eq!(after.tick, 1);
+        let (after, effects) = update(&scrolled, Event::Tick { at_ms: 4_000 });
+        assert_eq!((after.tick, after.clock_ms), (1, 4_000));
         assert_eq!(after.tree_scroll, 12, "the tick pulled the wheel back");
         assert!(effects.is_empty(), "a tick asked the edge for something");
         assert_eq!(
             State {
                 tick: 0,
+                clock_ms: 0,
                 ..after.clone()
             },
             scrolled,
             "a tick changed something other than the frame"
         );
+    }
+
+    #[test]
+    fn authoring_and_a_session_wait_at_once_keep_their_own_clocks() {
+        let root = PathBuf::from("/w");
+        let both = State {
+            root: root.clone(),
+            story_set: story::Set::Authoring {
+                spelling: None,
+                wait: wait::Wait::default(),
+            },
+            refactor: risk::Refactor {
+                running: Some(risk::Iteration {
+                    scope: risk::Scope::Workspace,
+                    number: 1,
+                    test_command: "cargo test".to_string(),
+                    wait: risk::Wait::Session(wait::Wait::default()),
+                    before: None,
+                }),
+                ..risk::Refactor::default()
+            },
+            ..State::default()
+        };
+        let (both, _) = update(&both, Event::Tick { at_ms: 10_000 });
+        let (both, _) = update(
+            &both,
+            Event::FileActivity(root.join(".varde/stories/main..HEAD.json")),
+        );
+        let (both, _) = update(&both, Event::Tick { at_ms: 25_000 });
+        assert_eq!(
+            wait::every(&both).collect::<Vec<_>>(),
+            [
+                wait::Progress {
+                    kind: wait::Kind::Authoring,
+                    elapsed_ms: 15_000,
+                    activity: wait::Activity::Ago(15_000),
+                },
+                wait::Progress {
+                    kind: wait::Kind::Session,
+                    elapsed_ms: 15_000,
+                    activity: wait::Activity::NoneYet,
+                },
+            ],
+            "the stories folder is activity for authoring only"
+        );
+    }
+
+    #[test]
+    fn ticks_come_only_while_a_job_spins_or_a_wait_runs() {
+        use std::time::Duration;
+        assert_eq!(tick_every(&State::default()), None);
+        let authoring = State {
+            story_set: story::Set::Authoring {
+                spelling: None,
+                wait: wait::Wait::default(),
+            },
+            ..State::default()
+        };
+        assert_eq!(tick_every(&authoring), Some(Duration::from_secs(1)));
+        let installing = State {
+            installing: Some(tools::Install {
+                row: (tools::Kind::Server, "go".to_string()),
+                split: 0,
+                wait: wait::Wait::default(),
+            }),
+            ..State::default()
+        };
+        assert_eq!(tick_every(&installing), Some(Duration::from_secs(1)));
+        let iterating = |wait| State {
+            refactor: risk::Refactor {
+                running: Some(risk::Iteration {
+                    scope: risk::Scope::Workspace,
+                    number: 1,
+                    test_command: "cargo test".to_string(),
+                    wait,
+                    before: None,
+                }),
+                ..risk::Refactor::default()
+            },
+            ..State::default()
+        };
+        assert_eq!(
+            tick_every(&iterating(risk::Wait::Session(wait::Wait::default()))),
+            Some(Duration::from_secs(1))
+        );
+        assert_eq!(tick_every(&iterating(risk::Wait::Tests)), None);
+        let spinning = Some(Duration::from_millis(80));
+        let mut measuring = State::default();
+        measuring.risk.asked = 1;
+        assert_eq!(tick_every(&measuring), spinning);
+        let mut indexing = State::default();
+        indexing.index.walking = true;
+        assert_eq!(tick_every(&indexing), spinning);
+        let searching = State {
+            search: Some(Search {
+                asked: 1,
+                ..Search::default()
+            }),
+            ..State::default()
+        };
+        assert_eq!(tick_every(&searching), spinning);
     }
 
     #[test]
@@ -10983,7 +11174,7 @@ mod tests {
         let (stopped, _) = update(&state, Event::StopReading);
         assert_eq!(stopped.transport_lit, Some(reading::STOP));
         assert_eq!(
-            update(&stopped, Event::Tick).0.transport_lit,
+            update(&stopped, Event::Tick { at_ms: 0 }).0.transport_lit,
             Some(reading::STOP)
         );
         let (ended, _) = update(&state, Event::ReadingEnded);
@@ -11115,6 +11306,7 @@ mod tests {
             view: View::Story,
             story_set: story::Set::Authoring {
                 spelling: Some("HEAD".to_string()),
+                wait: wait::Wait::default(),
             },
             ..hovering(3)
         };
@@ -11883,7 +12075,7 @@ mod tests {
             scope: risk::Scope::Workspace,
             number: 2,
             test_command: "cargo test".to_string(),
-            wait: risk::Wait::Session,
+            wait: risk::Wait::Session(wait::Wait::default()),
             before: None,
         });
         running.refactor.stopped = None;

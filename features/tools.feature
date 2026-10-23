@@ -361,3 +361,60 @@ Feature: Tools — one list of everything Varde runs
       When the install reports the exit status "1"
       Then the global config is unchanged
       And the speech row for "synthesizer" is "install-failed"
+
+  Rule: An install shows how long it has run, and nothing else changes
+
+    A slow package manager looked the same as a broken one, and no install has a timeout. So the
+    install counts its time from the clock the Ticks carry, on the shell pane that runs it. It has no
+    file-activity part: an install writes outside anything Varde watches.
+
+    Scenario: An install counts its elapsed time from the Ticks
+      Given the global config is:
+        """
+        [lsp.go]
+        command = "gopls"
+        extensions = ["go"]
+        install.linux = "go install golang.org/x/tools/gopls@latest"
+        """
+      And the project has no config file
+      And the command "gopls" is not on PATH
+      And the command "go" is on PATH
+      And I took the server row for "go"
+      And the clock reads 10 seconds
+      When the clock reads 117 seconds
+      Then the wait has run for 107 seconds
+
+    Scenario: An install reports its exit status as before, and the wait ends with it
+      Given the global config is:
+        """
+        [speech]
+        command = "piper"
+        voice = ""
+        install.linux = "uv tool install piper-tts"
+        configures.voice = "~/.varde/voices/bryce.onnx"
+        """
+      And the project has no config file
+      And the command "piper" is not on PATH
+      And the command "uv" is on PATH
+      And I took the speech row for "synthesizer"
+      And the clock reads 10 seconds
+      When the install reports the exit status "0"
+      Then the global config sets "speech.voice" to "~/.varde/voices/bryce.onnx"
+      And no wait is in progress
+
+    Scenario: A failed install says so on its row as before, and the wait ends with it
+      Given the global config is:
+        """
+        [lsp.go]
+        command = "gopls"
+        extensions = ["go"]
+        install.linux = "go install golang.org/x/tools/gopls@latest"
+        """
+      And the project has no config file
+      And the command "gopls" is not on PATH
+      And the command "go" is on PATH
+      And I took the server row for "go"
+      And the clock reads 10 seconds
+      When the install reports the exit status "1"
+      Then the server row for "go" is "install-failed"
+      And no wait is in progress

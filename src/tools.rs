@@ -292,6 +292,13 @@ fn group<T: PartialEq>(
 
 pub const SENTINEL: &str = "install-done";
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Install {
+    pub row: (Kind, String),
+    pub split: usize,
+    pub wait: crate::wait::Wait,
+}
+
 pub fn reported(install: &str, sentinel: &Path) -> String {
     let quoted = |path: &Path| {
         shlex::try_quote(&path.to_string_lossy())

@@ -753,6 +753,7 @@ fn run(
     let (watch_tx, watch_rx) = channel();
     let mut watcher = notify::recommended_watcher(watch_tx)?;
     let mut watched: BTreeSet<(PathBuf, varde::Watch)> = BTreeSet::new();
+    let mut refused: BTreeSet<PathBuf> = BTreeSet::new();
 
     state.system_clipboard = edge.clipboard.is_some();
     state.branch = head_branch(&root);
@@ -763,6 +764,7 @@ fn run(
     )
     .into();
     let mut queue: VecDeque<Event> = VecDeque::new();
+    queue.push_back(Event::FilesystemClassified(workspace_watcher(&state.root)));
     for effect in startup_effects {
         perform(effect, state.split(), &mut edge, &mut queue);
     }
@@ -795,7 +797,7 @@ fn run(
             break Ok(());
         }
 
-        sync_watches(&state, &mut watcher, &mut watched);
+        sync_watches(&state, &mut watcher, &mut watched, &mut refused, &mut queue);
         let before = queue.len();
         collect_watch_events(&watch_rx, &state, &mut queue);
         collect_job_events(
@@ -810,7 +812,7 @@ fn run(
         dirty |= queue.len() != before;
         dirty |= resize_panes(&mut terminal, &state, &mut edge, &mut queue);
 
-        queue_tick(&state, &mut last_tick, &mut queue);
+        queue_tick(&state, started, &mut last_tick, &mut queue);
         dirty |= queue_held_drag(&state, &mut edge, &mut last_drag, &mut queue);
         dirty |= queue_search(&state, &mut edge, &mut queue);
         dirty |= queue_index(&state, &mut edge, &mut queue);
@@ -823,6 +825,7 @@ fn run(
         reap_player(&mut edge, &mut queue);
         queue_position(&edge, &mut last_position, &mut queue);
         tell_core(&mut state, &mut edge);
+        let hunks = state.file_hunks.clone();
         dirty |= refresh_git(
             &root,
             &mut state,
@@ -832,6 +835,7 @@ fn run(
             &mut last_git,
             &mut last_shape,
         );
+        queue.extend(varde::wait::hunk_activity(&hunks, &state));
         set_cursor_style(&state, &mut edge);
         dirty |= cache_highlight(&state, &mut edge, &highlit_rx);
         dirty |= tell_traced(&mut state, &mut edge);
@@ -865,12 +869,17 @@ fn run(
     Err(anyhow::anyhow!("relaunching {}: {error}", exe.display()))
 }
 
-fn queue_tick(state: &State, last_tick: &mut Instant, queue: &mut VecDeque<Event>) {
-    let spinning =
-        state.risk.in_flight() || state.index.walking || varde::search::running(state).is_some();
-    if spinning && last_tick.elapsed() >= SPIN {
+fn queue_tick(
+    state: &State,
+    started: Instant,
+    last_tick: &mut Instant,
+    queue: &mut VecDeque<Event>,
+) {
+    if varde::tick_every(state).is_some_and(|every| last_tick.elapsed() >= every) {
         *last_tick = Instant::now();
-        queue.push_back(Event::Tick);
+        queue.push_back(Event::Tick {
+            at_ms: started.elapsed().as_millis() as u64,
+        });
     }
 }
 
@@ -4047,6 +4056,8 @@ fn sync_watches(
     state: &State,
     watcher: &mut notify::RecommendedWatcher,
     watched: &mut BTreeSet<(PathBuf, varde::Watch)>,
+    refused: &mut BTreeSet<PathBuf>,
+    queue: &mut VecDeque<Event>,
 ) {
     let wanted = varde::watched_folders(state);
     for held in watched.difference(&wanted).cloned().collect::<Vec<_>>() {
@@ -4058,10 +4069,57 @@ fn sync_watches(
             varde::Watch::Folder => RecursiveMode::NonRecursive,
             varde::Watch::Tree => RecursiveMode::Recursive,
         };
-        if watcher.watch(&path, mode).is_ok() {
-            watched.insert((path, watch));
+        match watcher.watch(&path, mode) {
+            Ok(()) => {
+                refused.remove(&path);
+                watched.insert((path, watch));
+            }
+            Err(error) => {
+                if refused.insert(path.clone()) {
+                    eprintln!("varde: cannot watch {}: {error}", path.display());
+                    queue.push_back(Event::WatchFailed(path));
+                }
+            }
         }
     }
+}
+
+#[cfg(target_os = "linux")]
+fn workspace_watcher(root: &Path) -> varde::wait::Watcher {
+    statfs(root).map_or(varde::wait::Watcher::Blind, |found| {
+        varde::wait::linux_watcher(found.f_type as u32)
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn workspace_watcher(root: &Path) -> varde::wait::Watcher {
+    statfs(root).map_or(varde::wait::Watcher::Blind, |found| {
+        let name = unsafe { std::ffi::CStr::from_ptr(found.f_fstypename.as_ptr()) };
+        name.to_str()
+            .map_or(varde::wait::Watcher::Blind, varde::wait::macos_watcher)
+    })
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn workspace_watcher(_root: &Path) -> varde::wait::Watcher {
+    varde::wait::Watcher::Blind
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn statfs(root: &Path) -> std::io::Result<libc::statfs> {
+    use std::os::unix::ffi::OsStrExt;
+    let path = std::ffi::CString::new(root.as_os_str().as_bytes())?;
+    let mut found = std::mem::MaybeUninit::<libc::statfs>::uninit();
+    match unsafe { libc::statfs(path.as_ptr(), found.as_mut_ptr()) } {
+        0 => Ok(unsafe { found.assume_init() }),
+        _ => Err(std::io::Error::last_os_error()),
+    }
+    .inspect_err(|error| {
+        eprintln!(
+            "varde: reading the filesystem of {}: {error}",
+            root.display()
+        )
+    })
 }
 
 fn collect_watch_events(
@@ -4078,8 +4136,11 @@ fn collect_watch_events(
         let notify::Event { kind, paths, .. } = event;
         for path in paths {
             // Not Access: inotify reports opens, and reloading the config opens it, looping forever
-            edited |= !matches!(kind, notify::EventKind::Access(_))
-                && (path == global || path == project);
+            let written = !matches!(kind, notify::EventKind::Access(_));
+            edited |= written && (path == global || path == project);
+            if written {
+                queue.push_back(Event::FileActivity(path.clone()));
+            }
             if path.parent() == Some(state.varde_home.as_path())
                 && !path.starts_with(state.shown_root())
             {

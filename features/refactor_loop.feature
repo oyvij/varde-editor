@@ -363,3 +363,54 @@ Feature: The Refactor loop
     Then 1 Refactor loop is running
     And the Refactor loop refusal is "loop-already-running"
     And exactly 1 prompt was sent to the AI
+
+  Scenario: The session wait counts how long it has run by the clock
+    Given the Refactor loop is on Iteration 1 over the scope "workspace"
+    And the clock reads 10 seconds
+    When the clock reads 161 seconds
+    Then the wait has run for 151 seconds
+    And the wait's file activity is "none-yet"
+    And the Refactor loop wait state is "waiting-for-session"
+
+  Scenario: A change in the workspace is the session wait's last file activity
+    Given the Refactor loop is on Iteration 1 over the scope "workspace"
+    And the clock reads 30 seconds
+    And a change to "src/keys.rs" is seen on disk
+    When the clock reads 42 seconds
+    Then the wait's last file activity was 12 seconds ago
+
+  Scenario: The next Iteration's session wait starts its own count with no file activity
+    Given the Refactor loop is on Iteration 1 over the scope "workspace"
+    And the clock reads 30 seconds
+    And a change to "src/keys.rs" is seen on disk
+    And the Refactor loop is on Iteration 2 over the scope "workspace"
+    And the clock reads 300 seconds
+    When the clock reads 310 seconds
+    Then the wait has run for 10 seconds
+    And the wait's file activity is "none-yet"
+
+  Scenario Outline: Git, ignored paths and Varde's own files are not the session wait's activity
+    Given git ignores "target"
+    And the Refactor loop is on Iteration 1 over the scope "workspace"
+    And the clock reads 30 seconds
+    When a change to "<path>" is seen on disk
+    Then the wait's file activity is "<activity>"
+
+    Examples:
+      | path                           | activity |
+      | src/ui.rs                      | seen     |
+      | .varde/stories/main..HEAD.json | none-yet |
+      | .varde/refactor-done           | none-yet |
+      | .git/index                     | none-yet |
+      | target/debug/varde             | none-yet |
+      | .varde/config.toml             | none-yet |
+
+  Scenario: The sentinel ends the session wait as before, and the wait's count with it
+    Given the Refactor loop is on Iteration 1 over the scope "workspace"
+    And the clock reads 30 seconds
+    And a change to "src/keys.rs" is seen on disk
+    When the sentinel ".varde/refactor-done" appears
+    Then the test command "cargo test" was run
+    And the Refactor loop wait state is "waiting-for-tests"
+    And no command has been executed
+    And no wait is in progress

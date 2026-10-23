@@ -171,6 +171,7 @@ pub enum Set {
     },
     Authoring {
         spelling: Option<String>,
+        wait: crate::wait::Wait,
     },
     AuthoringAbandoned,
     Fixing {
@@ -2548,6 +2549,7 @@ mod tests {
         let state = State {
             story_set: Set::Authoring {
                 spelling: Some("main..HEAD".to_string()),
+                wait: crate::wait::Wait::default(),
             },
             ..State::default()
         };
@@ -3524,6 +3526,7 @@ from b
             },
             Set::Authoring {
                 spelling: Some("main..HEAD".to_string()),
+                wait: crate::wait::Wait::default(),
             },
             Set::AuthoringAbandoned,
         ] {

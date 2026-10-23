@@ -537,3 +537,112 @@ Feature: Authoring a story set for a change
       When the AI session exits
       Then the story view state is "authoring-abandoned"
       And the spine is empty
+
+  Rule: The wait shows how long it has run and when a file last changed, and nothing else changes
+
+    Authoring takes five to eleven minutes and has no timeout. A slow run and a stuck one looked the
+    same, so the wait counts its time from the clock the Ticks carry, and the last time a file in
+    the workspace changed on disk. It never reads the AI pane.
+
+    Scenario: Authoring counts its elapsed time from the Ticks
+      Given authoring has begun for "main..HEAD"
+      And the clock reads 10 seconds
+      When the clock reads 262 seconds
+      Then the wait has run for 252 seconds
+      And the wait's file activity is "none-yet"
+      And the story view state is "authoring"
+
+    Scenario: A change in the workspace is the wait's last file activity
+      Given authoring has begun for "main..HEAD"
+      And the clock reads 30 seconds
+      And a change to "src/keys.rs" is seen on disk
+      When the clock reads 70 seconds
+      Then the wait's last file activity was 40 seconds ago
+
+    Scenario Outline: The stories folder counts, but git, ignored paths and Varde's own files do not
+      Given git ignores "target"
+      And authoring has begun for "main..HEAD"
+      And the clock reads 30 seconds
+      When a change to "<path>" is seen on disk
+      Then the wait's file activity is "<activity>"
+
+      Examples:
+        | path                           | activity |
+        | .varde/stories/main..HEAD.json | seen     |
+        | .git/index                     | none-yet |
+        | target/debug/varde             | none-yet |
+        | .varde/config.toml             | none-yet |
+        | .varde/state.json              | none-yet |
+        | /etc/hosts                     | none-yet |
+
+    Scenario: The AI exiting ends authoring as before, and the wait with it
+      Given authoring has begun for "main..HEAD"
+      And the clock reads 30 seconds
+      And a change to "src/keys.rs" is seen on disk
+      When the AI session exits
+      Then the story view state is "authoring-abandoned"
+      And the spine is empty
+      And no wait is in progress
+
+    Scenario: Cancelling ends authoring as before, and the wait with it
+      Given the project has a ".gitignore"
+      And authoring has begun for "main..HEAD"
+      And the clock reads 30 seconds
+      And a change to "src/keys.rs" is seen on disk
+      When I press "Escape"
+      Then the story view state is "no-stories"
+      And the project ".gitignore" is unchanged
+      And no wait is in progress
+
+    Scenario: A new authoring wait starts with no file activity and its own count
+      Given authoring has begun for "main..HEAD"
+      And the clock reads 30 seconds
+      And a change to "src/keys.rs" is seen on disk
+      And the AI session exits
+      And the clock reads 90 seconds
+      When authoring begins again for "main..HEAD"
+      Then the wait's file activity is "none-yet"
+      And the wait has run for 0 seconds
+
+    Scenario: A change seen before the wait's first Tick is not dated by an older clock
+      Given the clock reads 10 seconds
+      And authoring has begun for "main..HEAD"
+      And a change to "src/keys.rs" is seen on disk
+      When the clock reads 600 seconds
+      Then the wait has run for 0 seconds
+      And the wait's file activity is "none-yet"
+
+  Rule: A watcher that can't be trusted makes the wait's file activity unknown
+
+    On a network or FUSE filesystem, or when watching a folder the wait depends on fails, silence
+    on disk proves nothing. The wait says its file activity is unknown rather than showing a figure.
+
+    Scenario: With the watcher blind, authoring's file activity is unknown even after a change
+      Given the file watcher is "blind"
+      And authoring has begun for "main..HEAD"
+      And the clock reads 30 seconds
+      When a change to "src/keys.rs" is seen on disk
+      Then the wait's file activity is "unknown"
+      And the story view state is "authoring"
+
+    Scenario: With the watcher trusted, authoring's file activity is seen as before
+      Given the file watcher is "trusted"
+      And authoring has begun for "main..HEAD"
+      And the clock reads 30 seconds
+      When a change to "src/keys.rs" is seen on disk
+      Then the wait's file activity is "seen"
+
+    Scenario Outline: A failed watch of a folder the wait depends on makes the watcher blind
+      Given git ignores "target"
+      And the file watcher is "trusted"
+      And authoring has begun for "main..HEAD"
+      When watching the folder "<folder>" fails
+      Then the file watcher is "<watcher>"
+
+      Examples:
+        | folder         | watcher |
+        | src            | blind   |
+        | .varde/stories | blind   |
+        | .git           | trusted |
+        | target         | trusted |
+        | /etc           | trusted |
