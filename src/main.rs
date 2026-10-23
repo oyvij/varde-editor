@@ -14,6 +14,7 @@ use crossterm::style::Print;
 use crossterm::{execute, terminal};
 use notify::{RecursiveMode, Watcher};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::os::fd::{AsFd, AsRawFd, OwnedFd};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
 use std::sync::Arc;
@@ -660,7 +661,7 @@ fn run(
                 [r, g, b]
             })
         });
-    let (out, enhanced) = enter_terminal(&title)?;
+    let (out, enhanced, stderr) = enter_terminal(&title, &state.varde_home.join("varde.log"))?;
     state.reports_modifiers = false;
 
     let mut terminal = ratatui::Terminal::new(ratatui::backend::CrosstermBackend::new(out))?;
@@ -852,7 +853,7 @@ fn run(
     for effect in update(&state, Event::QuitForce).1 {
         perform(effect, state.split(), &mut edge, &mut queue);
     }
-    leave_terminal(enhanced);
+    leave_terminal(enhanced, stderr);
     if !edge.relaunch {
         return result;
     }
@@ -995,8 +996,20 @@ fn queue_due_windows(edge: &mut Edge, queue: &mut VecDeque<Event>) -> bool {
     fired
 }
 
-fn enter_terminal(title: &str) -> Result<(std::io::Stdout, bool)> {
+fn enter_terminal(title: &str, log: &Path) -> Result<(std::io::Stdout, bool, OwnedFd)> {
     use std::io::Write;
+    let stderr = std::io::stderr().as_fd().try_clone_to_owned()?;
+    if let Some(home) = log.parent() {
+        std::fs::create_dir_all(home)?;
+    }
+    let sink = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log)?;
+    // stderr shares the tty with the drawn screen, so anything written there would draw over it
+    if unsafe { libc::dup2(sink.as_raw_fd(), libc::STDERR_FILENO) } < 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
     terminal::enable_raw_mode()?;
     let mut out = std::io::stdout();
     execute!(
@@ -1021,10 +1034,10 @@ fn enter_terminal(title: &str) -> Result<(std::io::Stdout, bool)> {
             )
         )?;
     }
-    Ok((out, enhanced))
+    Ok((out, enhanced, stderr))
 }
 
-fn leave_terminal(enhanced: bool) {
+fn leave_terminal(enhanced: bool, stderr: OwnedFd) {
     use std::io::Write;
     let mut out = std::io::stdout();
     if enhanced {
@@ -1039,6 +1052,7 @@ fn leave_terminal(enhanced: bool) {
         terminal::LeaveAlternateScreen
     );
     let _ = terminal::disable_raw_mode();
+    unsafe { libc::dup2(stderr.as_raw_fd(), libc::STDERR_FILENO) };
 }
 
 fn collect_job_events(
@@ -4074,6 +4088,10 @@ fn sync_watches(
                 refused.remove(&path);
                 watched.insert((path, watch));
             }
+            Err(notify::Error {
+                kind: notify::ErrorKind::PathNotFound,
+                ..
+            }) => {}
             Err(error) => {
                 if refused.insert(path.clone()) {
                     eprintln!("varde: cannot watch {}: {error}", path.display());
