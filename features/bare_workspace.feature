@@ -104,6 +104,7 @@ Feature: A Bare workspace
     Then Varde exits
     And the project state was saved
     And no directory was deleted
+    And the session's trash was deleted
 
   # The one place "leaves nothing behind" bends. A review is the output of the
   # reading, and losing an output is a different kind of nothing than leaving
