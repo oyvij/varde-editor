@@ -24,7 +24,7 @@ the shell and never freezes Varde.
 The trash is `~/.varde/trash/<flattened-root>-<pid>/`, named like the Sidecars under `~/.varde/paths`
 and for the same reasons ADR 0016 gave: two instances on one folder never share a trash, and the
 sweep has one rule. A trash folder inside the project would show up in `git status` or need a
-`.gitignore` line, and a Bare workspace would no longer leave nothing behind. A named project and a
+`.gitignore` line, and a Bare workspace would no longer leave nothing behind. A project and a
 Bare workspace both get one.
 
 ## A restore never overwrites
@@ -36,15 +36,15 @@ lost restore can be tried again; a file overwritten by a restore is the loss thi
 ## Recorded only once the listing shows the path gone
 
 Issuing a delete records a pending pair of original and trash path. It joins the undo list only when
-the tree's listing shows the original gone, which is also when the Notify naming it appears. A delete
+the tree's listing shows the original gone, which is also when the message naming it appears. A delete
 that never lands, because the `mv` failed or the shell never ran it, is never undoable. Likewise a
 restore stays the newest entry, and `u` answers that it is still restoring, until the listing shows
 the path back, so one delete is never restored twice.
 
 ## Emptied on quit, swept after a crash
 
-Quitting deletes the trash folder, for every workspace and not only those with a Sidecar, so no
-client file stays on disk. A crash skips that, so the startup sweep also sweeps `~/.varde/trash` and
+Quitting deletes the trash folder, for every workspace and not only those with a Sidecar, so none
+of the user's files stay on disk. A crash skips that, so the startup sweep also sweeps `~/.varde/trash` and
 deletes each folder whose pid is dead, the way ADR 0014 and 0016 catch a crash. That is why undo does
 not survive a restart, and every message about it says so.
 
