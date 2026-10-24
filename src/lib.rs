@@ -6517,6 +6517,9 @@ fn on_story_file_written(state: &State, mut next: State, event: Event, wheeled: 
 fn on_pane_action(state: &State, mut next: State, event: Event, wheeled: bool) -> Answered {
     let effects = match event {
         Event::PaneAction(INJECT) => return Ok(update(state, Event::InjectToAi)),
+        Event::PaneAction(tree_actions::UNDO) => {
+            return Ok(update(state, Event::Trigger(Action::Undo, None)))
+        }
         Event::PaneAction(WIDEN_PREVIEW) => return Ok(update(state, Event::TogglePreviewWidth)),
         Event::PaneAction(SKILLS) => return Ok(update(state, Event::OpenSkills)),
         Event::PaneAction(risk::RECOMPUTE) => return Ok(update(state, Event::RecomputeRisk)),

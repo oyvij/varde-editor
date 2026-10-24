@@ -115,3 +115,28 @@ impl Trash {
         }
     }
 }
+
+pub const UNDO: &str = "undo";
+
+pub fn transport(state: &crate::State) -> Vec<crate::Chip> {
+    vec![crate::Chip {
+        action: UNDO,
+        name: "undo",
+        glyph: "\u{21b6}".to_string(),
+        keys: "u",
+        word: "",
+        hue: crate::Hue::Plain,
+        tone: match state.trash.undoable.is_empty() {
+            true => crate::Tone::Dimmed,
+            false => crate::Tone::Lit,
+        },
+    }]
+}
+
+pub fn transport_labels(state: &crate::State, width: u16) -> Vec<String> {
+    let title: usize = std::iter::once(crate::tree::title(state))
+        .chain(crate::lsp::nudge(state).into_iter().map(|(_, label)| label))
+        .map(|label| unicode_width::UnicodeWidthStr::width(label.as_str()))
+        .sum();
+    crate::layout::chip_labels(&transport(state), width, title as u16 + 2)
+}

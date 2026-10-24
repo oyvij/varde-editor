@@ -5505,6 +5505,12 @@ fn click_breakpoint_row_chip(world: &mut VardeWorld, chip: String, file: String,
 #[given(expr = "I click the {string} Chip")]
 #[when(expr = "I click the {string} Chip")]
 fn click_chip(world: &mut VardeWorld, chip: String) {
+    if varde::tree_actions::transport(&world.state)
+        .iter()
+        .any(|offered| offered.name == chip)
+    {
+        return click_tree_chip(world, &chip);
+    }
     let on_transport = varde::debug::transport(&world.state)
         .into_iter()
         .chain(varde::debug::strip_transport(&world.state))
@@ -5527,6 +5533,21 @@ fn click_chip(world: &mut VardeWorld, chip: String) {
         .position(|offered| offered.name == chip)
         .unwrap_or_else(|| panic!("no {chip:?} Chip"));
     let labels = layout::chip_labels(&chips, area.width, layout::CORNER_TITLE);
+    let column = (area.x..area.right())
+        .find(|&column| layout::strip_at(area, &labels, column) == Some(at))
+        .expect("the Chip on screen");
+    world.pointer = mouse::Pointer::default();
+    world.report(mouse::Kind::LeftDown, column, area.y);
+    world.report(mouse::Kind::LeftUp, column, area.y);
+}
+
+fn click_tree_chip(world: &mut VardeWorld, chip: &str) {
+    let area = world.panes().tree;
+    let at = varde::tree_actions::transport(&world.state)
+        .iter()
+        .position(|offered| offered.name == chip)
+        .unwrap_or_else(|| panic!("no {chip:?} Chip on the tree"));
+    let labels = varde::tree_actions::transport_labels(&world.state, area.width);
     let column = (area.x..area.right())
         .find(|&column| layout::strip_at(area, &labels, column) == Some(at))
         .expect("the Chip on screen");
@@ -16815,6 +16836,7 @@ fn chip(world: &VardeWorld, name: &str) -> varde::Chip {
     varde::debug::strip_transport(&world.state)
         .into_iter()
         .chain(varde::debug::transport(&world.state))
+        .chain(varde::tree_actions::transport(&world.state))
         .find(|offered| offered.name == name)
         .or_else(|| row_chip(world, name))
         .unwrap_or_else(|| panic!("no {name:?} Chip"))

@@ -225,6 +225,35 @@ Feature: File tree actions run commands in the terminal
     When I open the palette
     Then the palette offers no entry "Undo"
 
+  Scenario: Clicking the undo Chip restores the newest delete
+    Given the file tree shows the file "src/landing.js"
+    And I trigger "delete" on that file
+    And "src/landing.js" is deleted on disk
+    When I click the "undo" Chip
+    Then the terminal last executed "mkdir -p /home/me/projects/varde/src && mv -n '/home/me/.varde/trash/%home%me%projects%varde-4242/1-landing.js' /home/me/projects/varde/src/landing.js"
+
+  Scenario: Clicking the undo Chip with nothing to undo runs nothing and says so
+    When I click the "undo" Chip
+    Then no command has been executed
+    And the reviewer is told "nothing-to-undo"
+
+  Scenario: The undo Chip is dimmed while there is nothing to undo
+    Then the "undo" Chip is dimmed
+
+  Scenario: The undo Chip is lit once a delete is recorded
+    Given the file tree shows the file "src/landing.js"
+    And I trigger "delete" on that file
+    When "src/landing.js" is deleted on disk
+    Then the "undo" Chip is lit
+
+  Scenario: The undo Chip is dimmed again once the last delete is restored
+    Given the file tree shows the file "src/landing.js"
+    And I trigger "delete" on that file
+    And "src/landing.js" is deleted on disk
+    And I click the "undo" Chip
+    When "src/landing.js" is created on disk
+    Then the "undo" Chip is dimmed
+
   Scenario: Copying a path puts the absolute path on the clipboard
     Given a system clipboard is available
     And the file tree shows the file "src/landing.js"
