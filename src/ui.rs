@@ -325,13 +325,7 @@ fn draw_ai_pane(
 fn ai_chips(frame: &mut Frame, state: &State, area: Rect) {
     let chips = varde::ai_chips();
     let labels = layout::chip_labels(&chips, area.width, layout::AI_TITLE);
-    let gap = Style::default().fg(border_colour(state, Pane::Ai));
-    let mut spans = Vec::new();
-    for (chip, label) in chips.iter().zip(labels) {
-        spans.extend(chip_spans(state, chip, label));
-        spans.push(Span::styled("\u{2500}", gap));
-    }
-    let line = Line::from(spans);
+    let line = Line::from(transport_spans(state, Pane::Ai, &chips, labels));
     let width = line.width() as u16;
     if let Some(x) = area.right().checked_sub(1 + width) {
         frame.render_widget(line, Rect::new(x, area.y, width, 1));
@@ -770,12 +764,7 @@ fn buffers_lines(state: &State, width: u16) -> Vec<Line<'static>> {
 fn breakpoints_widget(state: &State, width: u16) -> Paragraph<'static> {
     let chips = varde::debug::transport(state);
     let labels = layout::chip_labels(&chips, width, layout::CORNER_TITLE);
-    let gap = Style::default().fg(border_colour(state, Pane::Breakpoints));
-    let mut spans = Vec::new();
-    for (chip, label) in chips.iter().zip(labels) {
-        spans.extend(chip_spans(state, chip, label));
-        spans.push(Span::styled("\u{2500}", gap));
-    }
+    let spans = transport_spans(state, Pane::Breakpoints, &chips, labels);
     Paragraph::new(breakpoints_lines(state, width))
         .scroll((state.breakpoints_scroll as u16, 0))
         .block(
@@ -1249,13 +1238,23 @@ fn tree_widget(state: &State, rows: &[Row], width: u16) -> Paragraph<'static> {
 fn tree_block(state: &State, width: u16) -> Block<'static> {
     let chips = varde::tree_actions::transport(state);
     let labels = varde::tree_actions::transport_labels(state, width);
-    let gap = Style::default().fg(border_colour(state, Pane::Tree));
+    let spans = transport_spans(state, Pane::Tree, &chips, labels);
+    pane_block(tree_title(state), state, Pane::Tree).title(Line::from(spans).right_aligned())
+}
+
+fn transport_spans(
+    state: &State,
+    pane: Pane,
+    chips: &[varde::Chip],
+    labels: Vec<String>,
+) -> Vec<Span<'static>> {
+    let gap = Style::default().fg(border_colour(state, pane));
     let mut spans = Vec::new();
     for (chip, label) in chips.iter().zip(labels) {
         spans.extend(chip_spans(state, chip, label));
         spans.push(Span::styled("\u{2500}", gap));
     }
-    pane_block(tree_title(state), state, Pane::Tree).title(Line::from(spans).right_aligned())
+    spans
 }
 
 fn tree_lines(state: &State, rows: &[Row], width: u16) -> Vec<Line<'static>> {
@@ -2578,11 +2577,7 @@ fn right_title(state: &State, room: usize, width: u16) -> Line<'static> {
     };
     let chips = varde::editor_chips(state);
     let labels = layout::chip_labels(&chips, width, layout::EDITOR_TITLE);
-    let gap = Style::default().fg(border_colour(state, Pane::Editor));
-    for (chip, label) in chips.iter().zip(labels) {
-        spans.extend(chip_spans(state, chip, label));
-        spans.push(Span::styled("\u{2500}", gap));
-    }
+    spans.extend(transport_spans(state, Pane::Editor, &chips, labels));
     Line::from(spans).right_aligned()
 }
 
