@@ -49,7 +49,7 @@ pub struct Trash {
     pub issued: usize,
     pub pending: Vec<Trashed>,
     pub undoable: Vec<Trashed>,
-    pub restoring: bool,
+    pub restoring: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -90,7 +90,7 @@ impl Trash {
 
     pub(crate) fn restore(&mut self) -> Option<String> {
         let newest = self.undoable.last()?;
-        self.restoring = true;
+        self.restoring = Some(newest.original.clone());
         let parent = newest.original.parent().unwrap_or(Path::new("/"));
         Some(format!(
             "{} && {}",
@@ -99,15 +99,19 @@ impl Trash {
         ))
     }
 
-    pub(crate) fn returned(&mut self, appeared: &[PathBuf]) {
-        if self.restoring
-            && self
-                .undoable
-                .last()
-                .is_some_and(|newest| appeared.contains(&newest.original))
+    pub(crate) fn came_back(&mut self, appeared: &[(PathBuf, crate::tree::Kind)]) {
+        let Some(original) = self
+            .restoring
+            .take_if(|original| appeared.iter().any(|(path, _)| path == original))
+        else {
+            return;
+        };
+        if let Some(at) = self
+            .undoable
+            .iter()
+            .rposition(|trashed| trashed.original == original)
         {
-            self.undoable.pop();
-            self.restoring = false;
+            self.undoable.remove(at);
         }
     }
 }

@@ -134,6 +134,8 @@ const WHEEL_ROWS: usize = 1;
 
 const SLIDE_COLUMNS: usize = 8;
 
+const UNDO_IS_FOR_THIS_SESSION: &str = "Undo lasts only this session.";
+
 pub const PALETTE: [(&str, &[(char, &str)]); 5] = [
     (
         "Panes",
@@ -2638,37 +2640,40 @@ fn on_trigger(state: &State, mut next: State, event: Event, wheeled: bool) -> An
             )]
         }
         Event::Trigger(Action::Undo, _) => {
-            let newest = state.trash.undoable.last().map(|newest| {
-                let original = &newest.original;
-                let shown = original
+            let shown = |original: &Path| {
+                original
                     .strip_prefix(state.shown_root())
-                    .unwrap_or(original);
-                let listed = match (original.parent(), original.file_name()) {
-                    (Some(parent), Some(name)) => {
-                        state.contents.get(parent).is_some_and(|entries| {
-                            entries.iter().any(|entry| name == entry.name.as_str())
-                        })
-                    }
-                    _ => false,
-                };
-                (shown.display().to_string(), listed)
-            });
-            match newest {
-                None => vec![Effect::notify_saying(
-                    "nothing-to-undo",
-                    "Nothing to undo. Undo lasts only this session.".to_string(),
-                )],
-                Some((shown, _)) if state.trash.restoring => vec![Effect::notify_saying(
+                    .unwrap_or(original)
+                    .display()
+                    .to_string()
+            };
+            let listed = |original: &Path| match (original.parent(), original.file_name()) {
+                (Some(parent), Some(name)) => state
+                    .contents
+                    .get(parent)
+                    .is_some_and(|entries| entries.iter().any(|entry| name == entry.name.as_str())),
+                _ => false,
+            };
+            match (&state.trash.restoring, state.trash.undoable.last()) {
+                (Some(original), _) => vec![Effect::notify_saying(
                     "restore-pending",
-                    format!("Still restoring {shown}. Undo lasts only this session."),
-                )],
-                Some((shown, true)) => vec![Effect::notify_saying(
-                    "restore-path-taken",
                     format!(
-                        "{shown} is there again, so it was not restored. Move it away and press u. Undo lasts only this session."
+                        "Still restoring {}. {UNDO_IS_FOR_THIS_SESSION}",
+                        shown(original)
                     ),
                 )],
-                Some(_) => next
+                (None, None) => vec![Effect::notify_saying(
+                    "nothing-to-undo",
+                    format!("Nothing to undo. {UNDO_IS_FOR_THIS_SESSION}"),
+                )],
+                (None, Some(newest)) if listed(&newest.original) => vec![Effect::notify_saying(
+                    "restore-path-taken",
+                    format!(
+                        "{} is there again, so it was not restored. Move it away and press u. {UNDO_IS_FOR_THIS_SESSION}",
+                        shown(&newest.original)
+                    ),
+                )],
+                (None, Some(_)) => next
                     .trash
                     .restore()
                     .map(Effect::RunInTerminal)
@@ -3080,12 +3085,7 @@ fn on_key_6(_state: &State, mut next: State, event: Event, wheeled: bool) -> Ans
                 .filter(|(path, _)| next.view == View::Knowledge && preview::is_markdown(path))
                 .map(|(path, _)| path.clone())
                 .collect();
-            next.trash.returned(
-                &appeared
-                    .iter()
-                    .map(|(path, _)| path.clone())
-                    .collect::<Vec<_>>(),
-            );
+            next.trash.came_back(&appeared);
             for (path, kind) in appeared {
                 let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
                     continue;
@@ -9412,6 +9412,29 @@ mod tests {
     }
 
     #[test]
+    fn a_delete_landing_mid_restore_waits_for_the_restored_path() {
+        let (restoring, _) = undone(&trashed(&trashing(), "src/a.rs"));
+        let both = trashed(&restoring, "src/b.rs");
+        assert_eq!(
+            told(&undone(&both).1),
+            (
+                "restore-pending",
+                "Still restoring src/a.rs. Undo lasts only this session."
+            )
+        );
+        let (back, _) = update(
+            &both,
+            Event::FilesAppeared(vec![(PathBuf::from("/w/src/a.rs"), tree::Kind::File)]),
+        );
+        assert_eq!(
+            undone(&back).1,
+            vec![Effect::RunInTerminal(
+                "mkdir -p /w/src && mv -n '/h/.varde/trash/%w-7/2-b.rs' /w/src/b.rs".to_string()
+            )]
+        );
+    }
+
+    #[test]
     fn another_path_appearing_leaves_the_restore_pending() {
         let (restoring, _) = undone(&trashed(&trashing(), "src/foo.rs"));
         let (still, _) = update(
@@ -9465,7 +9488,7 @@ mod tests {
                 "src/foo.rs is there again, so it was not restored. Move it away and press u. Undo lasts only this session."
             )
         );
-        assert!(!after.trash.restoring);
+        assert_eq!(after.trash.restoring, None);
     }
 
     #[test]
