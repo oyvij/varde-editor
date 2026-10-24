@@ -92,12 +92,19 @@ Feature: A Bare workspace
     And the Sidecar was deleted
     And no state was saved
 
-  Scenario: Quitting a project workspace deletes nothing
+  Scenario: Quitting a Bare workspace empties its trash
+    Given the session's trash is "/home/me/.varde/trash/%home%me%projects%theirs-4242"
+    And Varde started with no folder in "/home/me/projects/theirs"
+    When I quit
+    Then the session's trash was deleted
+
+  Scenario: Quitting a project workspace deletes nothing but the session's trash
     Given Varde started in the project
     When I quit
     Then Varde exits
     And the project state was saved
     And no directory was deleted
+    And the session's trash was deleted
 
   # The one place "leaves nothing behind" bends. A review is the output of the
   # reading, and losing an output is a different kind of nothing than leaving

@@ -134,6 +134,8 @@ const WHEEL_ROWS: usize = 1;
 
 const SLIDE_COLUMNS: usize = 8;
 
+const UNDO_IS_FOR_THIS_SESSION: &str = "Undo lasts only this session.";
+
 pub const PALETTE: [(&str, &[(char, &str)]); 5] = [
     (
         "Panes",
@@ -873,6 +875,10 @@ pub enum Effect {
         slug: &'static str,
         about: String,
     },
+    NotifySaying {
+        slug: &'static str,
+        text: String,
+    },
     ClearNotice,
     ReadFolder(PathBuf),
     OpenVault(PathBuf),
@@ -1032,6 +1038,16 @@ impl Effect {
                 .collect(),
         }
     }
+
+    fn notify_saying(slug: &'static str, text: String) -> Self {
+        Effect::NotifySaying {
+            slug,
+            text: text
+                .chars()
+                .filter(|character| !character.is_control())
+                .collect(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1099,6 +1115,7 @@ pub struct State {
     pub root: PathBuf,
     pub sidecar: Option<PathBuf>,
     pub opened: Opened,
+    pub trash: tree_actions::Trash,
     pub varde_home: PathBuf,
     pub modal: Modal,
     pub view: View,
@@ -1340,6 +1357,7 @@ impl Default for State {
             root: PathBuf::new(),
             sidecar: None,
             opened: Opened::Workspace,
+            trash: tree_actions::Trash::default(),
             varde_home: PathBuf::new(),
             modal: Modal::None,
             view: View::Edit,
@@ -2604,26 +2622,64 @@ fn on_trigger(state: &State, mut next: State, event: Event, wheeled: bool) -> An
                 &state.shown_root().join(path),
             ))]
         }
-        Event::Trigger(Action::Delete | Action::NewFile | Action::NewDirectory, _)
-            if state.view == View::Knowledge =>
-        {
+        Event::Trigger(
+            Action::Delete | Action::NewFile | Action::NewDirectory | Action::Undo,
+            _,
+        ) if state.view == View::Knowledge => {
             vec![Effect::Notify("vault-is-read-only")]
         }
-        Event::Trigger(Action::Delete, Some(target)) => {
-            let (verb, path) = match target {
-                Target::File(p) => ("rm", p),
-                Target::Folder(p) => ("rm -r", p),
-            };
+        Event::Trigger(Action::Delete, Some(Target::File(path) | Target::Folder(path))) => {
             next.tree_selection = Some(
                 state
                     .shown_root()
                     .join(path.parent().unwrap_or(Path::new(""))),
             );
             next.focus = Pane::Tree;
-            vec![Effect::RunInTerminal(tree_actions::command(
-                verb,
-                &state.shown_root().join(path),
-            ))]
+            vec![Effect::RunInTerminal(
+                next.trash.delete(&state.shown_root().join(path)),
+            )]
+        }
+        Event::Trigger(Action::Undo, _) => {
+            let shown = |original: &Path| {
+                original
+                    .strip_prefix(state.shown_root())
+                    .unwrap_or(original)
+                    .display()
+                    .to_string()
+            };
+            let listed = |original: &Path| match (original.parent(), original.file_name()) {
+                (Some(parent), Some(name)) => state
+                    .contents
+                    .get(parent)
+                    .is_some_and(|entries| entries.iter().any(|entry| name == entry.name.as_str())),
+                _ => false,
+            };
+            match (&state.trash.restoring, state.trash.undoable.last()) {
+                (Some(original), _) => vec![Effect::notify_saying(
+                    "restore-pending",
+                    format!(
+                        "Still restoring {}. {UNDO_IS_FOR_THIS_SESSION}",
+                        shown(original)
+                    ),
+                )],
+                (None, None) => vec![Effect::notify_saying(
+                    "nothing-to-undo",
+                    format!("Nothing to undo. {UNDO_IS_FOR_THIS_SESSION}"),
+                )],
+                (None, Some(newest)) if listed(&newest.original) => vec![Effect::notify_saying(
+                    "restore-path-taken",
+                    format!(
+                        "{} is there again, so it was not restored. Move it away and press u. {UNDO_IS_FOR_THIS_SESSION}",
+                        shown(&newest.original)
+                    ),
+                )],
+                (None, Some(_)) => next
+                    .trash
+                    .restore()
+                    .map(Effect::RunInTerminal)
+                    .into_iter()
+                    .collect(),
+            }
         }
         Event::Trigger(Action::SearchHere, Some(Target::Folder(path))) => {
             next.search = Some(Search {
@@ -2907,6 +2963,7 @@ fn on_key_4(state: &State, next: State, event: Event, _wheeled: bool) -> Answere
                 'k' => return Ok(update(state, Event::MoveSelection(Direction::Up))),
                 'n' => "new-file",
                 'N' => "new-directory",
+                'u' => return Ok(update(state, Event::Trigger(Action::Undo, None))),
                 'd' => "delete",
                 'o' if selected_row_actions(state).contains(&"open-externally") => {
                     "open-externally"
@@ -3028,6 +3085,7 @@ fn on_key_6(_state: &State, mut next: State, event: Event, wheeled: bool) -> Ans
                 .filter(|(path, _)| next.view == View::Knowledge && preview::is_markdown(path))
                 .map(|(path, _)| path.clone())
                 .collect();
+            next.trash.came_back(&appeared);
             for (path, kind) in appeared {
                 let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
                     continue;
@@ -3059,9 +3117,10 @@ fn on_key_6(_state: &State, mut next: State, event: Event, wheeled: bool) -> Ans
     Ok(settle(next, effects, wheeled))
 }
 
-fn on_files_removed(_state: &State, mut next: State, event: Event, wheeled: bool) -> Answered {
+fn on_files_removed(state: &State, mut next: State, event: Event, wheeled: bool) -> Answered {
     let effects = match event {
         Event::FilesRemoved(paths) => {
+            let landed = next.trash.landed(&paths);
             for path in paths {
                 let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
                     continue;
@@ -3070,7 +3129,19 @@ fn on_files_removed(_state: &State, mut next: State, event: Event, wheeled: bool
                     entries.retain(|entry| Some(entry.name.as_str()) != name.to_str());
                 }
             }
-            vec![]
+            landed
+                .iter()
+                .map(|original| {
+                    let shown = original.strip_prefix(state.shown_root()).unwrap_or(original);
+                    Effect::notify_saying(
+                        "moved-to-trash",
+                        format!(
+                            "Moved {} to the trash. u in the Tree undoes it; undo lasts only this session.",
+                            shown.display()
+                        ),
+                    )
+                })
+                .collect()
         }
 
         Event::Expand { path, entries } => {
@@ -6446,6 +6517,9 @@ fn on_story_file_written(state: &State, mut next: State, event: Event, wheeled: 
 fn on_pane_action(state: &State, mut next: State, event: Event, wheeled: bool) -> Answered {
     let effects = match event {
         Event::PaneAction(INJECT) => return Ok(update(state, Event::InjectToAi)),
+        Event::PaneAction(tree_actions::UNDO) => {
+            return Ok(update(state, Event::Trigger(Action::Undo, None)))
+        }
         Event::PaneAction(WIDEN_PREVIEW) => return Ok(update(state, Event::TogglePreviewWidth)),
         Event::PaneAction(SKILLS) => return Ok(update(state, Event::OpenSkills)),
         Event::PaneAction(risk::RECOMPUTE) => return Ok(update(state, Event::RecomputeRisk)),
@@ -7421,9 +7495,20 @@ pub fn mode_label(state: &State, buffer: &editor::Buffer) -> &'static str {
 
 fn leaving(state: &State) -> Vec<Effect> {
     let stop = Effect::StopSpeaking;
+    let trash = Effect::DeleteDir(state.trash.dir.clone());
     match &state.sidecar {
-        Some(sidecar) => vec![stop, Effect::DeleteDir(sidecar.clone()), Effect::Exit],
-        None => vec![stop, Effect::SaveState(state_json(state)), Effect::Exit],
+        Some(sidecar) => vec![
+            stop,
+            trash,
+            Effect::DeleteDir(sidecar.clone()),
+            Effect::Exit,
+        ],
+        None => vec![
+            stop,
+            trash,
+            Effect::SaveState(state_json(state)),
+            Effect::Exit,
+        ],
     }
 }
 
@@ -9201,6 +9286,224 @@ mod tests {
             };
             assert_eq!(saved(&editing)["buffers"], serde_json::json!(["a.rs"]));
         }
+    }
+
+    fn trashing() -> State {
+        State {
+            trash: tree_actions::Trash {
+                dir: PathBuf::from("/h/.varde/trash/%w-7"),
+                ..tree_actions::Trash::default()
+            },
+            ..workspace()
+        }
+    }
+
+    fn deleted(state: &State, path: &str) -> (State, Vec<Effect>) {
+        update(
+            state,
+            Event::Trigger(Action::Delete, Some(Target::File(PathBuf::from(path)))),
+        )
+    }
+
+    #[test]
+    fn a_delete_is_pending_until_the_listing_shows_it_gone() {
+        let (issued, _) = deleted(&trashing(), "src/foo.rs");
+        assert_eq!(
+            issued.trash.pending,
+            vec![tree_actions::Trashed {
+                original: PathBuf::from("/w/src/foo.rs"),
+                trashed: PathBuf::from("/h/.varde/trash/%w-7/1-foo.rs"),
+            }]
+        );
+        assert!(issued.trash.undoable.is_empty());
+        let (elsewhere, effects) = update(
+            &issued,
+            Event::FilesRemoved(vec![PathBuf::from("/w/src/bar.rs")]),
+        );
+        assert_eq!(elsewhere.trash, issued.trash);
+        assert!(effects.is_empty());
+        let (landed, _) = update(
+            &issued,
+            Event::FilesRemoved(vec![PathBuf::from("/w/src/foo.rs")]),
+        );
+        assert!(landed.trash.pending.is_empty());
+        assert_eq!(landed.trash.undoable, issued.trash.pending);
+    }
+
+    #[test]
+    fn each_delete_takes_the_next_number_in_the_trash() {
+        let (first, _) = deleted(&trashing(), "src/index.js");
+        let (second, effects) = deleted(&first, "lib/index.js");
+        assert_eq!(
+            effects,
+            vec![Effect::RunInTerminal(
+                "mkdir -p '/h/.varde/trash/%w-7' && mv /w/lib/index.js '/h/.varde/trash/%w-7/2-index.js'"
+                    .to_string()
+            )]
+        );
+        assert_eq!(second.trash.issued, 2);
+    }
+
+    #[test]
+    fn a_landed_delete_names_the_path_the_undo_key_and_the_session() {
+        let (issued, _) = deleted(&trashing(), "src/foo.rs");
+        let (_, effects) = update(
+            &issued,
+            Event::FilesRemoved(vec![PathBuf::from("/w/src/foo.rs")]),
+        );
+        let [Effect::NotifySaying { slug, text }] = effects.as_slice() else {
+            panic!("one notice, got {effects:?}");
+        };
+        assert_eq!(*slug, "moved-to-trash");
+        assert_eq!(
+            text,
+            "Moved src/foo.rs to the trash. u in the Tree undoes it; undo lasts only this session."
+        );
+    }
+
+    #[test]
+    fn quitting_deletes_the_trash_for_a_project_and_a_bare_workspace() {
+        let trash = Effect::DeleteDir(PathBuf::from("/h/.varde/trash/%w-7"));
+        let bare = State {
+            sidecar: Some(PathBuf::from("/h/.varde/paths/%w-7")),
+            ..trashing()
+        };
+        assert!(update(&trashing(), Event::QuitForce).1.contains(&trash));
+        assert!(update(&bare, Event::QuitForce).1.contains(&trash));
+    }
+
+    fn trashed(state: &State, path: &str) -> State {
+        let (issued, _) = deleted(state, path);
+        update(
+            &issued,
+            Event::FilesRemoved(vec![PathBuf::from("/w").join(path)]),
+        )
+        .0
+    }
+
+    fn undone(state: &State) -> (State, Vec<Effect>) {
+        update(state, Event::Trigger(Action::Undo, None))
+    }
+
+    fn told(effects: &[Effect]) -> (&'static str, &str) {
+        match effects {
+            [Effect::NotifySaying { slug, text }] => (slug, text),
+            _ => panic!("one notice, got {effects:?}"),
+        }
+    }
+
+    #[test]
+    fn undo_restores_the_newest_delete_first() {
+        let both = trashed(&trashed(&trashing(), "src/a.rs"), "src/b.rs");
+        let (restoring, effects) = undone(&both);
+        assert_eq!(
+            effects,
+            vec![Effect::RunInTerminal(
+                "mkdir -p /w/src && mv -n '/h/.varde/trash/%w-7/2-b.rs' /w/src/b.rs".to_string()
+            )]
+        );
+        let (back, _) = update(
+            &restoring,
+            Event::FilesAppeared(vec![(PathBuf::from("/w/src/b.rs"), tree::Kind::File)]),
+        );
+        assert_eq!(
+            undone(&back).1,
+            vec![Effect::RunInTerminal(
+                "mkdir -p /w/src && mv -n '/h/.varde/trash/%w-7/1-a.rs' /w/src/a.rs".to_string()
+            )]
+        );
+    }
+
+    #[test]
+    fn a_delete_landing_mid_restore_waits_for_the_restored_path() {
+        let (restoring, _) = undone(&trashed(&trashing(), "src/a.rs"));
+        let both = trashed(&restoring, "src/b.rs");
+        assert_eq!(
+            told(&undone(&both).1),
+            (
+                "restore-pending",
+                "Still restoring src/a.rs. Undo lasts only this session."
+            )
+        );
+        let (back, _) = update(
+            &both,
+            Event::FilesAppeared(vec![(PathBuf::from("/w/src/a.rs"), tree::Kind::File)]),
+        );
+        assert_eq!(
+            undone(&back).1,
+            vec![Effect::RunInTerminal(
+                "mkdir -p /w/src && mv -n '/h/.varde/trash/%w-7/2-b.rs' /w/src/b.rs".to_string()
+            )]
+        );
+    }
+
+    #[test]
+    fn another_path_appearing_leaves_the_restore_pending() {
+        let (restoring, _) = undone(&trashed(&trashing(), "src/foo.rs"));
+        let (still, _) = update(
+            &restoring,
+            Event::FilesAppeared(vec![(PathBuf::from("/w/src/bar.rs"), tree::Kind::File)]),
+        );
+        assert_eq!(still.trash, restoring.trash);
+    }
+
+    #[test]
+    fn undo_with_nothing_to_undo_runs_nothing_and_says_so() {
+        let (_, effects) = undone(&trashing());
+        assert_eq!(
+            told(&effects),
+            (
+                "nothing-to-undo",
+                "Nothing to undo. Undo lasts only this session."
+            )
+        );
+    }
+
+    #[test]
+    fn undo_while_a_restore_is_pending_runs_nothing_more() {
+        let (restoring, _) = undone(&trashed(&trashing(), "src/foo.rs"));
+        let (after, effects) = undone(&restoring);
+        assert_eq!(
+            told(&effects),
+            (
+                "restore-pending",
+                "Still restoring src/foo.rs. Undo lasts only this session."
+            )
+        );
+        assert_eq!(after.trash, restoring.trash);
+    }
+
+    #[test]
+    fn undo_never_restores_over_a_path_the_tree_lists() {
+        let mut taken = trashed(&trashing(), "src/foo.rs");
+        taken.contents.insert(
+            PathBuf::from("/w/src"),
+            vec![Entry {
+                name: "foo.rs".to_string(),
+                is_dir: false,
+            }],
+        );
+        let (after, effects) = undone(&taken);
+        assert_eq!(
+            told(&effects),
+            (
+                "restore-path-taken",
+                "src/foo.rs is there again, so it was not restored. Move it away and press u. Undo lasts only this session."
+            )
+        );
+        assert_eq!(after.trash.restoring, None);
+    }
+
+    #[test]
+    fn undo_in_the_knowledge_view_is_refused() {
+        let knowledge = State {
+            view: View::Knowledge,
+            ..trashed(&trashing(), "src/foo.rs")
+        };
+        assert_eq!(
+            undone(&knowledge).1,
+            vec![Effect::Notify("vault-is-read-only")]
+        );
     }
 
     #[test]
