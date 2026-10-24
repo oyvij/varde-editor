@@ -157,6 +157,7 @@ until you open it. Varde remembers which folders are expanded per project.
 | `/` | put the keyboard in the filter box |
 | `c` | collapse every open folder (palette `c` from anywhere) |
 | `n` `N` `d` | new file, new directory, delete, on the selected row |
+| `u` | undo the newest delete; again for the one before |
 | `-` | return the terminal to the project root |
 | `→` `←` `Enter` `Esc` | step into the selected row's action icons, along them, run one, step out |
 
@@ -202,7 +203,8 @@ externally, and does nothing on a file without that icon.
 |---|---|---|
 | new file | a name box, then `touch <path>`, with `mkdir -p` first for a nested name | yes |
 | new directory | a name box, then `mkdir -p <path>` | yes |
-| delete | `rm <file>` or `rm -r <folder>` | yes, with no confirmation and no trash |
+| delete | `mv <path>` into this session's trash folder under `~/.varde` | yes, with no confirmation; `u` undoes it, for this session only |
+| undo (`u`) | `mv -n` from the trash back to where it was, with `mkdir -p` for a missing parent | yes |
 | go here | `cd <folder>` on the input line | no, it waits for your Enter |
 | back to root (`-`) | `cd <root>` | yes |
 | search here | opens project search limited to that folder | n/a |
@@ -213,6 +215,14 @@ externally, and does nothing on a file without that icon.
 focus to the terminal, because you have to press Enter there. A command that already ran leaves
 nothing to type, so focus returns to the tree with the created path selected or, after a delete,
 the folder that held it. You can open a new file with `Enter` as soon as the watcher lists it.
+
+A delete moves the file or folder into a trash folder for this session under `~/.varde/trash/`, and
+nothing is written inside the project. Once the tree sees the path gone, a Notify names it and says
+`u` in the tree undoes it. `u`, or the ` ↶ u ` Chip on the tree's top border, puts back the newest
+delete, and pressing it again puts back the one before. The Chip is dimmed while there is nothing to
+undo. A restore never overwrites: if something already sits at the original path, `u` runs nothing
+and says so. Undo lasts only this session. Quitting Varde empties the trash, and the next start
+sweeps the trash a crashed Varde left behind.
 
 ### Following the disk
 
