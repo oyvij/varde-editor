@@ -148,6 +148,83 @@ Feature: File tree actions run commands in the terminal
     When I quit
     Then the session's trash was deleted
 
+  Scenario: u in the tree restores the newest delete
+    Given the file tree shows the file "src/landing.js"
+    And I trigger "delete" on that file
+    And "src/landing.js" is deleted on disk
+    When I press the key "u"
+    Then the terminal last executed "mkdir -p /home/me/projects/varde/src && mv -n '/home/me/.varde/trash/%home%me%projects%varde-4242/1-landing.js' /home/me/projects/varde/src/landing.js"
+
+  Scenario: Once the restored path is back, u restores the delete before it
+    Given the file tree shows the file "src/index.js"
+    And I trigger "delete" on that file
+    And "src/index.js" is deleted on disk
+    And the file tree shows the file "src/landing.js"
+    And I trigger "delete" on that file
+    And "src/landing.js" is deleted on disk
+    And I press the key "u"
+    And "src/landing.js" is created on disk
+    When I press the key "u"
+    Then the terminal last executed "mkdir -p /home/me/projects/varde/src && mv -n '/home/me/.varde/trash/%home%me%projects%varde-4242/1-index.js' /home/me/projects/varde/src/index.js"
+
+  Scenario: u with nothing to undo runs nothing and says so
+    Given the file tree pane has focus
+    When I press the key "u"
+    Then no command has been executed
+    And the reviewer is told "nothing-to-undo"
+
+  Scenario: u never overwrites a path that is taken again
+    Given the folder "src" is expanded
+    And the file tree shows the file "src/landing.js"
+    And I trigger "delete" on that file
+    And "src/landing.js" is deleted on disk
+    And "src/landing.js" is created on disk
+    When I press the key "u"
+    Then the terminal has executed 1 command
+    And the reviewer is told "restore-path-taken"
+
+  Scenario: u while a restore is still landing runs nothing more
+    Given the file tree shows the file "src/landing.js"
+    And I trigger "delete" on that file
+    And "src/landing.js" is deleted on disk
+    And I press the key "u"
+    When I press the key "u"
+    Then the terminal last executed "mkdir -p /home/me/projects/varde/src && mv -n '/home/me/.varde/trash/%home%me%projects%varde-4242/1-landing.js' /home/me/projects/varde/src/landing.js"
+    And the terminal has executed 2 commands
+    And the reviewer is told "restore-pending"
+
+  Scenario: A file whose folder is gone comes back with the folder made again
+    Given the file tree shows the file "src/tree/node.js"
+    And I trigger "delete" on that file
+    And "src/tree/node.js" is deleted on disk
+    And "src/tree" is deleted on disk
+    When I press the key "u"
+    Then the terminal last executed "mkdir -p /home/me/projects/varde/src/tree && mv -n '/home/me/.varde/trash/%home%me%projects%varde-4242/1-node.js' /home/me/projects/varde/src/tree/node.js"
+
+  Scenario Outline: A restored path is quoted when it needs it
+    Given the file tree shows the file "<path>"
+    And I trigger "delete" on that file
+    And "<path>" is deleted on disk
+    When I press the key "u"
+    Then the terminal last executed:
+      """
+      mkdir -p /home/me/projects/varde && mv -n <from> <to>
+      """
+
+    Examples:
+      | path     | from                                                            | to                                 |
+      | my notes | '/home/me/.varde/trash/%home%me%projects%varde-4242/1-my notes' | '/home/me/projects/varde/my notes' |
+      | don't    | "/home/me/.varde/trash/%home%me%projects%varde-4242/1-don't"    | "/home/me/projects/varde/don't"    |
+      | a;b      | '/home/me/.varde/trash/%home%me%projects%varde-4242/1-a;b'      | '/home/me/projects/varde/a;b'      |
+
+  Scenario: The Cheatsheet lists u for the tree
+    Given the Cheatsheet is shown
+    Then the Cheatsheet lists "tree: undo the last delete" under the keys "u"
+
+  Scenario: Undo has no palette entry
+    When I open the palette
+    Then the palette offers no entry "Undo"
+
   Scenario: Copying a path puts the absolute path on the clipboard
     Given a system clipboard is available
     And the file tree shows the file "src/landing.js"

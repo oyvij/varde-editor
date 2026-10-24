@@ -11,6 +11,7 @@ pub enum Action {
     BackToRoot,
     CopyPath,
     OpenExternally,
+    Undo,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -48,6 +49,7 @@ pub struct Trash {
     pub issued: usize,
     pub pending: Vec<Trashed>,
     pub undoable: Vec<Trashed>,
+    pub restoring: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -84,5 +86,28 @@ impl Trash {
             .collect();
         self.undoable.extend(gone);
         originals
+    }
+
+    pub(crate) fn restore(&mut self) -> Option<String> {
+        let newest = self.undoable.last()?;
+        self.restoring = true;
+        let parent = newest.original.parent().unwrap_or(Path::new("/"));
+        Some(format!(
+            "{} && {}",
+            command("mkdir -p", parent),
+            command(&command("mv -n", &newest.trashed), &newest.original)
+        ))
+    }
+
+    pub(crate) fn returned(&mut self, appeared: &[PathBuf]) {
+        if self.restoring
+            && self
+                .undoable
+                .last()
+                .is_some_and(|newest| appeared.contains(&newest.original))
+        {
+            self.undoable.pop();
+            self.restoring = false;
+        }
     }
 }

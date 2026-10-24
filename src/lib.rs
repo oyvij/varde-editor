@@ -2620,9 +2620,10 @@ fn on_trigger(state: &State, mut next: State, event: Event, wheeled: bool) -> An
                 &state.shown_root().join(path),
             ))]
         }
-        Event::Trigger(Action::Delete | Action::NewFile | Action::NewDirectory, _)
-            if state.view == View::Knowledge =>
-        {
+        Event::Trigger(
+            Action::Delete | Action::NewFile | Action::NewDirectory | Action::Undo,
+            _,
+        ) if state.view == View::Knowledge => {
             vec![Effect::Notify("vault-is-read-only")]
         }
         Event::Trigger(Action::Delete, Some(Target::File(path) | Target::Folder(path))) => {
@@ -2635,6 +2636,45 @@ fn on_trigger(state: &State, mut next: State, event: Event, wheeled: bool) -> An
             vec![Effect::RunInTerminal(
                 next.trash.delete(&state.shown_root().join(path)),
             )]
+        }
+        Event::Trigger(Action::Undo, _) => {
+            let newest = state.trash.undoable.last().map(|newest| {
+                let original = &newest.original;
+                let shown = original
+                    .strip_prefix(state.shown_root())
+                    .unwrap_or(original);
+                let listed = match (original.parent(), original.file_name()) {
+                    (Some(parent), Some(name)) => {
+                        state.contents.get(parent).is_some_and(|entries| {
+                            entries.iter().any(|entry| name == entry.name.as_str())
+                        })
+                    }
+                    _ => false,
+                };
+                (shown.display().to_string(), listed)
+            });
+            match newest {
+                None => vec![Effect::notify_saying(
+                    "nothing-to-undo",
+                    "Nothing to undo. Undo lasts only this session.".to_string(),
+                )],
+                Some((shown, _)) if state.trash.restoring => vec![Effect::notify_saying(
+                    "restore-pending",
+                    format!("Still restoring {shown}. Undo lasts only this session."),
+                )],
+                Some((shown, true)) => vec![Effect::notify_saying(
+                    "restore-path-taken",
+                    format!(
+                        "{shown} is there again, so it was not restored. Move it away and press u. Undo lasts only this session."
+                    ),
+                )],
+                Some(_) => next
+                    .trash
+                    .restore()
+                    .map(Effect::RunInTerminal)
+                    .into_iter()
+                    .collect(),
+            }
         }
         Event::Trigger(Action::SearchHere, Some(Target::Folder(path))) => {
             next.search = Some(Search {
@@ -2918,6 +2958,7 @@ fn on_key_4(state: &State, next: State, event: Event, _wheeled: bool) -> Answere
                 'k' => return Ok(update(state, Event::MoveSelection(Direction::Up))),
                 'n' => "new-file",
                 'N' => "new-directory",
+                'u' => return Ok(update(state, Event::Trigger(Action::Undo, None))),
                 'd' => "delete",
                 'o' if selected_row_actions(state).contains(&"open-externally") => {
                     "open-externally"
@@ -3039,6 +3080,12 @@ fn on_key_6(_state: &State, mut next: State, event: Event, wheeled: bool) -> Ans
                 .filter(|(path, _)| next.view == View::Knowledge && preview::is_markdown(path))
                 .map(|(path, _)| path.clone())
                 .collect();
+            next.trash.returned(
+                &appeared
+                    .iter()
+                    .map(|(path, _)| path.clone())
+                    .collect::<Vec<_>>(),
+            );
             for (path, kind) in appeared {
                 let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
                     continue;
@@ -9320,6 +9367,117 @@ mod tests {
         };
         assert!(update(&trashing(), Event::QuitForce).1.contains(&trash));
         assert!(update(&bare, Event::QuitForce).1.contains(&trash));
+    }
+
+    fn trashed(state: &State, path: &str) -> State {
+        let (issued, _) = deleted(state, path);
+        update(
+            &issued,
+            Event::FilesRemoved(vec![PathBuf::from("/w").join(path)]),
+        )
+        .0
+    }
+
+    fn undone(state: &State) -> (State, Vec<Effect>) {
+        update(state, Event::Trigger(Action::Undo, None))
+    }
+
+    fn told(effects: &[Effect]) -> (&'static str, &str) {
+        match effects {
+            [Effect::NotifySaying { slug, text }] => (slug, text),
+            _ => panic!("one notice, got {effects:?}"),
+        }
+    }
+
+    #[test]
+    fn undo_restores_the_newest_delete_first() {
+        let both = trashed(&trashed(&trashing(), "src/a.rs"), "src/b.rs");
+        let (restoring, effects) = undone(&both);
+        assert_eq!(
+            effects,
+            vec![Effect::RunInTerminal(
+                "mkdir -p /w/src && mv -n '/h/.varde/trash/%w-7/2-b.rs' /w/src/b.rs".to_string()
+            )]
+        );
+        let (back, _) = update(
+            &restoring,
+            Event::FilesAppeared(vec![(PathBuf::from("/w/src/b.rs"), tree::Kind::File)]),
+        );
+        assert_eq!(
+            undone(&back).1,
+            vec![Effect::RunInTerminal(
+                "mkdir -p /w/src && mv -n '/h/.varde/trash/%w-7/1-a.rs' /w/src/a.rs".to_string()
+            )]
+        );
+    }
+
+    #[test]
+    fn another_path_appearing_leaves_the_restore_pending() {
+        let (restoring, _) = undone(&trashed(&trashing(), "src/foo.rs"));
+        let (still, _) = update(
+            &restoring,
+            Event::FilesAppeared(vec![(PathBuf::from("/w/src/bar.rs"), tree::Kind::File)]),
+        );
+        assert_eq!(still.trash, restoring.trash);
+    }
+
+    #[test]
+    fn undo_with_nothing_to_undo_runs_nothing_and_says_so() {
+        let (_, effects) = undone(&trashing());
+        assert_eq!(
+            told(&effects),
+            (
+                "nothing-to-undo",
+                "Nothing to undo. Undo lasts only this session."
+            )
+        );
+    }
+
+    #[test]
+    fn undo_while_a_restore_is_pending_runs_nothing_more() {
+        let (restoring, _) = undone(&trashed(&trashing(), "src/foo.rs"));
+        let (after, effects) = undone(&restoring);
+        assert_eq!(
+            told(&effects),
+            (
+                "restore-pending",
+                "Still restoring src/foo.rs. Undo lasts only this session."
+            )
+        );
+        assert_eq!(after.trash, restoring.trash);
+    }
+
+    #[test]
+    fn undo_never_restores_over_a_path_the_tree_lists() {
+        let mut taken = trashed(&trashing(), "src/foo.rs");
+        taken.contents.insert(
+            PathBuf::from("/w/src"),
+            vec![Entry {
+                name: "foo.rs".to_string(),
+                is_dir: false,
+            }],
+        );
+        let (after, effects) = undone(&taken);
+        assert_eq!(
+            told(&effects),
+            (
+                "restore-path-taken",
+                "src/foo.rs is there again, so it was not restored. Move it away and press u. Undo lasts only this session."
+            )
+        );
+        assert!(!after.trash.restoring);
+    }
+
+    #[test]
+    fn undo_in_the_knowledge_view_is_refused() {
+        let knowledge = State {
+            view: View::Knowledge,
+            ..trashed(&trashing(), "src/foo.rs")
+        };
+        assert_eq!(
+            undone(&knowledge).1,
+            vec![Effect::Notify("vault-is-read-only")]
+        );
     }
 
     #[test]

@@ -1270,6 +1270,7 @@ fn parse_action(name: &str) -> Action {
         "delete" => Action::Delete,
         "copy path" => Action::CopyPath,
         "back to project root" => Action::BackToRoot,
+        "undo" => Action::Undo,
         other => panic!("unknown tree action {other:?}"),
     }
 }
@@ -2940,6 +2941,7 @@ fn appeared_on_disk(world: &mut VardeWorld, path: &str, kind: tree::Kind) {
     world.send(Event::FilesAppeared(vec![(absolute, kind)]));
 }
 
+#[given(expr = "{string} is deleted on disk")]
 #[when(expr = "{string} is deleted on disk")]
 fn deleted_on_disk(world: &mut VardeWorld, path: String) {
     let absolute = abs(world, &path);
@@ -18709,4 +18711,36 @@ fn reviewer_not_told(world: &mut VardeWorld, notice: String) {
         "reported: {:?}",
         world.reported
     );
+}
+
+#[then(expr = "the terminal has executed {int} command(s)")]
+fn terminal_executed_count(world: &mut VardeWorld, count: usize) {
+    assert_eq!(
+        world.executed.len(),
+        count,
+        "executed: {:?}",
+        world.executed
+    );
+}
+
+#[then(expr = "the palette offers no entry {string}")]
+fn palette_offers_no_entry(world: &mut VardeWorld, entry: String) {
+    assert_eq!(world.state.modal, Modal::Palette);
+    let labels: Vec<&str> = PALETTE
+        .iter()
+        .flat_map(|(_, entries)| entries.iter())
+        .map(|(_, label)| label.trim())
+        .collect();
+    assert!(
+        labels
+            .iter()
+            .all(|label| !label.to_lowercase().contains(&entry.to_lowercase())),
+        "{entry} is offered: {labels:?}"
+    );
+}
+
+#[then("the terminal last executed:")]
+fn terminal_last_executed_docstring(world: &mut VardeWorld, step: &Step) {
+    let expected = step.docstring().expect("docstring").trim();
+    assert_eq!(world.executed.last().map(String::as_str), Some(expected));
 }
