@@ -505,6 +505,12 @@ Feature: Keeping knowledge
       And the replace box is not open
       And the reviewer is told "vault-is-read-only"
 
+    Scenario: Delete is refused
+      Given the file tree shows the file "Varde/how-to/Install.md"
+      When I trigger "delete" on that file
+      Then no command has been executed
+      And the reviewer is told "vault-is-read-only"
+
     Scenario: The tree offers no file actions
       When I select "Varde/how-to/Install.md" in the tree
       Then the tree row offers no actions

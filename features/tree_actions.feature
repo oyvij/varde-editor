@@ -27,8 +27,15 @@ Feature: File tree actions run commands in the terminal
   folder. The file itself lands when the watcher notices it — the selection names the path
   and waits for the row.
 
+  A delete moves the item into this session's trash under ~/.varde rather than removing it,
+  so the command is a mkdir of the trash and a mv into it. Each item gets a number of its
+  own, so two items with the same name never meet there. The delete becomes undoable only
+  once the tree's listing shows the path gone: a mv that never landed is nothing to undo.
+  Quitting empties the trash, and nothing is ever written inside the project.
+
   Background:
     Given the workspace root is "/home/me/projects/varde"
+    And the session's trash is "/home/me/.varde/trash/%home%me%projects%varde-4242"
     And the terminal input is empty
 
   Scenario: Going to a folder
@@ -76,16 +83,70 @@ Feature: File tree actions run commands in the terminal
     When I enter the name "my notes.md"
     Then the terminal has executed "touch '/home/me/projects/varde/src/my notes.md'"
 
-  Scenario: Deleting a file
+  Scenario: Deleting a file moves it into the session's trash
     Given the file tree shows the file "src/landing.js"
     When I trigger "delete" on that file
-    Then the terminal has executed "rm /home/me/projects/varde/src/landing.js"
+    Then the terminal has executed "mkdir -p '/home/me/.varde/trash/%home%me%projects%varde-4242' && mv /home/me/projects/varde/src/landing.js '/home/me/.varde/trash/%home%me%projects%varde-4242/1-landing.js'"
     And the terminal input is empty
 
-  Scenario: Deleting a directory uses the recursive form
+  Scenario: Deleting a folder moves it whole with the same mv
     Given the file tree shows the folder "src/tree"
     When I trigger "delete" on that folder
-    Then the terminal has executed "rm -r /home/me/projects/varde/src/tree"
+    Then the terminal has executed "mkdir -p '/home/me/.varde/trash/%home%me%projects%varde-4242' && mv /home/me/projects/varde/src/tree '/home/me/.varde/trash/%home%me%projects%varde-4242/1-tree'"
+
+  Scenario: Two items with the same name get their own places in the trash
+    Given the file tree shows the file "src/index.js"
+    And I trigger "delete" on that file
+    And the file tree shows the file "lib/index.js"
+    When I trigger "delete" on that file
+    Then the terminal last executed "mkdir -p '/home/me/.varde/trash/%home%me%projects%varde-4242' && mv /home/me/projects/varde/lib/index.js '/home/me/.varde/trash/%home%me%projects%varde-4242/2-index.js'"
+
+  Scenario: A delete is not undoable until the tree sees the path gone
+    Given the file tree shows the file "src/landing.js"
+    When I trigger "delete" on that file
+    Then the undo list is empty
+    And the reviewer is not told "moved-to-trash"
+
+  Scenario: A delete the tree sees land is undoable and says so
+    Given the file tree shows the file "src/landing.js"
+    And I trigger "delete" on that file
+    When "src/landing.js" is deleted on disk
+    Then the undo list holds "src/landing.js"
+    And the reviewer is told "moved-to-trash"
+
+  Scenario: Another path going does not land a delete
+    Given the file tree shows the file "src/landing.js"
+    And I trigger "delete" on that file
+    When "src/other.js" is deleted on disk
+    Then the undo list is empty
+    And the reviewer is not told "moved-to-trash"
+
+  Scenario: A delete writes nothing inside the project
+    Given the project has a ".gitignore"
+    And the file tree shows the folder "src/tree"
+    And I trigger "delete" on that folder
+    When "src/tree" is deleted on disk
+    Then the project ".gitignore" is unchanged
+    And no file was written inside the workspace root
+
+  Scenario Outline: A deleted path is quoted when it needs it
+    Given the file tree shows the file "<path>"
+    When I trigger "delete" on that file
+    Then the terminal has executed:
+      """
+      mkdir -p '/home/me/.varde/trash/%home%me%projects%varde-4242' && mv <from> <to>
+      """
+
+    Examples:
+      | path     | from                               | to                                                              |
+      | my notes | '/home/me/projects/varde/my notes' | '/home/me/.varde/trash/%home%me%projects%varde-4242/1-my notes' |
+      | don't    | "/home/me/projects/varde/don't"    | "/home/me/.varde/trash/%home%me%projects%varde-4242/1-don't"    |
+      | a;b      | '/home/me/projects/varde/a;b'      | '/home/me/.varde/trash/%home%me%projects%varde-4242/1-a;b'      |
+
+  Scenario: Quitting empties the session's trash
+    Given Varde started in the project
+    When I quit
+    Then the session's trash was deleted
 
   Scenario: Copying a path puts the absolute path on the clipboard
     Given a system clipboard is available

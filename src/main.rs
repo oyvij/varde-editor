@@ -87,7 +87,8 @@ fn main() -> Result<()> {
     let path = canonical(named);
     let path_status = path_status(&path);
     let (root, sidecar) = root_and_sidecar(args.path.as_deref(), path_status, &path);
-    sweep();
+    sweep(&sidecars());
+    sweep(&trashes());
 
     // Canonicalize: macOS current_exe may not resolve symlinks; resolved once since :update replaces it
     let exe = std::env::current_exe().and_then(std::fs::canonicalize).ok();
@@ -114,6 +115,7 @@ fn main() -> Result<()> {
         repo: git_status(&root),
         reviews: numbered(&varde::reviews_dir(&root, sidecar.as_deref(), &varde_home)),
         root: path,
+        trash: trash(&root),
         sidecar,
         varde_home,
         checkout_manifest: checkout
@@ -160,6 +162,14 @@ fn sidecars() -> PathBuf {
     home().join(varde::VARDE_DIR).join("paths")
 }
 
+fn trash(root: &Path) -> PathBuf {
+    trashes().join(format!("{}-{}", flatten(root), std::process::id()))
+}
+
+fn trashes() -> PathBuf {
+    home().join(varde::VARDE_DIR).join("trash")
+}
+
 /// pid 0 is rejected: kill(0, …) asks about our own process group, so it would always read alive
 fn pid_of(name: &str) -> Option<u32> {
     name.rsplit_once('-')?
@@ -169,8 +179,8 @@ fn pid_of(name: &str) -> Option<u32> {
         .filter(|pid| *pid != 0)
 }
 
-fn sweep() {
-    let Ok(entries) = std::fs::read_dir(sidecars()) else {
+fn sweep(folder: &Path) {
+    let Ok(entries) = std::fs::read_dir(folder) else {
         return;
     };
     for entry in entries.flatten() {
@@ -2678,6 +2688,12 @@ fn perform_session(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>)
                 tone,
             };
         }
+        Effect::NotifySaying { text, .. } => {
+            edge.status = Status {
+                text,
+                tone: ui::Tone::Notice,
+            };
+        }
         Effect::ClearNotice => edge.status.text.clear(),
         Effect::Exit => {
             edge.status = Status {
@@ -4254,8 +4270,8 @@ mod tests {
     use super::{
         alive, authorship, canonical, checkout, committed, describe, file_hunks, flatten, found,
         hint, notice_text, path_status, pid_of, range_ends, read_branches, rewrite,
-        root_and_sidecar, samples, short_date, sidecar, space, stitch, watched_path, Args,
-        ClapParser,
+        root_and_sidecar, samples, short_date, sidecar, space, stitch, sweep, trash, watched_path,
+        Args, ClapParser,
     };
     use notify::event::{CreateKind, DataChange, ModifyKind, RenameMode};
     use std::collections::BTreeMap;
@@ -4405,6 +4421,35 @@ mod tests {
             .to_string_lossy();
         assert_eq!(pid_of(&name), Some(std::process::id()));
         assert!(alive(std::process::id()));
+    }
+
+    #[test]
+    fn a_trash_is_named_for_its_root_and_the_process_that_owns_it() {
+        let mine = trash(Path::new("/home/me/projects/varde"));
+        assert_eq!(
+            mine.parent().and_then(Path::file_name),
+            Some("trash".as_ref())
+        );
+        assert_eq!(
+            mine.file_name()
+                .expect("a directory name")
+                .to_string_lossy(),
+            format!("%home%me%projects%varde-{}", std::process::id())
+        );
+    }
+
+    #[test]
+    fn the_sweep_removes_a_dead_sessions_trash_and_keeps_a_live_ones() {
+        let trashes = tempfile::tempdir().expect("a temporary directory");
+        let live = trashes
+            .path()
+            .join(format!("%home%me%projects%varde-{}", std::process::id()));
+        let dead = trashes.path().join("%home%me%projects%varde-999999999");
+        fs::create_dir_all(live.join("1-notes.md")).expect("a live trash");
+        fs::create_dir_all(dead.join("1-notes.md")).expect("a dead trash");
+        sweep(trashes.path());
+        assert!(live.exists());
+        assert!(!dead.exists());
     }
 
     #[test]

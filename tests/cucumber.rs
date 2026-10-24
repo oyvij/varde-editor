@@ -833,6 +833,10 @@ impl VardeWorld {
                 self.reported.push(slug.to_string());
                 self.named.push(about);
             }
+            Effect::NotifySaying { slug, .. } => {
+                self.notices.push(slug.to_string());
+                self.reported.push(slug.to_string());
+            }
             Effect::ClearNotice => self.notices.clear(),
             Effect::RunProgram { argv, .. } => {
                 self.program.push(argv);
@@ -2224,6 +2228,9 @@ fn varde_starts(world: &mut VardeWorld) {
     if world.startup.varde_home.as_os_str().is_empty() {
         world.startup.varde_home = Path::new(HOME).join(varde::VARDE_DIR);
     }
+    if world.startup.trash.as_os_str().is_empty() {
+        world.startup.trash = PathBuf::from(TRASH);
+    }
     world.startup.repo = world.state.repo.clone();
     world.startup.shipped = shipped_paths(world)
         .into_iter()
@@ -2488,6 +2495,8 @@ const SIDECAR: &str = "/home/me/.varde/paths/%home%me%projects%theirs-4242";
 
 const HOME: &str = "/home/me";
 
+const TRASH: &str = "/home/me/.varde/trash/%home%me%projects%varde-4242";
+
 #[given(expr = "Varde started with no folder in {string}")]
 #[when(expr = "Varde starts with no folder in {string}")]
 fn varde_starts_bare(world: &mut VardeWorld, path: String) {
@@ -2557,6 +2566,7 @@ fn no_directory_deleted(world: &mut VardeWorld) {
         .dirs_deleted
         .iter()
         .filter(|path| !is_scratch(world, path))
+        .filter(|path| **path != world.startup.trash)
         .filter(|path| {
             !skills::OWNED
                 .iter()
@@ -3115,6 +3125,7 @@ fn tree_shows_file(world: &mut VardeWorld, path: String) {
 
 #[given(expr = "I trigger {string} on that folder")]
 #[when(expr = "I trigger {string} on that folder")]
+#[given(expr = "I trigger {string} on that file")]
 #[when(expr = "I trigger {string} on that file")]
 fn trigger_on_target(world: &mut VardeWorld, action: String) {
     world.trigger(&action);
@@ -18639,4 +18650,63 @@ fn click_conflict_row(world: &mut VardeWorld, file: String, line: usize) {
     let row = corner.y + 1 + (index - world.state.conflicts_scroll) as u16;
     world.report(mouse::Kind::LeftDown, corner.x + 2, row);
     world.report(mouse::Kind::LeftUp, corner.x + 2, row);
+}
+
+#[given(expr = "the session's trash is {string}")]
+fn sessions_trash_is(world: &mut VardeWorld, trash: String) {
+    world.startup.trash = PathBuf::from(&trash);
+    world.state.trash.dir = PathBuf::from(trash);
+}
+
+#[then(expr = "the session's trash was deleted")]
+fn sessions_trash_deleted(world: &mut VardeWorld) {
+    assert!(
+        world.dirs_deleted.contains(&world.state.trash.dir),
+        "deleted: {:?}",
+        world.dirs_deleted
+    );
+}
+
+#[then("the terminal has executed:")]
+fn terminal_executed_docstring(world: &mut VardeWorld, step: &Step) {
+    let expected = step.docstring().expect("docstring").trim();
+    assert_eq!(world.executed, vec![expected.to_string()]);
+}
+
+#[then(expr = "the terminal last executed {string}")]
+fn terminal_last_executed(world: &mut VardeWorld, expected: String) {
+    assert_eq!(world.executed.last(), Some(&expected));
+}
+
+#[then("the undo list is empty")]
+fn undo_list_empty(world: &mut VardeWorld) {
+    assert!(
+        world.state.trash.undoable.is_empty(),
+        "undoable: {:?}",
+        world.state.trash.undoable
+    );
+}
+
+#[then(expr = "the undo list holds {string}")]
+fn undo_list_holds(world: &mut VardeWorld, path: String) {
+    let absolute = abs(world, &path);
+    assert!(
+        world
+            .state
+            .trash
+            .undoable
+            .iter()
+            .any(|trashed| trashed.original == absolute),
+        "undoable: {:?}",
+        world.state.trash.undoable
+    );
+}
+
+#[then(expr = "the reviewer is not told {string}")]
+fn reviewer_not_told(world: &mut VardeWorld, notice: String) {
+    assert!(
+        !world.reported.contains(&notice),
+        "reported: {:?}",
+        world.reported
+    );
 }
