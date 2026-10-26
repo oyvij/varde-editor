@@ -471,6 +471,9 @@ fn pressed(
         };
     }
     if pane == Pane::Tree && input.row == panes.tree.y {
+        if let Some(action) = tree_chip_at(state, panes, input.column) {
+            return vec![Event::PaneAction(action)];
+        }
         if let Some(severity) = nudge_at(state, panes, input.column) {
             return vec![Event::ShowDiagnostics(severity)];
         }
@@ -1247,6 +1250,7 @@ fn action_under(state: &State, panes: &Layout, input: Input) -> Option<&'static 
     let corner_row =
         input.row > panes.corner.y && input.row < panes.corner.bottom().saturating_sub(1);
     match layout::pane_at(panes, input.column, input.row)? {
+        Pane::Tree if input.row == panes.tree.y => tree_chip_at(state, panes, input.column),
         Pane::Tree => action_at(state, panes, input.column, input.row),
         Pane::Editor if input.row == panes.editor.y => transport_at(state, panes, input.column),
         Pane::Ai if input.row == panes.ai.y => ai_chip_at(panes, input.column),
@@ -1331,6 +1335,12 @@ fn variables_chip_at(
         .map(|chip| chip.action)
         .collect();
     icon_at(&chips, panes.terminal, column)
+}
+
+fn tree_chip_at(state: &State, panes: &Layout, column: u16) -> Option<&'static str> {
+    let labels = crate::tree_actions::transport_labels(state, panes.tree.width);
+    let at = layout::strip_at(panes.tree, &labels, column)?;
+    Some(crate::tree_actions::transport(state)[at].action)
 }
 
 fn breakpoint_chip_at(state: &State, panes: &Layout, column: u16) -> Option<&'static str> {
@@ -3524,6 +3534,25 @@ mod tests {
             "the same answer is not news"
         );
         assert!(moved(&state, panes.tree.x + 2, row).contains(&Event::HoverAction(None)));
+    }
+
+    #[test]
+    fn resting_on_the_trees_undo_chip_names_it() {
+        let state = workspace();
+        let panes = panes(120, 26, 30, None, 0, 0, Shapes::default());
+        let events = on_mouse(
+            &state,
+            &panes,
+            &mut Pointer::default(),
+            Input {
+                kind: Kind::Moved,
+                column: panes.tree.x + panes.tree.width - 4,
+                row: panes.tree.y,
+                modifiers: KeyModifiers::NONE,
+            },
+        )
+        .events;
+        assert!(events.contains(&Event::HoverAction(Some(crate::tree_actions::UNDO))));
     }
 
     #[test]

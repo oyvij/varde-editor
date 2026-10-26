@@ -833,6 +833,10 @@ impl VardeWorld {
                 self.reported.push(slug.to_string());
                 self.named.push(about);
             }
+            Effect::NotifySaying { slug, .. } => {
+                self.notices.push(slug.to_string());
+                self.reported.push(slug.to_string());
+            }
             Effect::ClearNotice => self.notices.clear(),
             Effect::RunProgram { argv, .. } => {
                 self.program.push(argv);
@@ -1266,6 +1270,7 @@ fn parse_action(name: &str) -> Action {
         "delete" => Action::Delete,
         "copy path" => Action::CopyPath,
         "back to project root" => Action::BackToRoot,
+        "undo" => Action::Undo,
         other => panic!("unknown tree action {other:?}"),
     }
 }
@@ -2224,6 +2229,9 @@ fn varde_starts(world: &mut VardeWorld) {
     if world.startup.varde_home.as_os_str().is_empty() {
         world.startup.varde_home = Path::new(HOME).join(varde::VARDE_DIR);
     }
+    if world.startup.trash.as_os_str().is_empty() {
+        world.startup.trash = PathBuf::from(TRASH);
+    }
     world.startup.repo = world.state.repo.clone();
     world.startup.shipped = shipped_paths(world)
         .into_iter()
@@ -2488,6 +2496,8 @@ const SIDECAR: &str = "/home/me/.varde/paths/%home%me%projects%theirs-4242";
 
 const HOME: &str = "/home/me";
 
+const TRASH: &str = "/home/me/.varde/trash/%home%me%projects%varde-4242";
+
 #[given(expr = "Varde started with no folder in {string}")]
 #[when(expr = "Varde starts with no folder in {string}")]
 fn varde_starts_bare(world: &mut VardeWorld, path: String) {
@@ -2557,6 +2567,7 @@ fn no_directory_deleted(world: &mut VardeWorld) {
         .dirs_deleted
         .iter()
         .filter(|path| !is_scratch(world, path))
+        .filter(|path| **path != world.startup.trash)
         .filter(|path| {
             !skills::OWNED
                 .iter()
@@ -2930,6 +2941,7 @@ fn appeared_on_disk(world: &mut VardeWorld, path: &str, kind: tree::Kind) {
     world.send(Event::FilesAppeared(vec![(absolute, kind)]));
 }
 
+#[given(expr = "{string} is deleted on disk")]
 #[when(expr = "{string} is deleted on disk")]
 fn deleted_on_disk(world: &mut VardeWorld, path: String) {
     let absolute = abs(world, &path);
@@ -3115,6 +3127,7 @@ fn tree_shows_file(world: &mut VardeWorld, path: String) {
 
 #[given(expr = "I trigger {string} on that folder")]
 #[when(expr = "I trigger {string} on that folder")]
+#[given(expr = "I trigger {string} on that file")]
 #[when(expr = "I trigger {string} on that file")]
 fn trigger_on_target(world: &mut VardeWorld, action: String) {
     world.trigger(&action);
@@ -5492,28 +5505,33 @@ fn click_breakpoint_row_chip(world: &mut VardeWorld, chip: String, file: String,
 #[given(expr = "I click the {string} Chip")]
 #[when(expr = "I click the {string} Chip")]
 fn click_chip(world: &mut VardeWorld, chip: String) {
-    let on_transport = varde::debug::transport(&world.state)
-        .into_iter()
-        .chain(varde::debug::strip_transport(&world.state))
-        .any(|offered| offered.name == chip);
+    let offers = |chips: &[varde::Chip]| chips.iter().any(|offered| offered.name == chip);
+    let tree = varde::tree_actions::transport(&world.state);
+    let corner = varde::debug::transport(&world.state);
+    let on_transport =
+        offers(&tree) || offers(&corner) || offers(&varde::debug::strip_transport(&world.state));
     if !on_transport && row_chip(world, &chip).is_some() {
         return click_variables_row_chip(world, &chip);
     }
-    let (area, chips) = match varde::debug::transport(&world.state)
-        .iter()
-        .any(|offered| offered.name == chip)
-    {
-        true => (world.panes().corner, varde::debug::transport(&world.state)),
-        false => (
-            varde::transport_area(&world.state, world.panes().strip()),
-            varde::strip_chips(&world.state),
-        ),
+    let (area, chips, labels) = if offers(&tree) {
+        let area = world.panes().tree;
+        let labels = varde::tree_actions::transport_labels(&world.state, area.width);
+        (area, tree, labels)
+    } else {
+        let (area, chips) = match offers(&corner) {
+            true => (world.panes().corner, corner),
+            false => (
+                varde::transport_area(&world.state, world.panes().strip()),
+                varde::strip_chips(&world.state),
+            ),
+        };
+        let labels = layout::chip_labels(&chips, area.width, layout::CORNER_TITLE);
+        (area, chips, labels)
     };
     let at = chips
         .iter()
         .position(|offered| offered.name == chip)
         .unwrap_or_else(|| panic!("no {chip:?} Chip"));
-    let labels = layout::chip_labels(&chips, area.width, layout::CORNER_TITLE);
     let column = (area.x..area.right())
         .find(|&column| layout::strip_at(area, &labels, column) == Some(at))
         .expect("the Chip on screen");
@@ -16802,6 +16820,7 @@ fn chip(world: &VardeWorld, name: &str) -> varde::Chip {
     varde::debug::strip_transport(&world.state)
         .into_iter()
         .chain(varde::debug::transport(&world.state))
+        .chain(varde::tree_actions::transport(&world.state))
         .find(|offered| offered.name == name)
         .or_else(|| row_chip(world, name))
         .unwrap_or_else(|| panic!("no {name:?} Chip"))
@@ -18639,4 +18658,95 @@ fn click_conflict_row(world: &mut VardeWorld, file: String, line: usize) {
     let row = corner.y + 1 + (index - world.state.conflicts_scroll) as u16;
     world.report(mouse::Kind::LeftDown, corner.x + 2, row);
     world.report(mouse::Kind::LeftUp, corner.x + 2, row);
+}
+
+#[given(expr = "the session's trash is {string}")]
+fn sessions_trash_is(world: &mut VardeWorld, trash: String) {
+    world.startup.trash = PathBuf::from(&trash);
+    world.state.trash.dir = PathBuf::from(trash);
+}
+
+#[then(expr = "the session's trash was deleted")]
+fn sessions_trash_deleted(world: &mut VardeWorld) {
+    assert!(
+        world.dirs_deleted.contains(&world.state.trash.dir),
+        "deleted: {:?}",
+        world.dirs_deleted
+    );
+}
+
+#[then("the terminal has executed:")]
+fn terminal_executed_docstring(world: &mut VardeWorld, step: &Step) {
+    let expected = step.docstring().expect("docstring").trim();
+    assert_eq!(world.executed, vec![expected.to_string()]);
+}
+
+#[then(expr = "the terminal last executed {string}")]
+fn terminal_last_executed(world: &mut VardeWorld, expected: String) {
+    assert_eq!(world.executed.last(), Some(&expected));
+}
+
+#[then("the undo list is empty")]
+fn undo_list_empty(world: &mut VardeWorld) {
+    assert!(
+        world.state.trash.undoable.is_empty(),
+        "undoable: {:?}",
+        world.state.trash.undoable
+    );
+}
+
+#[then(expr = "the undo list holds {string}")]
+fn undo_list_holds(world: &mut VardeWorld, path: String) {
+    let absolute = abs(world, &path);
+    assert!(
+        world
+            .state
+            .trash
+            .undoable
+            .iter()
+            .any(|trashed| trashed.original == absolute),
+        "undoable: {:?}",
+        world.state.trash.undoable
+    );
+}
+
+#[then(expr = "the reviewer is not told {string}")]
+fn reviewer_not_told(world: &mut VardeWorld, notice: String) {
+    assert!(
+        !world.reported.contains(&notice),
+        "reported: {:?}",
+        world.reported
+    );
+}
+
+#[then(expr = "the terminal has executed {int} command(s)")]
+fn terminal_executed_count(world: &mut VardeWorld, count: usize) {
+    assert_eq!(
+        world.executed.len(),
+        count,
+        "executed: {:?}",
+        world.executed
+    );
+}
+
+#[then(expr = "the palette offers no entry {string}")]
+fn palette_offers_no_entry(world: &mut VardeWorld, entry: String) {
+    assert_eq!(world.state.modal, Modal::Palette);
+    let labels: Vec<&str> = PALETTE
+        .iter()
+        .flat_map(|(_, entries)| entries.iter())
+        .map(|(_, label)| label.trim())
+        .collect();
+    assert!(
+        labels
+            .iter()
+            .all(|label| !label.to_lowercase().contains(&entry.to_lowercase())),
+        "{entry} is offered: {labels:?}"
+    );
+}
+
+#[then("the terminal last executed:")]
+fn terminal_last_executed_docstring(world: &mut VardeWorld, step: &Step) {
+    let expected = step.docstring().expect("docstring").trim();
+    assert_eq!(world.executed.last().map(String::as_str), Some(expected));
 }

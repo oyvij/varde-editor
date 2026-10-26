@@ -18,6 +18,7 @@ Feature: Reaching the tree actions
 
   Background:
     Given the workspace root is "/home/me/projects/varde"
+    And the session's trash is "/home/me/.varde/trash/%home%me%projects%varde-4242"
     And the file tree shows the collapsed folder "src"
     And "src" contains "tree.js"
     And the file tree pane has focus
@@ -85,7 +86,7 @@ Feature: Reaching the tree actions
   Scenario: Clicking the delete icon runs the delete command
     Given the tree selection is "src"
     When I click the "delete" action on "src"
-    Then the terminal has executed "rm -r /home/me/projects/varde/src"
+    Then the terminal has executed "mkdir -p '/home/me/.varde/trash/%home%me%projects%varde-4242' && mv /home/me/projects/varde/src '/home/me/.varde/trash/%home%me%projects%varde-4242/1-src'"
 
   Scenario: Clicking the search icon searches inside that folder only
     Given the tree selection is "src"
@@ -113,7 +114,7 @@ Feature: Reaching the tree actions
     Given the folder "src" is expanded
     And the tree selection is "src/tree.js"
     When I press "d"
-    Then the terminal has executed "rm /home/me/projects/varde/src/tree.js"
+    Then the terminal has executed "mkdir -p '/home/me/.varde/trash/%home%me%projects%varde-4242' && mv /home/me/projects/varde/src/tree.js '/home/me/.varde/trash/%home%me%projects%varde-4242/1-tree.js'"
 
   Scenario: Right steps into the row's actions
     Given the tree selection is "src"

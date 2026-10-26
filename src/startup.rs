@@ -1001,6 +1001,7 @@ pub enum PathStatus {
 pub struct Startup {
     pub root: PathBuf,
     pub sidecar: Option<PathBuf>,
+    pub trash: PathBuf,
     pub varde_home: PathBuf,
     pub reviews: BTreeSet<u32>,
     pub path_status: PathStatus,
@@ -1546,6 +1547,10 @@ fn initial_state(
         opened,
         sidecar: input.sidecar.clone(),
         varde_home: input.varde_home.clone(),
+        trash: crate::tree_actions::Trash {
+            dir: input.trash.clone(),
+            ..Default::default()
+        },
         reviews: input.reviews.clone(),
         view: last_view(input.state_json.as_deref()).unwrap_or(View::Edit),
         expanded: saved_paths(&input.root, input.state_json.as_deref(), "expanded")

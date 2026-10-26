@@ -242,7 +242,7 @@ pub const COMMANDS: [(&str, &str, &[View], &[Event]); 37] = [
     ),
 ];
 
-pub const CHEATSHEET: [(&str, &str, &[View]); 47] = [
+pub const CHEATSHEET: [(&str, &str, &[View]); 48] = [
     ("i a o O x", "edit", &[View::Edit]),
     ("w b e", "word", &[View::Edit, View::Knowledge]),
     ("gg G", "file ends", &[View::Edit, View::Knowledge]),
@@ -362,6 +362,7 @@ pub const CHEATSHEET: [(&str, &str, &[View]); 47] = [
         "conflict list: row, go",
         &[View::Edit, View::Review, View::Story, View::Knowledge],
     ),
+    ("u", "tree: undo the last delete", &[View::Edit]),
 ];
 
 pub const CHORDS: [(&str, &str, &[View]); 4] = [
