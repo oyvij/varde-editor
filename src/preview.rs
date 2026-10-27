@@ -1647,6 +1647,18 @@ mod tests {
     }
 
     #[test]
+    fn a_quoted_phrase_keeps_the_parenthesis_after_it_on_its_row() {
+        let rows = rows("as \"not a git repository\" (Q23).\n", 28);
+        assert_eq!(
+            texts(&rows),
+            vec![
+                "as \"not a git".to_string(),
+                "repository\" (Q23).".to_string()
+            ]
+        );
+    }
+
+    #[test]
     fn a_soft_break_is_a_space_and_not_a_row() {
         let rows = rows("one\ntwo\n", 40);
         assert_eq!(texts(&rows), vec!["one two".to_string()]);
