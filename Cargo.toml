@@ -1,6 +1,6 @@
 [package]
 name = "varde"
-version = "0.222.1"
+version = "0.222.2"
 edition = "2021"
 description = "Varde — a terminal IDE that reviews, tests and ships your work"
 license = "MIT"
@@ -55,7 +55,7 @@ grep-regex = "0.1.14"
 yaml-rust = "0.4.5"
 
 [dev-dependencies]
-cucumber = "0.21"
+cucumber = "0.23"
 tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
