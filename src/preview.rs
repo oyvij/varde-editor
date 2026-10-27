@@ -1651,7 +1651,10 @@ mod tests {
         let rows = rows("as \"not a git repository\" (Q23).\n", 28);
         assert_eq!(
             texts(&rows),
-            vec!["as \"not a git".to_string(), "repository\" (Q23).".to_string()]
+            vec![
+                "as \"not a git".to_string(),
+                "repository\" (Q23).".to_string()
+            ]
         );
     }
 
