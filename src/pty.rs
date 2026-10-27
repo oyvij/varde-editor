@@ -220,3 +220,43 @@ impl Pane {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    fn grid(rows: u16, cols: u16, output: &[u8]) -> vt100::Parser {
+        let mut parser = vt100::Parser::new(rows, cols, 2000);
+        parser.process(output);
+        parser
+    }
+
+    fn visible(parser: &vt100::Parser) -> Vec<String> {
+        let (_, cols) = parser.screen().size();
+        parser.screen().rows(0, cols).collect()
+    }
+
+    #[test]
+    fn a_shorter_grid_keeps_its_top_rows_and_a_taller_one_adds_blank_rows() {
+        let mut parser = grid(4, 10, b"one\r\ntwo\r\nthree\r\nfour");
+        parser.screen_mut().set_size(2, 10);
+        assert_eq!(visible(&parser), ["one", "two"]);
+        parser.screen_mut().set_size(4, 10);
+        assert_eq!(visible(&parser), ["one", "two", "", ""]);
+    }
+
+    #[test]
+    fn a_resize_leaves_the_scrollback_where_it_was_scrolled_to() {
+        let mut parser = grid(2, 10, b"one\r\ntwo\r\nthree\r\nfour");
+        parser.screen_mut().set_scrollback(1);
+        parser.screen_mut().set_size(2, 12);
+        assert_eq!(parser.screen().scrollback(), 1);
+        assert_eq!(visible(&parser), ["two", "three"]);
+    }
+
+    #[test]
+    fn rows_scrolled_out_of_a_scroll_region_are_not_kept_in_scrollback() {
+        let mut parser = grid(4, 10, b"\x1b[1;3rone\r\ntwo\r\nthree\r\nfour\r\nfive");
+        parser.screen_mut().set_scrollback(usize::MAX);
+        assert_eq!(parser.screen().scrollback(), 0);
+        assert_eq!(visible(&parser), ["three", "four", "five", ""]);
+    }
+}
