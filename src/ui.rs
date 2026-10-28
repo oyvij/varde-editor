@@ -3794,10 +3794,11 @@ fn pty_link(state: &State, pane: &PtyPane, which: Pane) -> Option<(usize, usize,
     state.link.filter(|(on, _)| *on == which)?;
     let screen = pane.screen();
     let (rows, columns) = screen.size();
-    let rows: Vec<String> = (0..rows)
+    let rows: Vec<String> = (0..rows.get())
         .map(|row| {
             varde::editor::grid_row(
-                (0..columns).map(|column| screen.cell(row, column).map(vt100::Cell::contents)),
+                (0..columns.get())
+                    .map(|column| screen.cell(row, column).map(vt100::Cell::contents)),
             )
         })
         .collect();
@@ -3819,9 +3820,9 @@ fn terminal_widget(
         .as_ref()
         .filter(|_| focused)
         .and_then(|selection| selection.screen_span(which));
-    let lines: Vec<Line> = (0..rows)
+    let lines: Vec<Line> = (0..rows.get())
         .map(|row| {
-            let spans: Vec<Span> = (0..columns)
+            let spans: Vec<Span> = (0..columns.get())
                 .map(|column| {
                     let cell = screen.cell(row, column);
                     let text = cell.map(|c| c.contents()).unwrap_or_default();

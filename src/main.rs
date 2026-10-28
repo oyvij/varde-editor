@@ -2344,10 +2344,11 @@ fn grid_lines(edge: &Edge, pane: Pane, split: usize, upto: usize) -> Option<Vec<
     };
     let (rows, columns) = screen.size();
     Some(
-        (0..rows.min(upto as u16))
+        (0..rows.get().min(upto as u16))
             .map(|row| {
                 editor::grid_row(
-                    (0..columns).map(|column| screen.cell(row, column).map(vt100::Cell::contents)),
+                    (0..columns.get())
+                        .map(|column| screen.cell(row, column).map(vt100::Cell::contents)),
                 )
             })
             .collect(),
@@ -2456,7 +2457,7 @@ fn perform_session(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>)
             let from = from.min(edge.shells.len() - 1);
             let cwd = edge.shells[from].cwd().unwrap_or_else(|| edge.root.clone());
             let (rows, cols) = edge.shells[from].screen().size();
-            match pty::Pane::spawn(&[], &cwd, &BTreeMap::new(), None, rows, cols) {
+            match pty::Pane::spawn(&[], &cwd, &BTreeMap::new(), None, rows.get(), cols.get()) {
                 Ok(pane) => edge.shells.insert(from + 1, pane),
                 Err(error) => {
                     edge.status = Status {
@@ -2475,8 +2476,8 @@ fn perform_session(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>)
                     &edge.root,
                     &BTreeMap::new(),
                     Some(&env),
-                    size.0,
-                    size.1,
+                    size.0.get(),
+                    size.1.get(),
                 )
                 .map_err(|error| format!("could not start {command}: {error}")),
                 None => Err(format!("{command:?} is not a command")),
@@ -2498,7 +2499,7 @@ fn perform_session(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>)
         Effect::RunProgram { argv, cwd, env } => {
             let cwd = cwd.unwrap_or_else(|| edge.root.clone());
             let size = edge.shells[0].screen().size();
-            match pty::Pane::spawn(&argv, &cwd, &env, None, size.0, size.1) {
+            match pty::Pane::spawn(&argv, &cwd, &env, None, size.0.get(), size.1.get()) {
                 Ok(pane) => edge.output = Some(pane),
                 Err(error) => {
                     edge.status = Status {

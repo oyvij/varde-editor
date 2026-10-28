@@ -81,6 +81,13 @@ Several crates follow from decisions the spec already made. They are not free ch
   it. That test fails if a future release makes subspace metrics exclusive.
 - **`vt100` + `portable-pty`** make F3 and R10.5 work. The injected command goes into a terminal
   model Varde owns, and `mouse_protocol_mode()` answers whether the child wants the click.
+  **`vt100` is at 0.18, taken on purpose for what it changes in a pane.** 0.17 keeps the rows a
+  scroll region scrolls away in scrollback, so the wheel reaches them. 0.18 also pushes a shrinking
+  pane's top rows into scrollback and pulls them back when it grows, so the newest output stays in
+  view, and it returns a scrolled-back pane to live on every resize. That matches xterm. The tests
+  at the bottom of `src/pty.rs` pin all three and go red if a release changes them again. A `Pane`
+  needs a real pty, so they build its parser the way `Pane::spawn` does and drive that directly:
+  the one place the suite feeds escape sequences to a parser.
 
 ## Quoting: `shlex` matches the spec
 

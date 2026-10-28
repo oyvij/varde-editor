@@ -1,6 +1,6 @@
 [package]
 name = "varde"
-version = "0.222.3"
+version = "0.223.0"
 edition = "2021"
 description = "Varde — a terminal IDE that reviews, tests and ships your work"
 license = "MIT"
@@ -29,7 +29,7 @@ syntect = "5.3.0"
 terminput = "0.5.15"
 terminput-crossterm = "0.4.11"
 toml = "1.1.4"
-vt100 = "0.16.2"
+vt100 = "0.18.1"
 pulldown-cmark = { version = "0.13.4", default-features = false }
 mermaid-text = "0.57.0"
 unicode-width = "0.2.2"
