@@ -816,16 +816,13 @@ fn metadata_rows(line: usize, columns: usize, segments: &[Vec<Piece>]) -> Vec<Ro
             if row.text().width() <= columns {
                 return vec![row];
             }
-            wrapped(
-                &row.pieces,
-                textwrap::Options::new(columns).subsequent_indent("  "),
-            )
-            .into_iter()
-            .map(|pieces| Row {
-                pieces,
-                ..row.clone()
-            })
-            .collect()
+            wrapped(&row.pieces, wrap_options(columns).subsequent_indent("  "))
+                .into_iter()
+                .map(|pieces| Row {
+                    pieces,
+                    ..row.clone()
+                })
+                .collect()
         })
         .collect()
 }
@@ -885,7 +882,7 @@ fn diagram_fallback(line: usize, source: &str, reason: DiagramRefusal) -> Vec<Ro
 fn laid_out(kind: RowKind, line: usize, segments: &[Vec<Piece>], columns: usize) -> Vec<Row> {
     segments
         .iter()
-        .flat_map(|pieces| wrapped(pieces, textwrap::Options::new(columns)))
+        .flat_map(|pieces| wrapped(pieces, wrap_options(columns)))
         .map(|pieces| Row {
             kind,
             line,
@@ -916,11 +913,11 @@ fn list_rows(
         .enumerate()
         .flat_map(|(index, pieces)| {
             let first_item = if marked && index == 0 { item } else { hanging };
-            let mut laid = wrapped(pieces, textwrap::Options::new(budget(first_item)));
+            let mut laid = wrapped(pieces, wrap_options(budget(first_item)));
             if laid.len() > 1 {
                 let rest = after_row(pieces, &laid[0]);
                 laid.truncate(1);
-                laid.extend(wrapped(&rest, textwrap::Options::new(later)));
+                laid.extend(wrapped(&rest, wrap_options(later)));
             }
             laid.into_iter()
                 .enumerate()
@@ -954,6 +951,35 @@ fn after_row(pieces: &[Piece], row: &[Piece]) -> Vec<Piece> {
             })
         })
         .collect()
+}
+
+pub fn wrap_options(width: usize) -> textwrap::Options<'static> {
+    textwrap::Options::new(width)
+        .word_separator(textwrap::WordSeparator::Custom(quote_holding_words))
+}
+
+fn quote_holding_words(line: &str) -> Box<dyn Iterator<Item = textwrap::core::Word<'_>> + '_> {
+    let mut words = textwrap::WordSeparator::UnicodeBreakProperties
+        .find_words(line)
+        .peekable();
+    let mut start = 0;
+    Box::new(std::iter::from_fn(move || {
+        let first = words.next()?;
+        let mut end = start + first.word.len() + first.whitespace.len();
+        let mut last = first;
+        while last.word.ends_with([
+            '"', '\'', '«', '»', '‘', '’', '‚', '‛', '“', '”', '„', '‟', '‹', '›',
+        ]) && words
+            .peek()
+            .is_some_and(|next| next.word.starts_with(['(', '[', '{']))
+        {
+            last = words.next()?;
+            end += last.word.len() + last.whitespace.len();
+        }
+        let word = textwrap::core::Word::from(&line[start..end]);
+        start = end;
+        Some(word)
+    }))
 }
 
 pub(crate) fn wrapped(pieces: &[Piece], options: textwrap::Options<'_>) -> Vec<Vec<Piece>> {
@@ -1116,7 +1142,7 @@ fn row_pieces(
         .take(column_count)
         .map(|(column, width)| {
             let cell = row.get(column).unwrap_or(&empty);
-            wrapped(cell, textwrap::Options::new(*width).break_words(false))
+            wrapped(cell, wrap_options(*width).break_words(false))
         })
         .collect();
     let height = cells.iter().map(Vec::len).max().unwrap_or(1).max(1);
@@ -1654,6 +1680,18 @@ mod tests {
             vec![
                 "as \"not a git".to_string(),
                 "repository\" (Q23).".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn a_curly_quoted_phrase_keeps_the_bracket_after_it_on_its_row() {
+        let rows = rows("as “not a git repository” [Q23].\n", 28);
+        assert_eq!(
+            texts(&rows),
+            vec![
+                "as “not a git".to_string(),
+                "repository” [Q23].".to_string()
             ]
         );
     }
