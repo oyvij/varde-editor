@@ -3561,6 +3561,7 @@ fn language(path: &Path) -> Option<rust_code_analysis::LANG> {
         .map(|ext| ext.to_string_lossy().to_lowercase())
         .unwrap_or_default();
     rust_code_analysis::get_from_ext(&extension)
+        .filter(|language| *language != rust_code_analysis::LANG::Kotlin)
 }
 
 fn spaces(path: &Path, source: Vec<u8>) -> Option<Space> {
@@ -4269,7 +4270,7 @@ fn queue_story_file(path: &Path, state: &State, queue: &mut VecDeque<Event>) {
 mod tests {
     use super::{
         alive, authorship, canonical, checkout, committed, describe, file_hunks, flatten, found,
-        hint, notice_text, path_status, pid_of, range_ends, read_branches, rewrite,
+        hint, language, notice_text, path_status, pid_of, range_ends, read_branches, rewrite,
         root_and_sidecar, samples, short_date, sidecar, space, stitch, sweep, trash, watched_path,
         Args, ClapParser,
     };
@@ -4698,6 +4699,16 @@ mod tests {
         assert_eq!(
             found(&interpreter, root.path(), &from(&[&source])).as_deref(),
             Some(bin.join("python").to_string_lossy().as_ref())
+        );
+    }
+
+    #[test]
+    fn a_language_the_analyser_measures_no_complexity_for_is_not_analysed() {
+        assert_eq!(language(Path::new("Main.kt")), None);
+        assert_eq!(language(Path::new("build.gradle.kts")), None);
+        assert_eq!(
+            language(Path::new("main.rs")),
+            Some(rust_code_analysis::LANG::Rust)
         );
     }
 
