@@ -201,7 +201,7 @@ pub fn shown(state: &State, width: u16, height: u16) -> Option<(Area, Vec<(Tone,
                 return vec![(tone, row)];
             }
             let indent: String = row.chars().take_while(|c| *c == ' ').collect();
-            let options = textwrap::Options::new(measure)
+            let options = crate::preview::wrap_options(measure)
                 .initial_indent(&indent)
                 .subsequent_indent(&indent);
             textwrap::wrap(row.trim_start(), options)

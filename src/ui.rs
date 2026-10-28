@@ -4514,7 +4514,7 @@ fn wrapped(lines: Vec<Line<'static>>, measure: usize) -> Vec<Line<'static>> {
             .map(|span| span.content.as_ref())
             .collect();
         let indent: String = text.chars().take_while(|c| *c == ' ').collect();
-        let options = textwrap::Options::new(measure)
+        let options = varde::preview::wrap_options(measure)
             .initial_indent(&indent)
             .subsequent_indent(&indent);
         for piece in textwrap::wrap(text.trim_start(), options) {

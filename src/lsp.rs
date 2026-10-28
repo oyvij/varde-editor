@@ -1832,7 +1832,7 @@ fn plain_rows(text: &str, measure: usize) -> Vec<preview::Row> {
         .lines()
         .enumerate()
         .flat_map(|(at, line)| {
-            textwrap::wrap(line, measure)
+            textwrap::wrap(line, preview::wrap_options(measure))
                 .into_iter()
                 .map(|piece| preview::Row {
                     kind: preview::RowKind::Paragraph,
@@ -1856,7 +1856,7 @@ fn broken(row: preview::Row, measure: usize) -> Vec<preview::Row> {
     {
         return vec![row];
     }
-    preview::wrapped(&row.pieces, textwrap::Options::new(measure))
+    preview::wrapped(&row.pieces, preview::wrap_options(measure))
         .into_iter()
         .map(|pieces| preview::Row {
             pieces,
@@ -2118,7 +2118,7 @@ pub fn pointed(state: &State) -> Option<(Vec<String>, Placement)> {
         .message
         .lines()
         .flat_map(|line| {
-            textwrap::wrap(line, columns)
+            textwrap::wrap(line, preview::wrap_options(columns))
                 .into_iter()
                 .map(|row| row.into_owned())
                 .collect::<Vec<_>>()
