@@ -2,6 +2,7 @@ use anyhow::Result;
 use portable_pty::{CommandBuilder, MasterPty, NativePtySystem, PtySize, PtySystem};
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
+use std::num::NonZeroU16;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver, TryRecvError};
 use varde::{keys, mouse, queries};
@@ -38,6 +39,7 @@ pub struct Pane {
 
 const QUIET: u8 = 5;
 const SCROLLBACK: usize = 2000;
+const MIN_ROWS: NonZeroU16 = NonZeroU16::new(2).unwrap();
 
 impl Pane {
     pub fn spawn(
@@ -49,10 +51,11 @@ impl Pane {
         cols: u16,
     ) -> Result<Self> {
         // vt100 panics on a zero-sized grid and underflows on a one-row grid, so clamp to two rows
-        let (rows, cols) = (rows.max(2), cols.max(1));
+        let rows = NonZeroU16::new(rows).map_or(MIN_ROWS, |rows| rows.max(MIN_ROWS));
+        let cols = NonZeroU16::new(cols).unwrap_or(NonZeroU16::MIN);
         let pty = NativePtySystem::default().openpty(PtySize {
-            rows,
-            cols,
+            rows: rows.get(),
+            cols: cols.get(),
             pixel_width: 0,
             pixel_height: 0,
         })?;
@@ -188,14 +191,15 @@ impl Pane {
 
     pub fn resize(&mut self, rows: u16, cols: u16) {
         // vt100 panics on a zero-sized grid and underflows on a one-row grid, so clamp to two rows
-        let (rows, cols) = (rows.max(2), cols.max(1));
+        let rows = NonZeroU16::new(rows).map_or(MIN_ROWS, |rows| rows.max(MIN_ROWS));
+        let cols = NonZeroU16::new(cols).unwrap_or(NonZeroU16::MIN);
         if (rows, cols) == self.parser.screen().size() {
             return;
         }
         self.parser.screen_mut().set_size(rows, cols);
         let _ = self.master.resize(PtySize {
-            rows,
-            cols,
+            rows: rows.get(),
+            cols: cols.get(),
             pixel_width: 0,
             pixel_height: 0,
         });
@@ -225,25 +229,34 @@ impl Pane {
 #[cfg(test)]
 mod tests {
     use super::{Answers, SCROLLBACK};
+    use std::num::NonZeroU16;
+
+    fn nonzero(n: u16) -> NonZeroU16 {
+        NonZeroU16::new(n).unwrap()
+    }
 
     fn parser(rows: u16, cols: u16, output: &[u8]) -> vt100::Parser<Answers> {
-        let mut parser =
-            vt100::Parser::new_with_callbacks(rows, cols, SCROLLBACK, Answers::default());
+        let mut parser = vt100::Parser::new_with_callbacks(
+            nonzero(rows),
+            nonzero(cols),
+            SCROLLBACK,
+            Answers::default(),
+        );
         parser.process(output);
         parser
     }
 
     fn visible(parser: &vt100::Parser<Answers>) -> Vec<String> {
         let (_, cols) = parser.screen().size();
-        parser.screen().rows(0, cols).collect()
+        parser.screen().rows(0, cols.get()).collect()
     }
 
     #[test]
     fn a_shorter_grid_keeps_its_top_rows_and_a_taller_one_adds_blank_rows() {
         let mut parser = parser(4, 10, b"one\r\ntwo\r\nthree\r\nfour");
-        parser.screen_mut().set_size(2, 10);
+        parser.screen_mut().set_size(nonzero(2), nonzero(10));
         assert_eq!(visible(&parser), ["one", "two"]);
-        parser.screen_mut().set_size(4, 10);
+        parser.screen_mut().set_size(nonzero(4), nonzero(10));
         assert_eq!(visible(&parser), ["one", "two", "", ""]);
     }
 
@@ -251,7 +264,7 @@ mod tests {
     fn a_resize_leaves_the_scrollback_where_it_was_scrolled_to() {
         let mut parser = parser(2, 10, b"one\r\ntwo\r\nthree\r\nfour");
         parser.screen_mut().set_scrollback(1);
-        parser.screen_mut().set_size(2, 12);
+        parser.screen_mut().set_size(nonzero(2), nonzero(12));
         assert_eq!(parser.screen().scrollback(), 1);
         assert_eq!(visible(&parser), ["two", "three"]);
     }

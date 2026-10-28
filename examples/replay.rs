@@ -3,7 +3,7 @@ fn main() {
     let bytes = std::fs::read(&args[1]).unwrap();
     let rows = args.get(2).map_or(26, |value| value.parse().unwrap());
     let columns = args.get(3).map_or(120, |value| value.parse().unwrap());
-    let mut parser = vt100::Parser::new(rows, columns, 0);
+    let mut parser = vt100::Parser::new(rows.try_into().unwrap(), columns.try_into().unwrap(), 0);
     parser.process(&bytes);
     for (index, line) in parser.screen().contents().lines().enumerate() {
         println!("{index:>2} {line}");

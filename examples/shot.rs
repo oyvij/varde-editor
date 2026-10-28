@@ -42,7 +42,7 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     let rows: u16 = args.get(3).map_or(26, |value| value.parse().unwrap());
     let columns: u16 = args.get(4).map_or(120, |value| value.parse().unwrap());
-    let mut parser = vt100::Parser::new(rows, columns, 0);
+    let mut parser = vt100::Parser::new(rows.try_into().unwrap(), columns.try_into().unwrap(), 0);
     parser.process(&std::fs::read(&args[1]).unwrap());
     let screen = parser.screen();
 
