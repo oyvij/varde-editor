@@ -1,6 +1,6 @@
 [package]
 name = "varde"
-version = "0.222.1"
+version = "0.222.2"
 edition = "2021"
 description = "Varde — a terminal IDE that reviews, tests and ships your work"
 license = "MIT"
@@ -33,13 +33,13 @@ vt100 = "0.16.2"
 pulldown-cmark = { version = "0.13.4", default-features = false }
 mermaid-text = "0.57.0"
 unicode-width = "0.2.2"
-rust-code-analysis = "0.0.25"
-tree-sitter = "=0.20.9"
-tree-sitter-rust = "=0.20.3"
-tree-sitter-java = "=0.20.0"
-tree-sitter-javascript = "=0.20.0"
+rust-code-analysis = { package = "rust-code-analysis-code-split", version = "=0.0.26-cs.0" }
+tree-sitter = "=0.26.9"
+tree-sitter-rust = "=0.23.2"
+tree-sitter-java = "=0.23.5"
+tree-sitter-javascript = "=0.25.0"
 tree-sitter-typescript = "=0.23.2"
-tree-sitter-python = "=0.20.2"
+tree-sitter-python = "=0.25.0"
 two-face = { version = "0.5.2", default-features = false, features = ["syntect-onig"] }
 lsp-types = "0.94"
 lsp-server = "0.10"

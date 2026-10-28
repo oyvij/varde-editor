@@ -5,7 +5,7 @@ use crate::{Chip, Effect, Hue, Modal, State, Tone};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::path::Path;
-use tree_sitter::{Language, Parser, Query, QueryCursor};
+use tree_sitter::{Language, Parser, Query, QueryCursor, StreamingIterator};
 use unicode_width::UnicodeWidthStr;
 
 pub const RUN: &str = "run";
@@ -19,12 +19,12 @@ pub struct Mark {
 
 fn grammar(extension: &str) -> Option<Language> {
     match extension {
-        "rs" => Some(tree_sitter_rust::language()),
-        "java" => Some(tree_sitter_java::language()),
-        "js" | "jsx" | "mjs" | "cjs" => Some(tree_sitter_javascript::language()),
-        "ts" | "mts" | "cts" => Some(tree_sitter_typescript::language_typescript()),
-        "tsx" => Some(tree_sitter_typescript::language_tsx()),
-        "py" => Some(tree_sitter_python::language()),
+        "rs" => Some(tree_sitter_rust::LANGUAGE.into()),
+        "java" => Some(tree_sitter_java::LANGUAGE.into()),
+        "js" | "jsx" | "mjs" | "cjs" => Some(tree_sitter_javascript::LANGUAGE.into()),
+        "ts" | "mts" | "cts" => Some(tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()),
+        "tsx" => Some(tree_sitter_typescript::LANGUAGE_TSX.into()),
+        "py" => Some(tree_sitter_python::LANGUAGE.into()),
         _ => None,
     }
 }
@@ -37,7 +37,7 @@ pub fn unusable(row: &Run) -> Option<String> {
         let Some(language) = grammar(extension) else {
             return Some(format!("no grammar parses .{extension}"));
         };
-        let query = match Query::new(language, &row.query) {
+        let query = match Query::new(&language, &row.query) {
             Ok(query) => query,
             Err(error) => return Some(format!("query for .{extension}: {}", error.message)),
         };
@@ -73,20 +73,21 @@ pub fn marks_in(runs: &BTreeMap<String, Run>, path: &Path, text: &str) -> BTreeM
     };
     let mut parser = Parser::new();
     parser
-        .set_language(language)
+        .set_language(&language)
         .expect("a grammar compiled in is one tree-sitter can load");
     let Some(tree) = parser.parse(text, None) else {
         return marks;
     };
     for (name, row) in claiming {
-        let Ok(query) = Query::new(language, &row.query) else {
+        let Ok(query) = Query::new(&language, &row.query) else {
             continue;
         };
         let Some(run) = query.capture_index_for_name(RUN) else {
             continue;
         };
         let mut cursor = QueryCursor::new();
-        for matched in cursor.matches(&query, tree.root_node(), text.as_bytes()) {
+        let mut matches = cursor.matches(&query, tree.root_node(), text.as_bytes());
+        while let Some(matched) = matches.next() {
             let Some(marked) = matched.captures.iter().find(|capture| capture.index == run) else {
                 continue;
             };
@@ -95,7 +96,7 @@ pub fn marks_in(runs: &BTreeMap<String, Run>, path: &Path, text: &str) -> BTreeM
                 .iter()
                 .map(|capture| {
                     (
-                        query.capture_names()[capture.index as usize].clone(),
+                        query.capture_names()[capture.index as usize].to_string(),
                         capture
                             .node
                             .utf8_text(text.as_bytes())
