@@ -2344,10 +2344,11 @@ fn grid_lines(edge: &Edge, pane: Pane, split: usize, upto: usize) -> Option<Vec<
     };
     let (rows, columns) = screen.size();
     Some(
-        (0..rows.min(upto as u16))
+        (0..rows.get().min(upto as u16))
             .map(|row| {
                 editor::grid_row(
-                    (0..columns).map(|column| screen.cell(row, column).map(vt100::Cell::contents)),
+                    (0..columns.get())
+                        .map(|column| screen.cell(row, column).map(vt100::Cell::contents)),
                 )
             })
             .collect(),
@@ -2456,7 +2457,7 @@ fn perform_session(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>)
             let from = from.min(edge.shells.len() - 1);
             let cwd = edge.shells[from].cwd().unwrap_or_else(|| edge.root.clone());
             let (rows, cols) = edge.shells[from].screen().size();
-            match pty::Pane::spawn(&[], &cwd, &BTreeMap::new(), None, rows, cols) {
+            match pty::Pane::spawn(&[], &cwd, &BTreeMap::new(), None, rows.get(), cols.get()) {
                 Ok(pane) => edge.shells.insert(from + 1, pane),
                 Err(error) => {
                     edge.status = Status {
@@ -2475,8 +2476,8 @@ fn perform_session(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>)
                     &edge.root,
                     &BTreeMap::new(),
                     Some(&env),
-                    size.0,
-                    size.1,
+                    size.0.get(),
+                    size.1.get(),
                 )
                 .map_err(|error| format!("could not start {command}: {error}")),
                 None => Err(format!("{command:?} is not a command")),
@@ -2498,7 +2499,7 @@ fn perform_session(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>)
         Effect::RunProgram { argv, cwd, env } => {
             let cwd = cwd.unwrap_or_else(|| edge.root.clone());
             let size = edge.shells[0].screen().size();
-            match pty::Pane::spawn(&argv, &cwd, &env, None, size.0, size.1) {
+            match pty::Pane::spawn(&argv, &cwd, &env, None, size.0.get(), size.1.get()) {
                 Ok(pane) => edge.output = Some(pane),
                 Err(error) => {
                     edge.status = Status {
@@ -3561,6 +3562,7 @@ fn language(path: &Path) -> Option<rust_code_analysis::LANG> {
         .map(|ext| ext.to_string_lossy().to_lowercase())
         .unwrap_or_default();
     rust_code_analysis::get_from_ext(&extension)
+        .filter(|language| *language != rust_code_analysis::LANG::Kotlin)
 }
 
 fn spaces(path: &Path, source: Vec<u8>) -> Option<Space> {
@@ -4269,7 +4271,7 @@ fn queue_story_file(path: &Path, state: &State, queue: &mut VecDeque<Event>) {
 mod tests {
     use super::{
         alive, authorship, canonical, checkout, committed, describe, file_hunks, flatten, found,
-        hint, notice_text, path_status, pid_of, range_ends, read_branches, rewrite,
+        hint, language, notice_text, path_status, pid_of, range_ends, read_branches, rewrite,
         root_and_sidecar, samples, short_date, sidecar, space, stitch, sweep, trash, watched_path,
         Args, ClapParser,
     };
@@ -4698,6 +4700,16 @@ mod tests {
         assert_eq!(
             found(&interpreter, root.path(), &from(&[&source])).as_deref(),
             Some(bin.join("python").to_string_lossy().as_ref())
+        );
+    }
+
+    #[test]
+    fn a_language_the_analyser_measures_no_complexity_for_is_not_analysed() {
+        assert_eq!(language(Path::new("Main.kt")), None);
+        assert_eq!(language(Path::new("build.gradle.kts")), None);
+        assert_eq!(
+            language(Path::new("main.rs")),
+            Some(rust_code_analysis::LANG::Rust)
         );
     }
 
