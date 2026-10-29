@@ -2929,6 +2929,19 @@ fn perform_jobs(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>) {
             let read = file_hunks(&repo, inventory, &files);
             queue.push_back(Event::StoryFiles(read));
         }
+        Effect::ReadWalkthroughFiles { root, plan, files } => {
+            let lines = files
+                .into_iter()
+                .filter_map(|file| {
+                    let count = std::fs::read_to_string(root.join(&file))
+                        .ok()?
+                        .lines()
+                        .count();
+                    Some((file, count))
+                })
+                .collect();
+            queue.push_back(Event::WalkthroughFiles { plan, lines });
+        }
         Effect::WriteStoryContext {
             repo,
             spelling,
@@ -3768,6 +3781,11 @@ fn diff_lines(root: &Path, path: &Path) -> Diff {
 
 const NOTICES: &[(&str, &str, ui::Tone)] = &[
     (
+        "walkthrough-invalid",
+        "Walkthrough plan not loaded — still walking the last one that worked",
+        ui::Tone::Warning,
+    ),
+    (
         "broken-config",
         "Config not applied — still running on the last one that worked",
         ui::Tone::Warning,
@@ -4219,6 +4237,15 @@ fn watched_path(
                 && path.extension().is_some_and(|ext| ext == "json") =>
         {
             queue_story_file(&path, state, queue);
+        }
+        notify::EventKind::Create(_) | notify::EventKind::Modify(_)
+            if path
+                == varde::varde_dir(&state.root, state.sidecar.as_deref())
+                    .join(varde::walkthrough::FILE) =>
+        {
+            if let Ok(contents) = std::fs::read_to_string(&path) {
+                queue.push_back(Event::WalkthroughChanged(contents));
+            }
         }
         // symlink_metadata, not exists: a dangling symlink is still an entry in the folder
         _ if ours && std::fs::symlink_metadata(&path).is_err() => {
@@ -5142,6 +5169,39 @@ mod tests {
                     contents: "fn renamed() {}\n".to_string(),
                 },
                 Event::FilesAppeared(vec![(folder, tree::Kind::Folder)]),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_write_to_the_walkthrough_file_is_a_walkthrough_change() {
+        let root = tempfile::tempdir().expect("a temp directory");
+        fs::create_dir(root.path().join(".varde")).expect("the fixture folder");
+        let plan = root.path().join(".varde").join(varde::walkthrough::FILE);
+        fs::write(&plan, "{}").expect("the fixture file");
+        let mut state = State::default();
+        state.root = root.path().to_path_buf();
+        let mut queue = VecDeque::new();
+
+        for kind in [
+            notify::EventKind::Create(CreateKind::Any),
+            notify::EventKind::Modify(ModifyKind::Name(RenameMode::Any)),
+        ] {
+            watched_path(
+                &kind,
+                plan.clone(),
+                &state,
+                &root.path().join(".git"),
+                &root.path().join(".varde/stories"),
+                &mut queue,
+            );
+        }
+
+        assert_eq!(
+            Vec::from(queue),
+            [
+                Event::WalkthroughChanged("{}".to_string()),
+                Event::WalkthroughChanged("{}".to_string()),
             ]
         );
     }

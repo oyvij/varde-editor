@@ -19,6 +19,7 @@ use varde::tools;
 use varde::tree::{self, Entry};
 use varde::tree_actions::{Action, Target};
 use varde::wait;
+use varde::walkthrough;
 use varde::{
     layout, mouse, reading, update, DiffLine, Direction, Effect, Event, FilterKeys, Modal, Opened,
     Pane, Place, ReplaceFailed, Selection, State, Tap, View, PALETTE,
@@ -1080,6 +1081,18 @@ impl VardeWorld {
                 }
                 let read = self.read_files(&repo, &files);
                 let (state, effects) = update(&self.state, Event::StoryFiles(read));
+                self.state = state;
+                self.apply(effects);
+            }
+            Effect::ReadWalkthroughFiles { root, plan, files } => {
+                let lines = files
+                    .into_iter()
+                    .filter_map(|file| {
+                        let count = self.files.get(&root.join(&file))?.lines().count();
+                        Some((file, count))
+                    })
+                    .collect();
+                let (state, effects) = update(&self.state, Event::WalkthroughFiles { plan, lines });
                 self.state = state;
                 self.apply(effects);
             }
@@ -2219,6 +2232,7 @@ fn nothing_written(world: &mut VardeWorld) {
     assert!(wrote.is_empty(), "written: {wrote:?}");
 }
 
+#[when(expr = "Varde starts")]
 #[given(expr = "Varde started in the project")]
 #[given(expr = "Varde starts in the project")]
 #[when(expr = "Varde starts in the project")]
@@ -18749,4 +18763,210 @@ fn palette_offers_no_entry(world: &mut VardeWorld, entry: String) {
 fn terminal_last_executed_docstring(world: &mut VardeWorld, step: &Step) {
     let expected = step.docstring().expect("docstring").trim();
     assert_eq!(world.executed.last().map(String::as_str), Some(expected));
+}
+
+fn walkthrough_file(world: &VardeWorld) -> PathBuf {
+    varde::varde_dir(&world.state.root, world.state.sidecar.as_deref()).join(walkthrough::FILE)
+}
+
+fn walkthrough_session(world: &VardeWorld) -> &walkthrough::Session {
+    world.state.walkthrough.as_ref().expect("a walkthrough")
+}
+
+#[given("no walkthrough is active")]
+fn no_walkthrough_is_active(world: &mut VardeWorld) {
+    world.state.walkthrough = None;
+}
+
+#[given(expr = "I submitted the walkthrough {string}")]
+fn submitted_the_walkthrough(world: &mut VardeWorld, _prompt: String) {
+    world.state.walkthrough = Some(walkthrough::Session::default());
+}
+
+#[given("a walkthrough is active on the plan:")]
+fn walkthrough_active_on_plan(world: &mut VardeWorld, step: &Step) {
+    world.state.walkthrough = Some(walkthrough::Session::default());
+    walkthrough_file_changes(world, step);
+    assert!(
+        walkthrough_session(world).plan.is_some(),
+        "the plan was refused"
+    );
+}
+
+#[given("the walkthrough file changes to:")]
+#[when("the walkthrough file changes to:")]
+fn walkthrough_file_changes(world: &mut VardeWorld, step: &Step) {
+    let contents = step.docstring().expect("docstring").to_string();
+    world.send(Event::WalkthroughChanged(contents));
+}
+
+#[then(expr = "the walkthrough file is {string}")]
+fn walkthrough_file_is(world: &mut VardeWorld, path: String) {
+    assert_eq!(walkthrough_file(world), PathBuf::from(path));
+}
+
+#[then("the walkthrough file is in the Sidecar")]
+fn walkthrough_file_in_sidecar(world: &mut VardeWorld) {
+    assert!(walkthrough_file(world).starts_with(SIDECAR));
+}
+
+#[then("the walkthrough file was not written")]
+fn walkthrough_file_not_written(world: &mut VardeWorld) {
+    let path = walkthrough_file(world);
+    assert!(!world.wrote.contains(&path), "written: {:?}", world.wrote);
+}
+
+#[then(expr = "the walkthrough state is {string}")]
+fn walkthrough_state_is(world: &mut VardeWorld, expected: String) {
+    let actual = match &world.state.walkthrough {
+        None => "none",
+        Some(walkthrough::Session { plan: None, .. }) => "planning",
+        Some(walkthrough::Session { plan: Some(_), .. }) => "active",
+    };
+    assert_eq!(actual, expected);
+}
+
+#[then("the plan holds the Waypoints, in order:")]
+fn plan_holds_waypoints(world: &mut VardeWorld, step: &Step) {
+    let expected: Vec<String> = step
+        .table()
+        .expect("table")
+        .rows
+        .iter()
+        .map(|row| row[0].clone())
+        .collect();
+    let plan = walkthrough_session(world).plan.as_ref().expect("a plan");
+    let ids: Vec<String> = plan.waypoints.iter().map(|w| w.id.clone()).collect();
+    assert_eq!(ids, expected);
+}
+
+#[then(expr = "the walkthrough failure is {string}")]
+fn walkthrough_failure_is(world: &mut VardeWorld, expected: String) {
+    let failure = walkthrough_session(world)
+        .failure
+        .as_ref()
+        .expect("a failure");
+    assert_eq!(failure.slug(), expected);
+}
+
+fn failing_waypoints(world: &VardeWorld) -> Vec<(String, &'static str)> {
+    match &walkthrough_session(world).failure {
+        Some(walkthrough::Failure::Waypoints(problems)) => problems
+            .iter()
+            .map(|(id, problem)| (id.clone(), problem.slug()))
+            .collect(),
+        other => panic!("no failing Waypoints: {other:?}"),
+    }
+}
+
+#[then(expr = "the walkthrough failure names Waypoint {string} as {string}")]
+fn walkthrough_failure_names(world: &mut VardeWorld, id: String, problem: String) {
+    let failing = failing_waypoints(world);
+    assert!(
+        failing
+            .iter()
+            .any(|(named, slug)| *named == id && *slug == problem),
+        "failing: {failing:?}"
+    );
+}
+
+#[then(expr = "the walkthrough failure does not name Waypoint {string}")]
+fn walkthrough_failure_does_not_name(world: &mut VardeWorld, id: String) {
+    let failing = failing_waypoints(world);
+    assert!(
+        failing.iter().all(|(named, _)| *named != id),
+        "failing: {failing:?}"
+    );
+}
+
+#[then("the walkthrough has no failure")]
+fn walkthrough_has_no_failure(world: &mut VardeWorld) {
+    assert_eq!(walkthrough_session(world).failure, None);
+}
+
+fn shipped_skill(world: &VardeWorld, name: &str) -> String {
+    let (file, _) = skills::SHIPPED
+        .iter()
+        .find(|(file, _)| file.ends_with(&format!("/{name}/{}", skills::FILE)))
+        .expect("a shipped Skill");
+    world
+        .files
+        .get(&world.startup.varde_home.join(file))
+        .cloned()
+        .expect("the Skill on disk")
+}
+
+#[then(expr = "the shipped Skill {string} is on disk")]
+fn shipped_skill_on_disk(world: &mut VardeWorld, name: String) {
+    let text = shipped_skill(world, &name);
+    assert_eq!(
+        skills::read(&name, &text).read.map(|front| front.name),
+        Ok(name)
+    );
+}
+
+#[then(regex = r#"^the Skill "([^"]+)" names the actions (.+)$"#)]
+fn skill_names_actions(world: &mut VardeWorld, name: String, actions: String) {
+    let text = shipped_skill(world, &name);
+    let actions: Vec<&str> = actions.split('"').skip(1).step_by(2).collect();
+    assert_eq!(actions.len(), 6, "{actions:?}");
+    for action in actions {
+        assert!(
+            text.contains(&format!("### `{action}`")),
+            "no section for {action}"
+        );
+    }
+}
+
+#[then(expr = "the Skill {string} documents the walkthrough file's schema")]
+fn skill_documents_schema(world: &mut VardeWorld, name: String) {
+    let text = shipped_skill(world, &name);
+    let example = text
+        .split("```json")
+        .nth(1)
+        .and_then(|rest| rest.split("```").next())
+        .expect("a JSON example");
+    let plan = walkthrough::parse(example).expect("the example parses");
+    assert!(plan
+        .waypoints
+        .iter()
+        .any(|w| w.kind == walkthrough::Kind::Code));
+    assert!(plan
+        .waypoints
+        .iter()
+        .any(|w| w.kind == walkthrough::Kind::Context));
+    for status in ["active", "completed", "ended"] {
+        assert!(text.contains(&format!("`{status}`")), "no status {status}");
+    }
+}
+
+#[then(
+    expr = "the Skill {string} asks for Waypoints in the order a developer would build the change"
+)]
+fn skill_asks_for_build_order(world: &mut VardeWorld, name: String) {
+    let text = shipped_skill(world, &name);
+    assert!(text.contains("order a developer would build the change"));
+}
+
+#[then(
+    expr = "the Skill {string} allows writing source files only on {string}, {string} and {string}"
+)]
+fn skill_allows_writing_only_on(
+    world: &mut VardeWorld,
+    name: String,
+    a: String,
+    b: String,
+    c: String,
+) {
+    let text = shipped_skill(world, &name);
+    let rule = text
+        .lines()
+        .find(|line| line.contains("source file"))
+        .expect("a rule on source files");
+    for action in [a, b, c] {
+        assert!(rule.contains(&format!("`{action}`")), "{rule}");
+    }
+    for action in ["plan", "evaluate", "fix"] {
+        assert!(!rule.contains(&format!("`{action}`")), "{rule}");
+    }
 }

@@ -19,7 +19,7 @@ pub const OWNED: [&str; 4] = [
     "ai/skills/search-knowledge",
 ];
 
-pub const SHIPPED: [(&str, &str); 9] = [
+pub const SHIPPED: [(&str, &str); 10] = [
     (
         "ai/skills/workflows/knowledge-vault/agents/knowledge-searcher.md",
         include_str!("../ai/skills/workflows/knowledge-vault/agents/knowledge-searcher.md"),
@@ -55,6 +55,10 @@ pub const SHIPPED: [(&str, &str); 9] = [
     (
         "ai/skills/workflows/knowledge-vault/update-knowledge/SKILL.md",
         include_str!("../ai/skills/workflows/knowledge-vault/update-knowledge/SKILL.md"),
+    ),
+    (
+        "ai/skills/workflows/walkthrough/walkthrough/SKILL.md",
+        include_str!("../ai/skills/workflows/walkthrough/walkthrough/SKILL.md"),
     ),
 ];
 

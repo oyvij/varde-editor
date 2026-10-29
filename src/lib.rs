@@ -31,6 +31,7 @@ pub mod tools;
 pub mod tree;
 pub mod tree_actions;
 pub mod wait;
+pub mod walkthrough;
 
 use editor::Buffer;
 use review::{Comment, GitFile};
@@ -597,6 +598,11 @@ pub enum Event {
         range: story::RangeStatus,
     },
     StoryFiles(Vec<story::FileHunks>),
+    WalkthroughChanged(String),
+    WalkthroughFiles {
+        plan: walkthrough::Plan,
+        lines: BTreeMap<String, usize>,
+    },
     Story {
         explicit: Option<String>,
         force: bool,
@@ -962,6 +968,11 @@ pub enum Effect {
         range: Option<(String, String)>,
         files: Vec<String>,
     },
+    ReadWalkthroughFiles {
+        root: PathBuf,
+        plan: walkthrough::Plan,
+        files: Vec<String>,
+    },
     WriteStoryContext {
         repo: PathBuf,
         spelling: String,
@@ -1217,6 +1228,7 @@ pub struct State {
     pub running_version: String,
     pub replaced: bool,
     pub story_set: story::Set,
+    pub walkthrough: Option<walkthrough::Session>,
     pub branch: Option<String>,
     pub left_branch: Option<String>,
     pub guest: Option<PathBuf>,
@@ -1478,6 +1490,7 @@ impl Default for State {
             running_version: String::new(),
             replaced: false,
             story_set: story::Set::None,
+            walkthrough: None,
             left_branch: None,
             guest: None,
             guests: Vec::new(),
@@ -2528,6 +2541,10 @@ fn route_ai_spoke(state: &State, next: State, event: Event, wheeled: bool) -> An
         Err(declined) => declined,
     };
     let declined = match on_drag_row(state, declined.0, declined.1, wheeled) {
+        Ok(answer) => return Ok(answer),
+        Err(declined) => declined,
+    };
+    let declined = match on_walkthrough(state, declined.0, declined.1, wheeled) {
         Ok(answer) => return Ok(answer),
         Err(declined) => declined,
     };
@@ -6231,6 +6248,42 @@ fn on_drag_row(state: &State, mut next: State, event: Event, wheeled: bool) -> A
         other => return Err((next, other)),
     };
     Ok(settle(next, effects, wheeled))
+}
+
+fn on_walkthrough(state: &State, mut next: State, event: Event, wheeled: bool) -> Answered {
+    let effects = match (event, &state.walkthrough) {
+        (Event::WalkthroughChanged(_) | Event::WalkthroughFiles { .. }, None) => vec![],
+        (Event::WalkthroughChanged(contents), Some(_)) => match walkthrough::parse(&contents) {
+            Ok(plan) => vec![Effect::ReadWalkthroughFiles {
+                root: next.root.clone(),
+                files: walkthrough::files(&plan),
+                plan,
+            }],
+            Err(failure) => refuse_walkthrough(&mut next, failure),
+        },
+        (Event::WalkthroughFiles { plan, lines }, Some(_)) => {
+            match walkthrough::check(&plan, &lines) {
+                Ok(()) => {
+                    next.walkthrough = Some(walkthrough::Session {
+                        plan: Some(plan),
+                        failure: None,
+                    });
+                    vec![]
+                }
+                Err(failure) => refuse_walkthrough(&mut next, failure),
+            }
+        }
+        (other, _) => return Err((next, other)),
+    };
+    Ok(settle(next, effects, wheeled))
+}
+
+fn refuse_walkthrough(next: &mut State, failure: walkthrough::Failure) -> Vec<Effect> {
+    let effect = Effect::notify_about("walkthrough-invalid", failure.describe());
+    if let Some(session) = &mut next.walkthrough {
+        session.failure = Some(failure);
+    }
+    vec![effect]
 }
 
 fn on_story_resolved(state: &State, mut next: State, event: Event, wheeled: bool) -> Answered {

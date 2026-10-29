@@ -60,7 +60,7 @@ running, Varde starts one and sends the line once the session is ready.
 Some Skills ask a question first. They open a box, and your answer goes to the session with the
 pointer. An empty answer or `Esc` sends nothing.
 
-Varde ships one Workflow, `knowledge-vault`. The modal lists its Skills in the order you would use
+Varde ships the Workflow `knowledge-vault`. The modal lists its Skills in the order you would use
 them:
 
 | Skill | What it does |
@@ -70,6 +70,9 @@ them:
 | `search-knowledge` | Asks what you are looking for and answers from the Vault and the code it names, citing the Notes it used. |
 | `sweep-knowledge` | Compares Notes with the code they name and proposes updates where they have drifted apart. |
 | `maintain-vault` | Renames, moves, merges or splits Notes, Kinds and Topics. Answer "check" for a check of broken links and missing indexes. |
+
+Varde also ships the Workflow `walkthrough`. Its one Skill holds the agent's instructions for a
+Walkthrough, and `:guide` hands it over for you.
 
 A session learns where the Vault is only from a Skill you picked. Starting the AI on its own tells
 it nothing about the Vault.

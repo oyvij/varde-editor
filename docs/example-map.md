@@ -3503,7 +3503,7 @@ Skill, no environment variable and no other prompt names the Vault (ADR 0025).
 **R51.6** A Skill whose frontmatter carries `metadata: { varde-asks: "<label>" }` opens a one-line
 question box before it is handed over; the answer goes in the pasted line. An empty answer or
 Escape hands nothing over.
-**R51.7** Varde ships one Workflow, `knowledge-vault`: the Skills `init-vault`, `update-knowledge`,
+**R51.7** Varde ships the Workflow `knowledge-vault`: the Skills `init-vault`, `update-knowledge`,
 `search-knowledge`, `sweep-knowledge` and `maintain-vault`, the agent `agents/knowledge-searcher.md`
 and the files they share in `shared/`. Every one of its Skills opts into the Vault;
 `search-knowledge` and `maintain-vault` ask a question first. The agent is never picked by the user
