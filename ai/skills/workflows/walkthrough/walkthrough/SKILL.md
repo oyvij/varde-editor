@@ -17,7 +17,9 @@ and keep nothing you need only in the conversation.
 Write no source file except on `write`, `adjust` and `revert`.
 
 The plan file is yours: Varde only reads it, reloads it on every change, and never writes it. Every
-answer you give is a write of the whole plan file. Varde reads nothing you print.
+answer you give is a write of the whole plan file, even when nothing in it changed: Varde finishes a
+request when the plan file changes, so a request that leaves the file as it was never finishes.
+Varde reads nothing you print.
 
 ## The plan file
 
@@ -96,12 +98,16 @@ else, except setting `status` to `completed` when every code Waypoint is now `lg
 
 The request carries the developer's objection to your approach. Revert the source changes the new
 approach replaces, rewrite the Waypoints from there on, and set `checkpoint` to the Waypoint to
-resume at. Keep the ids and verdicts of Waypoints the adjustment leaves alone.
+resume at. Keep the ids and verdicts of Waypoints the adjustment leaves alone. Every `line` must
+match the files as your revert left them.
 
 ### `write`
 
-Write the named Waypoint's code yourself, under its comment, and in the same write of the plan file
-set its `verdict` to `lgtm` and `ai` to `true`.
+Write the named Waypoint's code yourself, under its comment, and leave the comment where it is. In
+the same write of the plan file set its `verdict` to `lgtm` and `ai` to `true`, and move the `line`
+of every later Waypoint in the same file by the number of lines you added or removed above it:
+Varde takes the lines from the plan file, so a stale one puts the next comment in the wrong place.
+Leave `checkpoint` as it is, so the developer stays on the Waypoint they are at.
 
 ### `revert`
 

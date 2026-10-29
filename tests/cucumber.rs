@@ -19759,6 +19759,35 @@ fn chip_drawn_on_line(world: &mut VardeWorld, name: String, line: usize, path: S
     );
 }
 
+#[then(expr = "the {string} Chip covers none of its line's text")]
+fn chip_clears_its_line(world: &mut VardeWorld, name: String) {
+    let chip = ai_write_chip(world, &name);
+    let editor = world.panes().editor;
+    let line = (chip.y - editor.y - 1) as usize + world.state.editor_scroll + 1;
+    let text = varde::current_buffer(&world.state)
+        .and_then(|buffer| buffer.line_text(line))
+        .expect("the Chip's line")
+        .to_string();
+    let text_ends = editor.x + 1 + varde::gutter(&world.state) + text.width() as u16;
+    assert!(
+        chip.x > text_ends,
+        "the Chip starts at {}, the text ends at {text_ends}",
+        chip.x
+    );
+}
+
+#[when(expr = "I point at the {string} Chip")]
+fn point_at_chip(world: &mut VardeWorld, name: String) {
+    let chip = ai_write_chip(world, &name);
+    world.report(mouse::Kind::Moved, chip.x, chip.y);
+}
+
+#[then(expr = "the {string} Chip is hovered")]
+fn chip_is_hovered(world: &mut VardeWorld, name: String) {
+    ai_write_chip(world, &name);
+    assert_eq!(world.state.hovered_action, Some(walkthrough::WRITE));
+}
+
 #[then(expr = "the {string} Chip ends left of the minimap")]
 fn chip_ends_left_of_minimap(world: &mut VardeWorld, name: String) {
     let end = ai_write_chip(world, &name).right();

@@ -19,9 +19,11 @@ Feature: Starting and adjusting a Walkthrough
   has provider-specific code.
 
   One request is in flight at a time. A newer evaluation replaces a queued one, and an adjustment or
-  a revert queues ahead of evaluations. Before every hand-over Varde saves every buffer the
-  Walkthrough touches, so the agent never works on stale files, and that save asks for no
-  evaluation.
+  a revert queues ahead of evaluations. A request in flight finishes when the plan file changes, or
+  after 3 minutes if it never does, so one lost answer cannot hold the queue for good. One save of
+  the plan file finishes one request, however many file events the save raises. Before every
+  hand-over Varde saves every buffer the Walkthrough touches, so the agent never works on stale
+  files, and that save asks for no evaluation.
 
   Background:
     Given the workspace root is "/home/me/projects/varde"
@@ -263,6 +265,19 @@ Feature: Starting and adjusting a Walkthrough
         """
       Then an "evaluate" walkthrough request was sent
       And the walkthrough queue is empty
+
+    Scenario: The next queued request goes when the one in flight never changes the plan file
+      Given an "adjust" walkthrough request is in flight
+      And an evaluation of Waypoint "w1" is queued
+      When the clock advances 4 minutes
+      Then an "evaluate" walkthrough request was sent
+      And the walkthrough queue is empty
+
+    Scenario: A request in flight holds the queue until the fallback
+      Given an "adjust" walkthrough request is in flight
+      And an evaluation of Waypoint "w1" is queued
+      When the clock advances 2 minutes
+      Then the walkthrough queue holds "evaluate w1"
 
     Scenario: The spinner names what is running and what is queued
       Given an "adjust" walkthrough request is in flight

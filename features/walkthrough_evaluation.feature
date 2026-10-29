@@ -11,7 +11,9 @@ Feature: Evaluating a Waypoint, and AI Write
   blocks stepping.
 
   When the developer is stuck, `▶ AI Write` on the Waypoint's line, left of the minimap, asks the
-  agent to write that snippet. The agent writes it and sets `lgtm` in one update; Varde reloads the
+  agent to write that snippet. A comment that wraps carries the Chip on its last line, one column
+  after its text when it fits, and the Chip lights up under the pointer. The agent writes it and
+  sets `lgtm` in one update; Varde reloads the
   buffer, keeps the cursor on the Waypoint, and the Waypoint list marks it `AI`.
 
   Background:
@@ -123,6 +125,20 @@ Feature: Evaluating a Waypoint, and AI Write
     Scenario: The AI Write Chip sits on the Waypoint's line, left of the minimap
       Then the "AI Write" Chip is drawn on line 12 of "src/plan.rs"
       And the "AI Write" Chip ends left of the minimap
+
+    Scenario: The AI Write Chip sits after a wrapped comment, clear of its text
+      When the walkthrough file changes to:
+        """
+        {"version": 1, "status": "active", "checkpoint": "w2", "waypoints": [
+          {"id": "w2", "file": "src/plan.rs", "line": 5, "kind": "code", "text": "Read the plan file from disk, refusing any plan whose version is not the one this build of Varde understands", "verdict": null, "ai": false}
+        ]}
+        """
+      Then the "AI Write" Chip is drawn on line 6 of "src/plan.rs"
+      And the "AI Write" Chip covers none of its line's text
+
+    Scenario: The AI Write Chip lights up under the pointer
+      When I point at the "AI Write" Chip
+      Then the "AI Write" Chip is hovered
 
     Scenario: The AI Write Chip sends a write request
       When I click the "AI Write" Chip on the Waypoint's line

@@ -202,8 +202,10 @@ impl Queue {
 pub const PREVIOUS: &str = "waypoint-previous";
 pub const NEXT: &str = "waypoint-next";
 pub const CHECK: &str = "waypoint-check";
+pub const WRITE: &str = "waypoint-write";
 pub const AI_WRITE: &str = "\u{25b6} AI Write";
 pub const NOTICE_MS: u64 = 4_000;
+pub const FALLBACK_MS: u64 = 180_000;
 pub const FINISH: &str = "walkthrough-finish";
 pub const REVERT: &str = "walkthrough-revert";
 
@@ -267,12 +269,22 @@ pub fn write_chip(
     {
         return None;
     }
+    let buffer = crate::current_buffer(state)?;
+    let last = below_comment(buffer, waypoint.line, comment_token(&waypoint.file)) - 1;
     let (_, rows, columns) = crate::fits_in(state, panes);
-    let row = crate::story::row_of(state, waypoint.line as u32)
+    let row = crate::story::row_of(state, last as u32)
         .checked_sub(1 + state.editor_scroll)
         .filter(|row| *row < rows)?;
     let width = unicode_width::UnicodeWidthStr::width(AI_WRITE);
-    let column = columns.checked_sub(width)?;
+    let text = buffer.line_text(last).unwrap_or_default();
+    let text = text.replace('\t', &" ".repeat(state.tab_width));
+    let after = (unicode_width::UnicodeWidthStr::width(text.as_str()) + 1)
+        .checked_sub(state.editor_hscroll)
+        .filter(|after| after + width <= columns);
+    let column = match after {
+        Some(after) => after,
+        None => columns.checked_sub(width)?,
+    };
     Some(crate::layout::Area {
         x: panes.editor.x + 1 + crate::gutter(state) + column as u16,
         y: panes.editor.y + 1 + row as u16,
@@ -540,6 +552,14 @@ pub fn check(plan: &Plan, lines: &BTreeMap<String, usize>) -> Result<(), Failure
     }
 }
 
+pub fn below_comment(buffer: &crate::editor::Buffer, line: usize, token: &str) -> usize {
+    (line + 1..)
+        .find(|below| {
+            !(buffer.line_text(*below)).is_some_and(|text| text.trim_start().starts_with(token))
+        })
+        .unwrap_or(line + 1)
+}
+
 pub fn comment_token(file: &str) -> &'static str {
     match Path::new(file)
         .extension()
@@ -559,21 +579,37 @@ pub fn with_comment(text: &str, line: usize, token: &str, comment: &str) -> Stri
     let at = line.saturating_sub(1).min(lines.len());
     let held = lines.get(at).copied().unwrap_or_default();
     let indent = &held[..held.len() - held.trim_start().len()];
-    let commented = format!("{indent}{token} {comment}");
-    lines.splice(at..at, [commented.as_str(), indent]);
+    let width = 80usize.saturating_sub(indent.len() + token.len() + 1);
+    let commented: Vec<String> = textwrap::wrap(comment, width)
+        .iter()
+        .map(|line| format!("{indent}{token} {line}"))
+        .collect();
+    lines.splice(at..at, commented.iter().map(String::as_str).chain([indent]));
     lines.join("\n")
 }
 
 pub fn without_comment(text: &str, line: usize, token: &str, comment: &str) -> Option<String> {
     let mut lines: Vec<&str> = text.split('\n').collect();
-    let inserted = format!("{token} {comment}");
-    let near = lines
-        .iter()
-        .enumerate()
-        .filter(|(_, held)| held.trim() == inserted)
-        .min_by_key(|(at, _)| at.abs_diff(line.saturating_sub(1)))
-        .map(|(at, _)| at)?;
-    lines.remove(near);
+    let target = comment.split_whitespace().collect::<Vec<_>>().join(" ");
+    let body = |held: &str| {
+        held.trim()
+            .strip_prefix(token)
+            .map(|rest| rest.split_whitespace().collect::<Vec<_>>().join(" "))
+    };
+    let near = (0..lines.len())
+        .filter(|&at| {
+            body(lines[at])
+                .is_some_and(|piece| !piece.is_empty() && target.starts_with(piece.as_str()))
+        })
+        .min_by_key(|at| at.abs_diff(line.saturating_sub(1)))?;
+    let joined = |end: usize| {
+        (near..=end)
+            .map(|at| body(lines[at]))
+            .collect::<Option<Vec<_>>>()
+            .map(|pieces| pieces.join(" "))
+    };
+    let end = (near..lines.len()).find(|&end| joined(end).as_deref() == Some(target.as_str()))?;
+    lines.drain(near..=end);
     Some(lines.join("\n"))
 }
 
@@ -922,6 +958,24 @@ mod tests {
         assert_eq!(
             with_comment("import os\nprint(os.name)", 2, "#", "Read the plan"),
             "import os\n# Read the plan\n\nprint(os.name)"
+        );
+    }
+
+    #[test]
+    fn a_long_instruction_wraps_into_comment_lines_and_finishing_removes_them() {
+        let instruction = "Write the wrapped instruction so that it fits the editor width and the developer can read every word of it without scrolling sideways";
+        let landed = with_comment("fn load() {\n    let text = 1;\n}", 2, "//", instruction);
+        let comments: Vec<&str> = landed
+            .lines()
+            .filter(|line| line.trim_start().starts_with("//"))
+            .collect();
+        assert!(comments.len() > 1);
+        assert!(comments
+            .iter()
+            .all(|line| line.starts_with("    // ") && line.chars().count() <= 80));
+        assert_eq!(
+            without_comment(&landed, 2, "//", instruction).as_deref(),
+            Some("fn load() {\n    \n    let text = 1;\n}")
         );
     }
 

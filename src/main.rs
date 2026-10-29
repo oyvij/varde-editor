@@ -4347,6 +4347,7 @@ fn watched_path(
                     .join(varde::walkthrough::FILE) =>
         {
             if let Ok(contents) = std::fs::read_to_string(&path) {
+                queue.retain(|event| !matches!(event, Event::WalkthroughChanged(_)));
                 queue.push_back(Event::WalkthroughChanged(contents));
             }
         }
@@ -5277,7 +5278,7 @@ mod tests {
     }
 
     #[test]
-    fn a_write_to_the_walkthrough_file_is_a_walkthrough_change() {
+    fn the_events_of_one_write_to_the_walkthrough_file_are_one_walkthrough_change() {
         let root = tempfile::tempdir().expect("a temp directory");
         fs::create_dir(root.path().join(".varde")).expect("the fixture folder");
         let plan = root.path().join(".varde").join(varde::walkthrough::FILE);
@@ -5302,10 +5303,7 @@ mod tests {
 
         assert_eq!(
             Vec::from(queue),
-            [
-                Event::WalkthroughChanged("{}".to_string()),
-                Event::WalkthroughChanged("{}".to_string()),
-            ]
+            [Event::WalkthroughChanged("{}".to_string())]
         );
     }
 

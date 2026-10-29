@@ -2,8 +2,9 @@ Feature: Walking a Walkthrough's Waypoints in Edit view
 
   A Walkthrough is walked in Edit view, with the buffer editable, because the developer is the one
   writing the code. When a plan arrives Varde lands on its `checkpoint`, or on its first Waypoint
-  when it names none, and every later change to the file lands on the `checkpoint` again: Varde
-  follows the file.
+  when it names none, and a later change that moves the `checkpoint` lands on it again: Varde
+  follows the file. A later change that leaves the `checkpoint` where it was, as a write or an
+  evaluation does, leaves the developer on the Waypoint they are at.
 
   Landing on a code Waypoint for the first time writes its instruction into the file as a real
   comment, in the language's own line-comment token, and leaves the cursor on an empty indented line
@@ -70,6 +71,25 @@ Feature: Walking a Walkthrough's Waypoints in Edit view
       Then the current Waypoint is "w2"
       And "src/lib.rs" is open in the editor
 
+    Scenario: A later change that keeps the checkpoint leaves the developer where they are
+      Given a walkthrough is active on the plan:
+        """
+        {"version": 1, "status": "active", "checkpoint": "w1", "waypoints": [
+          {"id": "w1", "file": "src/plan.rs", "line": 4, "kind": "context", "text": "Why", "verdict": null, "ai": false},
+          {"id": "w2", "file": "src/lib.rs", "line": 3, "kind": "code", "text": "Call the parser", "verdict": null, "ai": false}
+        ]}
+        """
+      And I pressed "]"
+      When the walkthrough file changes to:
+        """
+        {"version": 1, "status": "active", "checkpoint": "w1", "waypoints": [
+          {"id": "w1", "file": "src/plan.rs", "line": 4, "kind": "context", "text": "Why", "verdict": null, "ai": false},
+          {"id": "w2", "file": "src/lib.rs", "line": 3, "kind": "code", "text": "Call the parser", "verdict": {"state": "lgtm"}, "ai": true}
+        ]}
+        """
+      Then the current Waypoint is "w2"
+      And "src/lib.rs" is open in the editor
+
   Rule: Landing on a code Waypoint writes its instruction as a comment
 
     Background:
@@ -89,6 +109,17 @@ Feature: Walking a Walkthrough's Waypoints in Edit view
       And the cursor is on line 7 of "src/plan.rs"
       And the cursor is at line 7 column 5
       And the editor mode is normal
+
+    Scenario: A long instruction wraps and the cursor waits below the whole comment
+      When the walkthrough file changes to:
+        """
+        {"version": 1, "status": "active", "checkpoint": "w5", "waypoints": [
+          {"id": "w5", "file": "src/plan.rs", "line": 1, "kind": "code", "text": "Read the plan file from disk, refusing any plan whose version is not the one this build of Varde understands", "verdict": null, "ai": false}
+        ]}
+        """
+      Then line 1 of "src/plan.rs" reads "// Read the plan file from disk, refusing any plan whose version is not the one"
+      And line 2 of "src/plan.rs" reads "// this build of Varde understands"
+      And the cursor is on line 3 of "src/plan.rs"
 
     Scenario: A comment is not inserted before its Waypoint is landed on
       Then Waypoint "w2" has no inserted comment

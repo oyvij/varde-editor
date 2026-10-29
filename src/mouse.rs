@@ -1262,6 +1262,12 @@ fn action_under(state: &State, panes: &Layout, input: Input) -> Option<&'static 
         Pane::Tree if input.row == panes.tree.y => tree_chip_at(state, panes, input.column),
         Pane::Tree => action_at(state, panes, input.column, input.row),
         Pane::Editor if input.row == panes.editor.y => transport_at(state, panes, input.column),
+        Pane::Editor
+            if crate::walkthrough::write_chip(state, panes)
+                .is_some_and(|chip| chip.holds(input.column, input.row)) =>
+        {
+            Some(crate::walkthrough::WRITE)
+        }
         Pane::Ai if input.row == panes.ai.y => ai_chip_at(panes, input.column),
         Pane::Risk if input.row == panes.corner.y => pane_action_at(state, panes, input.column),
         Pane::Risk if corner_row => {

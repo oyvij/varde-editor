@@ -179,7 +179,10 @@ pub fn line(progress: Progress) -> String {
         }
         Kind::Install => format!("installing · {elapsed} · no timeout"),
         Kind::Session => format!("session · {elapsed} · {activity} · no timeout"),
-        Kind::Walkthrough => format!("{elapsed} · {activity} · no timeout"),
+        Kind::Walkthrough => format!(
+            "{elapsed} · {activity} · moves on after {} min",
+            crate::walkthrough::FALLBACK_MS / 60_000
+        ),
     }
 }
 

@@ -6518,8 +6518,13 @@ fn on_walkthrough(state: &State, mut next: State, event: Event, wheeled: bool) -
                     let resumed = session.current.as_deref().filter(|id| {
                         session.plan.is_none() && plan.waypoints.iter().any(|w| w.id == *id)
                     });
+                    let stays = (session.plan.as_ref())
+                        .is_some_and(|held| held.checkpoint == plan.checkpoint)
+                        && (session.current.as_deref())
+                            .is_some_and(|id| plan.waypoints.iter().any(|w| w.id == id));
                     let target = resumed
                         .or_else(|| walkthrough::landing(&plan, session.current.as_deref()))
+                        .filter(|_| !stays)
                         .map(str::to_string);
                     let missing = walkthrough::files(&plan)
                         .into_iter()
@@ -6765,17 +6770,14 @@ fn land(next: &mut State, id: &str) -> Vec<Effect> {
             column: 1,
         }),
         walkthrough::Kind::Code => {
+            let token = walkthrough::comment_token(&waypoint.file);
             if first {
-                let commented = walkthrough::with_comment(
-                    buffer.shown(),
-                    waypoint.line,
-                    walkthrough::comment_token(&waypoint.file),
-                    &waypoint.text,
-                );
+                let commented =
+                    walkthrough::with_comment(buffer.shown(), waypoint.line, token, &waypoint.text);
                 buffer.rewrite(&commented);
             }
             buffer.go_to_place(Place {
-                line: waypoint.line + 1,
+                line: walkthrough::below_comment(buffer, waypoint.line, token),
                 column: 1,
             });
             let indent = buffer.line_text(buffer.line).map_or(0, |text| {
@@ -7265,7 +7267,18 @@ fn on_pane_action(state: &State, mut next: State, event: Event, wheeled: bool) -
             for (_, wait) in wait::all_mut(&mut next) {
                 wait.since_ms.get_or_insert(at_ms);
             }
-            return Ok((next, vec![]));
+            let overdue = (next.walkthrough.as_ref()).is_some_and(|session| {
+                next.walkthrough_driver == walkthrough::Driver::Pane
+                    && session.queue.running.is_some()
+                    && (session.queue.wait.since_ms).is_some_and(|since| {
+                        at_ms.saturating_sub(since) >= walkthrough::FALLBACK_MS
+                    })
+            });
+            let effects = match overdue {
+                true => finish_hand_over(&mut next),
+                false => vec![],
+            };
+            return Ok((next, effects));
         }
 
         Event::FileActivity(path) => {

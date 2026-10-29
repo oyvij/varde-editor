@@ -260,7 +260,12 @@ pub fn draw(
         frame.render_widget(
             Paragraph::new(Span::styled(
                 varde::walkthrough::AI_WRITE,
-                Style::default().add_modifier(Modifier::REVERSED),
+                match state.hovered_action == Some(varde::walkthrough::WRITE) {
+                    true => Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::REVERSED | Modifier::BOLD),
+                    false => Style::default().add_modifier(Modifier::REVERSED),
+                },
             )),
             Rect::new(chip.x, chip.y, chip.width, chip.height),
         );
