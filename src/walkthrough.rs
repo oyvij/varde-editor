@@ -71,7 +71,7 @@ pub struct Session {
     pub inserted: BTreeSet<String>,
     pub missing: BTreeSet<String>,
     pub opening: Option<String>,
-    pub reading: Option<usize>,
+    pub box_focus: Option<usize>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
@@ -254,7 +254,7 @@ pub fn context_box(state: &crate::State) -> Option<ContextBox> {
         scroll: state
             .walkthrough
             .as_ref()
-            .and_then(|session| session.reading)
+            .and_then(|session| session.box_focus)
             .unwrap_or(0),
         rows,
     })

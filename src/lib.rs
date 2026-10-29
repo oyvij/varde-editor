@@ -2932,7 +2932,7 @@ fn waypoint_key(state: &State, event: &Event) -> Option<Event> {
     let reading = state
         .walkthrough
         .as_ref()
-        .is_some_and(|session| session.reading.is_some())
+        .is_some_and(|session| session.box_focus.is_some())
         && walkthrough::context_box(state).is_some();
     match key {
         '[' if walking => Some(Event::StepWaypoint(Direction::Left)),
@@ -5068,10 +5068,11 @@ fn on_editor_escape(state: &State, mut next: State, event: Event, wheeled: bool)
             if state
                 .walkthrough
                 .as_ref()
-                .is_some_and(|session| session.reading.is_some()) =>
+                .is_some_and(|session| session.box_focus.is_some())
+                && normal_mode(state) =>
         {
             if let Some(session) = &mut next.walkthrough {
-                session.reading = None;
+                session.box_focus = None;
             }
             vec![]
         }
@@ -6508,7 +6509,7 @@ fn on_walkthrough(state: &State, mut next: State, event: Event, wheeled: bool) -
         (
             Event::ScrollContextBox(direction),
             Some(walkthrough::Session {
-                reading: Some(scroll),
+                box_focus: Some(scroll),
                 ..
             }),
         ) => {
@@ -6518,7 +6519,7 @@ fn on_walkthrough(state: &State, mut next: State, event: Event, wheeled: bool) -
                 _ => (scroll + 1).min(last),
             };
             if let Some(session) = &mut next.walkthrough {
-                session.reading = Some(scrolled);
+                session.box_focus = Some(scrolled);
             }
             vec![]
         }
@@ -6558,7 +6559,7 @@ fn land(next: &mut State, id: &str) -> Vec<Effect> {
         return vec![];
     };
     session.current = Some(waypoint.id.clone());
-    session.reading = (waypoint.kind == walkthrough::Kind::Context).then_some(0);
+    session.box_focus = (waypoint.kind == walkthrough::Kind::Context).then_some(0);
     session.opening = None;
     let missing = session.missing.contains(&waypoint.file);
     let mut effects = vec![];
@@ -8449,9 +8450,10 @@ pub fn editor_chips(state: &State) -> Vec<Chip> {
     });
     chips.push(inject_chip());
     let walking = walkthrough::transport(state);
-    match walking.is_empty() {
-        true => chips.extend(reading::transport(state)),
-        false => chips.extend(walking),
+    if walking.is_empty() {
+        chips.extend(reading::transport(state));
+    } else {
+        chips.extend(walking);
     }
     chips
 }

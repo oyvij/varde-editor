@@ -1984,7 +1984,9 @@ fn saved_window(state_json: Option<&str>) -> Option<crate::layout::Area> {
 fn resume_walkthrough(state: &mut State, input: &Startup) -> Option<Effect> {
     let parsed: serde_json::Value = serde_json::from_str(input.state_json.as_deref()?).ok()?;
     let saved = parsed.get("walkthrough")?;
-    let plan = crate::walkthrough::parse(input.walkthrough_json.as_deref()?).ok()?;
+    let plan = crate::walkthrough::parse(input.walkthrough_json.as_deref()?)
+        .ok()
+        .filter(|plan| plan.status != crate::walkthrough::Status::Ended)?;
     state.walkthrough = Some(crate::walkthrough::Session {
         current: Some(saved.get("current")?.as_str()?.to_string()),
         inserted: serde_json::from_value(saved.get("inserted")?.clone()).ok()?,
@@ -2055,6 +2057,33 @@ mod tests {
         })
         .expect("started");
         assert_eq!(state.corner, crate::layout::Corner::Breakpoints);
+    }
+
+    #[test]
+    fn a_walkthrough_resumes_unless_its_plan_says_ended() {
+        let saved = r#"{"walkthrough": {"current": "w2", "inserted": ["w1"]}}"#;
+        let plan = |status: &str| {
+            format!(
+                r#"{{"version": 1, "status": "{status}", "checkpoint": "w1", "waypoints": [
+                  {{"id": "w1", "file": "a.rs", "line": 1, "kind": "code", "text": "Do", "verdict": null, "ai": false}},
+                  {{"id": "w2", "file": "a.rs", "line": 2, "kind": "code", "text": "Do", "verdict": null, "ai": false}}
+                ]}}"#
+            )
+        };
+        let resumed = |status: &str| {
+            start(&Startup {
+                state_json: Some(saved.to_string()),
+                walkthrough_json: Some(plan(status)),
+                ..Startup::default()
+            })
+            .expect("started")
+            .0
+            .walkthrough
+            .and_then(|session| session.current)
+        };
+        assert_eq!(resumed("active"), Some("w2".to_string()));
+        assert_eq!(resumed("completed"), Some("w2".to_string()));
+        assert_eq!(resumed("ended"), None);
     }
 
     #[test]

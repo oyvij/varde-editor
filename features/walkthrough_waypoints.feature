@@ -164,6 +164,13 @@ Feature: Walking a Walkthrough's Waypoints in Edit view
       Then the context box is scrolled 0 rows
       And the cursor is on line 5 of "src/lib.rs"
 
+    Scenario: Escape in insert mode leaves insert mode first
+      Given the context box has focus
+      And I press "i" in the editor
+      When I press "Escape" in the editor
+      Then the editor mode is normal
+      And the context box has focus
+
     Scenario: The context box wraps its Markdown inside its width
       Given the editor pane is 30 columns wide
       Then no context box row is wider than 30 columns
