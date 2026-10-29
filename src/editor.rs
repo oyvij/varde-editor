@@ -324,6 +324,12 @@ impl Buffer {
         self.shape = std::sync::Arc::new(Shape::of(self.shown(), self.tab_width));
     }
 
+    pub fn rewrite(&mut self, text: &str) {
+        self.remember(Step::Other);
+        self.draft = Some(text.to_string());
+        self.changed();
+    }
+
     pub fn revision(&self) -> u64 {
         self.revision
     }

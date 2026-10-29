@@ -1026,6 +1026,7 @@ pub struct Startup {
     pub shipped: BTreeMap<PathBuf, String>,
     pub state_json: Option<String>,
     pub risk_json: Option<String>,
+    pub walkthrough_json: Option<String>,
     pub head: Option<String>,
     pub repo: Option<Vec<crate::review::GitFile>>,
     pub checkout: Option<PathBuf>,
@@ -1410,6 +1411,7 @@ pub fn start(input: &Startup) -> Result<(State, Config, Vec<Effect>), StartupErr
         .map(|breakpoint| breakpoint.file.clone())
         .collect();
     effects.extend(files.into_iter().map(Effect::ReadBreakpointFile));
+    effects.extend(resume_walkthrough(&mut state, input));
 
     let cache = cached(input);
     let unmeasured = cache.is_none();
@@ -1976,6 +1978,22 @@ fn saved_window(state_json: Option<&str>) -> Option<crate::layout::Area> {
         y: number("row")?,
         width: number("width")?,
         height: number("height")?,
+    })
+}
+
+fn resume_walkthrough(state: &mut State, input: &Startup) -> Option<Effect> {
+    let parsed: serde_json::Value = serde_json::from_str(input.state_json.as_deref()?).ok()?;
+    let saved = parsed.get("walkthrough")?;
+    let plan = crate::walkthrough::parse(input.walkthrough_json.as_deref()?).ok()?;
+    state.walkthrough = Some(crate::walkthrough::Session {
+        current: Some(saved.get("current")?.as_str()?.to_string()),
+        inserted: serde_json::from_value(saved.get("inserted")?.clone()).ok()?,
+        ..Default::default()
+    });
+    Some(Effect::ReadWalkthroughFiles {
+        root: state.root.clone(),
+        files: crate::walkthrough::files(&plan),
+        plan,
     })
 }
 

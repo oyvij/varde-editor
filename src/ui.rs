@@ -252,6 +252,7 @@ pub fn draw(
     }
 
     hover(frame, state, &areas.panes);
+    context_box(frame, state, &areas.panes);
     breakpoint_reason(frame, state, &areas.panes);
     diagnostic_box(frame, state, &areas.panes);
     candidates(frame, state, &areas.panes);
@@ -1954,6 +1955,8 @@ fn source_lines(
         let reading = spoken.is_some_and(|(from, to)| number >= from && number <= to);
         if let Some(severity) = lsp::mark(state, path, number) {
             *line = barred(line, number, severity_colour(severity));
+        } else if varde::walkthrough::context_mark(state, path, number) {
+            *line = barred(line, number, Color::Blue);
         } else if reading {
             *line = barred(line, number, READING);
         } else if changed.binary_search(&number).is_ok() {
@@ -3083,6 +3086,20 @@ fn hover(frame: &mut Frame, state: &State, panes: &layout::Layout) {
         .collect();
     over_buffer_line(frame, state, panes, placement, lines);
     hover_chips(frame, state, placement.spot(state, panes));
+}
+
+fn context_box(frame: &mut Frame, state: &State, panes: &layout::Layout) {
+    let Some(shown) = varde::walkthrough::context_box(state) else {
+        return;
+    };
+    let dark = state.editor_theme != "light";
+    let columns = shown.width.saturating_sub(2);
+    let lines = shown
+        .shown()
+        .iter()
+        .map(|row| preview_line(row, dark, columns))
+        .collect();
+    over_buffer_line(frame, state, panes, shown.placement(), lines);
 }
 
 fn breakpoint_reason(frame: &mut Frame, state: &State, panes: &layout::Layout) {

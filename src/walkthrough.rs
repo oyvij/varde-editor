@@ -1,5 +1,5 @@
 use serde::Deserialize;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path};
 
 pub const FILE: &str = "walkthrough.json";
@@ -67,6 +67,11 @@ pub struct Session {
     pub failure: Option<Failure>,
     pub queue: Queue,
     pub fixes: u8,
+    pub current: Option<String>,
+    pub inserted: BTreeSet<String>,
+    pub missing: BTreeSet<String>,
+    pub opening: Option<String>,
+    pub reading: Option<usize>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
@@ -183,11 +188,96 @@ impl Queue {
     }
 }
 
-pub fn current(session: &Session) -> Option<String> {
-    let plan = session.plan.as_ref()?;
-    plan.checkpoint
-        .clone()
-        .or_else(|| plan.waypoints.first().map(|waypoint| waypoint.id.clone()))
+pub const PREVIOUS: &str = "waypoint-previous";
+pub const NEXT: &str = "waypoint-next";
+
+const BOX_COLUMNS: usize = 72;
+const BOX_ROWS: usize = 8;
+
+pub struct ContextBox {
+    pub line: usize,
+    pub width: usize,
+    pub rows: Vec<crate::preview::Row>,
+    pub scroll: usize,
+}
+
+impl ContextBox {
+    pub fn shown(&self) -> &[crate::preview::Row] {
+        let end = (self.scroll + BOX_ROWS).min(self.rows.len());
+        &self.rows[self.scroll.min(end)..end]
+    }
+
+    pub fn last_scroll(&self) -> usize {
+        self.rows.len().saturating_sub(BOX_ROWS)
+    }
+
+    pub fn placement(&self) -> crate::lsp::Placement {
+        crate::lsp::Placement {
+            from: self.line + 1,
+            column: 1,
+            width: self.width,
+            rows: self.shown().len() + 2,
+        }
+    }
+}
+
+pub fn current(state: &crate::State) -> Option<&Waypoint> {
+    let session = state.walkthrough.as_ref()?;
+    let id = session.current.as_deref()?;
+    session
+        .plan
+        .as_ref()?
+        .waypoints
+        .iter()
+        .find(|waypoint| waypoint.id == id)
+}
+
+fn shown_context(state: &crate::State) -> Option<&Waypoint> {
+    current(state).filter(|waypoint| {
+        waypoint.kind == Kind::Context
+            && state.current_buffer.as_deref() == Some(state.root.join(&waypoint.file).as_path())
+    })
+}
+
+pub fn context_mark(state: &crate::State, path: &Path, line: usize) -> bool {
+    shown_context(state)
+        .is_some_and(|waypoint| waypoint.line == line && state.root.join(&waypoint.file) == path)
+}
+
+pub fn context_box(state: &crate::State) -> Option<ContextBox> {
+    let waypoint = shown_context(state)?;
+    let width = BOX_COLUMNS.min(crate::panes_of(state).editor.width as usize);
+    let rows = crate::preview::rows(&waypoint.text, width.saturating_sub(2));
+    Some(ContextBox {
+        line: waypoint.line,
+        width,
+        scroll: state
+            .walkthrough
+            .as_ref()
+            .and_then(|session| session.reading)
+            .unwrap_or(0),
+        rows,
+    })
+}
+
+pub fn transport(state: &crate::State) -> Vec<crate::Chip> {
+    use crate::{Chip, Hue, Tone};
+    if current(state).is_none() {
+        return Vec::new();
+    }
+    let chip = |action, name, glyph: &str, keys| Chip {
+        action,
+        name,
+        glyph: glyph.to_string(),
+        keys,
+        word: "",
+        hue: Hue::Step,
+        tone: Tone::Plain,
+    };
+    vec![
+        chip(PREVIOUS, "previous", "\u{ab}", "["),
+        chip(NEXT, "next", "\u{bb}", "]"),
+    ]
 }
 
 impl Failure {
@@ -274,9 +364,75 @@ pub fn check(plan: &Plan, lines: &BTreeMap<String, usize>) -> Result<(), Failure
     }
 }
 
+pub fn comment_token(file: &str) -> &'static str {
+    match Path::new(file)
+        .extension()
+        .and_then(|extension| extension.to_str())
+    {
+        Some(
+            "py" | "sh" | "bash" | "zsh" | "rb" | "toml" | "yaml" | "yml" | "pl" | "r" | "ex"
+            | "exs",
+        ) => "#",
+        Some("sql" | "lua" | "hs" | "elm") => "--",
+        _ => "//",
+    }
+}
+
+pub fn with_comment(text: &str, line: usize, token: &str, comment: &str) -> String {
+    let mut lines: Vec<&str> = text.split('\n').collect();
+    let at = line.saturating_sub(1).min(lines.len());
+    let held = lines.get(at).copied().unwrap_or_default();
+    let indent = &held[..held.len() - held.trim_start().len()];
+    let commented = format!("{indent}{token} {comment}");
+    lines.splice(at..at, [commented.as_str(), indent]);
+    lines.join("\n")
+}
+
+pub fn follow(waypoints: &mut [Waypoint], file: &str, old: &str, new: &str) {
+    let carried = crate::debug::carry(old, new);
+    let last = new.split('\n').count();
+    for waypoint in waypoints
+        .iter_mut()
+        .filter(|waypoint| waypoint.file == file)
+    {
+        let (Ok(line) | Err(line)) = carried(waypoint.line);
+        waypoint.line = line.clamp(1, last);
+    }
+}
+
+pub fn step<'a>(
+    plan: &'a Plan,
+    from: Option<&str>,
+    direction: crate::Direction,
+) -> Option<&'a str> {
+    let at = plan
+        .waypoints
+        .iter()
+        .position(|waypoint| Some(waypoint.id.as_str()) == from);
+    let to = match (at, direction) {
+        (None, _) => 0,
+        (Some(at), crate::Direction::Left | crate::Direction::Up) => at.saturating_sub(1),
+        (Some(at), _) => (at + 1).min(plan.waypoints.len().saturating_sub(1)),
+    };
+    plan.waypoints.get(to).map(|waypoint| waypoint.id.as_str())
+}
+
+pub fn landing<'a>(plan: &'a Plan, current: Option<&str>) -> Option<&'a str> {
+    let named = |id: Option<&str>| {
+        plan.waypoints
+            .iter()
+            .find(|waypoint| Some(waypoint.id.as_str()) == id)
+    };
+    named(plan.checkpoint.as_deref())
+        .or_else(|| named(current))
+        .or(plan.waypoints.first())
+        .map(|waypoint| waypoint.id.as_str())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Direction;
 
     fn plan(waypoints: &str) -> String {
         format!(
@@ -557,5 +713,103 @@ mod tests {
             failure.describe(),
             "w9 line-out-of-range, w1 outside-workspace"
         );
+    }
+
+    #[test]
+    fn a_landing_comment_takes_the_line_and_its_indent_and_opens_one_below() {
+        assert_eq!(
+            with_comment("fn load() {\n    let text = 1;\n}", 2, "//", "Parse it"),
+            "fn load() {\n    // Parse it\n    \n    let text = 1;\n}"
+        );
+    }
+
+    #[test]
+    fn a_landing_comment_takes_the_languages_own_token() {
+        assert_eq!(comment_token("src/plan.rs"), "//");
+        assert_eq!(comment_token("web/app.ts"), "//");
+        assert_eq!(comment_token("scripts/plan.py"), "#");
+        assert_eq!(comment_token("deploy.sh"), "#");
+        assert_eq!(comment_token("db/schema.sql"), "--");
+        assert_eq!(
+            with_comment("import os\nprint(os.name)", 2, "#", "Read the plan"),
+            "import os\n# Read the plan\n\nprint(os.name)"
+        );
+    }
+
+    #[test]
+    fn a_landing_comment_in_an_empty_file_is_its_first_line() {
+        assert_eq!(with_comment("", 1, "//", "Start"), "// Start\n\n");
+    }
+
+    fn followed(old: &str, new: &str) -> Vec<usize> {
+        let mut waypoints: Vec<Waypoint> = parse(&plan(&format!(
+            "{}, {}, {}",
+            waypoint("w1", "a.rs", 2),
+            waypoint("w2", "a.rs", 4),
+            waypoint("w3", "b.rs", 2)
+        )))
+        .expect("a plan")
+        .waypoints;
+        follow(&mut waypoints, "a.rs", old, new);
+        waypoints.iter().map(|waypoint| waypoint.line).collect()
+    }
+
+    #[test]
+    fn a_waypoint_moves_with_lines_inserted_or_deleted_above_it() {
+        let old = "a\nb\nc\nd\ne";
+        assert_eq!(followed(old, "new\na\nb\nc\nd\ne"), [3, 5, 2]);
+        assert_eq!(followed(old, "a\nb\nnew\nnew\nc\nd\ne"), [2, 6, 2]);
+        assert_eq!(followed(old, "b\nc\nd\ne"), [1, 3, 2]);
+        assert_eq!(followed(old, "a\nb\nd\ne"), [2, 3, 2]);
+    }
+
+    #[test]
+    fn a_waypoint_stays_with_lines_inserted_or_deleted_below_it() {
+        let old = "a\nb\nc\nd\ne";
+        assert_eq!(followed(old, "a\nb\nc\nd\ne\nnew"), [2, 4, 2]);
+        assert_eq!(followed(old, "a\nb\nc\nd"), [2, 4, 2]);
+    }
+
+    #[test]
+    fn a_waypoint_stays_on_its_own_line_when_that_line_is_edited_or_deleted() {
+        let old = "a\nb\nc\nd\ne";
+        assert_eq!(followed(old, "a\nb edited\nc\nd\ne"), [2, 4, 2]);
+        assert_eq!(followed(old, "a\nc\nd\ne"), [2, 3, 2]);
+        assert_eq!(followed(old, "a\nb\nc\nd"), [2, 4, 2]);
+        assert_eq!(followed(old, "a\nb\nc"), [2, 3, 2]);
+    }
+
+    #[test]
+    fn stepping_stays_at_either_end_of_the_plan() {
+        let parsed = parse(&plan(&format!(
+            "{}, {}",
+            waypoint("w1", "a.rs", 1),
+            waypoint("w2", "b.rs", 1)
+        )))
+        .expect("a plan");
+        let stepped = |from: &str, direction| step(&parsed, Some(from), direction);
+        assert_eq!(stepped("w1", Direction::Right), Some("w2"));
+        assert_eq!(stepped("w2", Direction::Right), Some("w2"));
+        assert_eq!(stepped("w2", Direction::Left), Some("w1"));
+        assert_eq!(stepped("w1", Direction::Left), Some("w1"));
+        assert_eq!(step(&parsed, None, Direction::Right), Some("w1"));
+    }
+
+    #[test]
+    fn a_plan_lands_on_its_checkpoint_or_else_its_first_waypoint() {
+        let text = plan(&format!(
+            "{}, {}",
+            waypoint("w1", "a.rs", 1),
+            waypoint("w2", "b.rs", 1)
+        ));
+        let named =
+            parse(&text.replace(r#""checkpoint": "w1""#, r#""checkpoint": "w2""#)).expect("a plan");
+        let unnamed =
+            parse(&text.replace(r#""checkpoint": "w1""#, r#""checkpoint": null"#)).expect("a plan");
+        assert_eq!(landing(&named, None), Some("w2"));
+        assert_eq!(landing(&named, Some("w1")), Some("w2"));
+        assert_eq!(landing(&unnamed, None), Some("w1"));
+        assert_eq!(landing(&unnamed, Some("w2")), Some("w2"));
+        assert_eq!(landing(&unnamed, Some("gone")), Some("w1"));
     }
 }

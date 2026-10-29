@@ -3622,7 +3622,8 @@ it; the original line moves down. The cursor waits there in normal mode. Never b
 twice; Varde records each inserted comment (Q68).
 **R52.12** A context Waypoint writes nothing and is never evaluated. Its lines carry the context
 mark and a bordered box under them renders its Markdown with the Preview renderer, **at most 72
-columns or the pane's width**, scrolled by `j`/`k` while it has focus.
+columns or the pane's width**, scrolled by `j`/`k` while it has focus. Landing on it gives the
+box focus; `Esc` hands `j` and `k` back to the cursor.
 **R52.13** `[` and `]`, and the Transport's previous and next Chips, step between Waypoints; past
 either end they stay. **No verdict blocks a step.**
 **R52.14** Waypoint lines **move with edits above them**, Varde's own landing comments included. A

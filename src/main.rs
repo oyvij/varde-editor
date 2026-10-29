@@ -111,6 +111,9 @@ fn main() -> Result<()> {
             .collect(),
         state_json: read(&varde_dir(&root, sidecar.as_deref()).join(STATE_FILE)),
         risk_json: read(&varde_dir(&root, sidecar.as_deref()).join(varde::risk::FILE)),
+        walkthrough_json: read(
+            &varde_dir(&root, sidecar.as_deref()).join(varde::walkthrough::FILE),
+        ),
         head: head_commit(&root),
         repo: git_status(&root),
         reviews: numbered(&varde::reviews_dir(&root, sidecar.as_deref(), &varde_home)),
@@ -2827,6 +2830,16 @@ fn perform_files(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>) -
     None
 }
 
+fn resolved(folder: &Path) -> PathBuf {
+    folder
+        .ancestors()
+        .find_map(|ancestor| {
+            let real = std::fs::canonicalize(ancestor).ok()?;
+            Some(real.join(folder.strip_prefix(ancestor).ok()?))
+        })
+        .unwrap_or_else(|| folder.to_path_buf())
+}
+
 fn perform_jobs(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>) {
     match effect {
         Effect::RunSearch(request) => {
@@ -2937,6 +2950,11 @@ fn perform_jobs(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>) {
             };
             let read = file_hunks(&repo, inventory, &files);
             queue.push_back(Event::StoryFiles(read));
+        }
+        Effect::ResolveWrite(path) => {
+            let folder = resolved(path.parent().unwrap_or(&edge.root));
+            let root = resolved(&edge.root);
+            queue.push_back(Event::WriteResolved { path, folder, root });
         }
         Effect::ReadWalkthroughFiles { root, plan, files } => {
             let lines = files
@@ -3835,6 +3853,11 @@ fn diff_lines(root: &Path, path: &Path) -> Diff {
 
 const NOTICES: &[(&str, &str, ui::Tone)] = &[
     (
+        "outside-workspace",
+        "Not written — that path resolves outside this workspace",
+        ui::Tone::Warning,
+    ),
+    (
         "walkthrough-command-failed",
         "The walkthrough command failed",
         ui::Tone::Warning,
@@ -4357,9 +4380,9 @@ fn queue_story_file(path: &Path, state: &State, queue: &mut VecDeque<Event>) {
 mod tests {
     use super::{
         alive, authorship, canonical, checkout, committed, describe, file_hunks, flatten, found,
-        hint, language, notice_text, path_status, pid_of, range_ends, read_branches, rewrite,
-        root_and_sidecar, samples, short_date, sidecar, space, stitch, sweep, trash, watched_path,
-        Args, ClapParser,
+        hint, language, notice_text, path_status, pid_of, range_ends, read_branches, resolved,
+        rewrite, root_and_sidecar, samples, short_date, sidecar, space, stitch, sweep, trash,
+        watched_path, Args, ClapParser,
     };
     use notify::event::{CreateKind, DataChange, ModifyKind, RenameMode};
     use std::collections::BTreeMap;
@@ -5263,6 +5286,20 @@ mod tests {
                 Event::WalkthroughChanged("{}".to_string()),
             ]
         );
+    }
+
+    #[test]
+    fn a_folder_to_create_resolves_through_the_links_above_it() {
+        let root = tempfile::tempdir().expect("a temp directory");
+        let elsewhere = tempfile::tempdir().expect("a temp directory");
+        let root_path = resolved(root.path());
+        fs::create_dir(root.path().join("src")).expect("the fixture folder");
+        std::os::unix::fs::symlink(elsewhere.path(), root.path().join("linked"))
+            .expect("the fixture link");
+
+        assert!(resolved(&root.path().join("src/guide/deeper")).starts_with(&root_path));
+        assert!(!resolved(&root.path().join("linked/guide")).starts_with(&root_path));
+        assert!(resolved(&root.path().join("linked/guide")).starts_with(resolved(elsewhere.path())));
     }
 
     #[test]

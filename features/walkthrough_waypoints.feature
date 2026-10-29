@@ -13,7 +13,8 @@ Feature: Walking a Walkthrough's Waypoints in Edit view
 
   A context Waypoint writes nothing. Its lines carry a blue gutter mark and a bordered box under
   them holds its Markdown, rendered by the Preview, at most 72 columns wide or the pane's width, and
-  scrolled with `j` and `k` when it has focus.
+  scrolled with `j` and `k` when it has focus. Landing on it gives the box focus, and `Esc` hands `j`
+  and `k` back to the cursor.
 
   `[` and `]` step to the previous and next Waypoint, and so do the previous and next Chips on the
   editor's Transport. A verdict never blocks a step. Waypoint lines move with edits above them, the
@@ -154,6 +155,14 @@ Feature: Walking a Walkthrough's Waypoints in Edit view
       And I pressed "j"
       When I press "k"
       Then the context box is scrolled 0 rows
+
+    Scenario: Escape hands j and k back to the cursor
+      Given the editor pane is 30 columns wide
+      And the context box has focus
+      And I press "Escape" in the editor
+      When I press "j" in the editor
+      Then the context box is scrolled 0 rows
+      And the cursor is on line 5 of "src/lib.rs"
 
     Scenario: The context box wraps its Markdown inside its width
       Given the editor pane is 30 columns wide

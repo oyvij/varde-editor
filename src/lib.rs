@@ -607,6 +607,13 @@ pub enum Event {
     WalkthroughChanged(String),
     WalkthroughCommandExited(Option<i32>),
     OpenGuide,
+    StepWaypoint(Direction),
+    ScrollContextBox(Direction),
+    WriteResolved {
+        path: PathBuf,
+        folder: PathBuf,
+        root: PathBuf,
+    },
     WalkthroughFiles {
         plan: walkthrough::Plan,
         lines: BTreeMap<String, usize>,
@@ -985,6 +992,7 @@ pub enum Effect {
         plan: walkthrough::Plan,
         files: Vec<String>,
     },
+    ResolveWrite(PathBuf),
     WriteStoryContext {
         repo: PathBuf,
         spelling: String,
@@ -1880,6 +1888,7 @@ pub fn update(state: &State, event: Event) -> (State, Vec<Effect>) {
     if moved {
         effects.push(Effect::SaveState(state_json(&next)));
     }
+    anchor_waypoints(state, &mut next);
     debug::forget_changed(&state.breakpoints, &mut next);
     if next.shown_root() != state.shown_root() && !next.filter.is_empty() {
         effects.extend(filter::reindex(&mut next));
@@ -1894,6 +1903,42 @@ pub fn update(state: &State, event: Event) -> (State, Vec<Effect>) {
     }
     effects.extend(lsp::sync(&mut next));
     (next, effects)
+}
+
+fn anchor_waypoints(state: &State, next: &mut State) {
+    let Some(session) = next.walkthrough.as_mut() else {
+        return;
+    };
+    let before = state.walkthrough.as_ref();
+    let Some(plan) = session.plan.as_mut() else {
+        return;
+    };
+    for (path, buffer) in &next.buffers {
+        let old = match state.buffers.get(path) {
+            Some(was) if was.revision() == buffer.revision() => continue,
+            Some(was) => was.shown(),
+            None => buffer.disk.as_str(),
+        };
+        let file = relative(&next.root, path);
+        if old == buffer.shown() || plan.waypoints.iter().all(|waypoint| waypoint.file != file) {
+            continue;
+        }
+        let landed: Vec<(usize, usize)> = plan
+            .waypoints
+            .iter()
+            .enumerate()
+            .filter(|(_, waypoint)| {
+                waypoint.file == file
+                    && session.inserted.contains(&waypoint.id)
+                    && before.is_none_or(|before| !before.inserted.contains(&waypoint.id))
+            })
+            .map(|(index, waypoint)| (index, waypoint.line))
+            .collect();
+        walkthrough::follow(&mut plan.waypoints, &file, old, buffer.shown());
+        for (index, line) in landed {
+            plan.waypoints[index].line = line;
+        }
+    }
 }
 
 fn route(state: &State, event: Event) -> (State, Vec<Effect>) {
@@ -2238,7 +2283,7 @@ fn on_inquiry(mut next: State, event: Event, wheeled: bool) -> Answered {
                 }
                 Some(session) => walkthrough::Request {
                     action: walkthrough::Action::Adjust,
-                    waypoint: walkthrough::current(session),
+                    waypoint: session.current.clone(),
                     detail: format!("The developer says: {said}"),
                 },
             };
@@ -2874,7 +2919,34 @@ fn on_tapped(state: &State, mut next: State, event: Event, wheeled: bool) -> Ans
     Ok(settle(next, effects, wheeled))
 }
 
+fn waypoint_key(state: &State, event: &Event) -> Option<Event> {
+    let (Event::Key(key) | Event::EditorKey(key)) = event else {
+        return None;
+    };
+    let walking = walkthrough::current(state).is_some()
+        && state.focus == Pane::Editor
+        && state.modal == Modal::None
+        && state.edited().is_some_and(|buffer| {
+            buffer.mode == editor::Mode::Normal && buffer.pending().is_empty()
+        });
+    let reading = state
+        .walkthrough
+        .as_ref()
+        .is_some_and(|session| session.reading.is_some())
+        && walkthrough::context_box(state).is_some();
+    match key {
+        '[' if walking => Some(Event::StepWaypoint(Direction::Left)),
+        ']' if walking => Some(Event::StepWaypoint(Direction::Right)),
+        'j' if walking && reading => Some(Event::ScrollContextBox(Direction::Down)),
+        'k' if walking && reading => Some(Event::ScrollContextBox(Direction::Up)),
+        _ => None,
+    }
+}
+
 fn on_key(state: &State, mut next: State, event: Event, wheeled: bool) -> Answered {
+    if let Some(walked) = waypoint_key(state, &event) {
+        return Ok(update(state, walked));
+    }
     let effects = match event {
         Event::Key('t') if state.view == View::Story && state.modal == Modal::None => {
             next.story_listing = match state.story_listing {
@@ -3809,6 +3881,17 @@ fn on_buffer_opened(_state: &State, mut next: State, event: Event, wheeled: bool
             if let Some(at) = at {
                 land_at(&mut next, at);
                 frame_site(&mut next, at);
+            }
+            let opening = next
+                .walkthrough
+                .as_ref()
+                .and_then(|session| session.opening.clone())
+                .filter(|_| {
+                    walkthrough::current(&next)
+                        .is_some_and(|waypoint| next.root.join(&waypoint.file) == path)
+                });
+            if let Some(id) = opening {
+                effects.extend(land(&mut next, &id));
             }
             effects
         }
@@ -4981,6 +5064,18 @@ fn on_editor_escape(state: &State, mut next: State, event: Event, wheeled: bool)
             vec![]
         }
 
+        Event::EditorEscape
+            if state
+                .walkthrough
+                .as_ref()
+                .is_some_and(|session| session.reading.is_some()) =>
+        {
+            if let Some(session) = &mut next.walkthrough {
+                session.reading = None;
+            }
+            vec![]
+        }
+
         Event::EditorEscape => {
             next.modal = Modal::None;
             if current_buffer(&next).is_none_or(|buffer| buffer.mode == editor::Mode::Normal) {
@@ -4999,6 +5094,21 @@ fn on_editor_escape(state: &State, mut next: State, event: Event, wheeled: bool)
 
         Event::WriteBuffer if state.view == View::Knowledge => {
             vec![Effect::Notify("vault-is-read-only")]
+        }
+
+        Event::WriteBuffer
+            if state.walkthrough.as_ref().is_some_and(|session| {
+                state
+                    .current_buffer
+                    .as_deref()
+                    .is_some_and(|path| session.missing.contains(&relative(&state.root, path)))
+            }) =>
+        {
+            next.current_buffer
+                .clone()
+                .map(Effect::ResolveWrite)
+                .into_iter()
+                .collect()
         }
 
         Event::WriteBuffer => match (next.current_buffer.clone(), current(&mut next)) {
@@ -6334,15 +6444,29 @@ fn on_walkthrough(state: &State, mut next: State, event: Event, wheeled: bool) -
             });
             effects
         }
-        (Event::WalkthroughFiles { plan, lines }, Some(_)) => {
+        (Event::WalkthroughFiles { plan, lines }, Some(session)) => {
             match walkthrough::check(&plan, &lines) {
                 Ok(()) => {
-                    if let Some(session) = &mut next.walkthrough {
-                        session.plan = Some(plan);
-                        session.failure = None;
-                        session.fixes = 0;
+                    let resumed = session.current.as_deref().filter(|id| {
+                        session.plan.is_none() && plan.waypoints.iter().any(|w| w.id == *id)
+                    });
+                    let target = resumed
+                        .or_else(|| walkthrough::landing(&plan, session.current.as_deref()))
+                        .map(str::to_string);
+                    let missing = walkthrough::files(&plan)
+                        .into_iter()
+                        .filter(|file| !lines.contains_key(file))
+                        .collect();
+                    if let Some(held) = &mut next.walkthrough {
+                        held.plan = Some(plan);
+                        held.failure = None;
+                        held.fixes = 0;
+                        held.missing = missing;
                     }
-                    vec![]
+                    match target {
+                        Some(id) => land(&mut next, &id),
+                        None => vec![],
+                    }
                 }
                 Err(failure) => refuse_walkthrough(&mut next, failure),
             }
@@ -6370,9 +6494,126 @@ fn on_walkthrough(state: &State, mut next: State, event: Event, wheeled: bool) -
             }
             effects
         }
+        (
+            Event::StepWaypoint(direction),
+            Some(walkthrough::Session {
+                plan: Some(plan),
+                current,
+                ..
+            }),
+        ) => match walkthrough::step(plan, current.as_deref(), direction) {
+            Some(id) => land(&mut next, id),
+            None => vec![],
+        },
+        (
+            Event::ScrollContextBox(direction),
+            Some(walkthrough::Session {
+                reading: Some(scroll),
+                ..
+            }),
+        ) => {
+            let last = walkthrough::context_box(state).map_or(0, |shown| shown.last_scroll());
+            let scrolled = match direction {
+                Direction::Up => scroll.saturating_sub(1),
+                _ => (scroll + 1).min(last),
+            };
+            if let Some(session) = &mut next.walkthrough {
+                session.reading = Some(scrolled);
+            }
+            vec![]
+        }
+        (Event::StepWaypoint(_) | Event::ScrollContextBox(_), _) => vec![],
+        (Event::WriteResolved { path, folder, root }, _) => {
+            match (folder.starts_with(&root), next.buffers.get_mut(&path)) {
+                (false, _) => vec![Effect::Notify("outside-workspace")],
+                (true, None) => vec![],
+                (true, Some(buffer)) => {
+                    let contents = buffer.write();
+                    if let Some(session) = &mut next.walkthrough {
+                        session.missing.remove(&relative(&next.root, &path));
+                    }
+                    vec![
+                        Effect::EnsureDir(path.parent().unwrap_or(&next.root).to_path_buf()),
+                        Effect::WriteFile { path, contents },
+                        Effect::ClearNotice,
+                    ]
+                }
+            }
+        }
         (other, _) => return Err((next, other)),
     };
     Ok(settle(next, effects, wheeled))
+}
+
+fn land(next: &mut State, id: &str) -> Vec<Effect> {
+    let Some(session) = next.walkthrough.as_mut() else {
+        return vec![];
+    };
+    let Some(waypoint) = session
+        .plan
+        .as_ref()
+        .and_then(|plan| plan.waypoints.iter().find(|waypoint| waypoint.id == id))
+        .cloned()
+    else {
+        return vec![];
+    };
+    session.current = Some(waypoint.id.clone());
+    session.reading = (waypoint.kind == walkthrough::Kind::Context).then_some(0);
+    session.opening = None;
+    let missing = session.missing.contains(&waypoint.file);
+    let mut effects = vec![];
+    if next.view != View::Edit {
+        move_to_view(next, View::Edit);
+        effects.push(Effect::RenderView(View::Edit));
+    }
+    next.focus = Pane::Editor;
+    let path = next.root.join(&waypoint.file);
+    if !next.buffers.contains_key(&path) && !missing {
+        if let Some(session) = next.walkthrough.as_mut() {
+            session.opening = Some(waypoint.id.clone());
+        }
+        effects.push(Effect::OpenBuffer(path));
+        return effects;
+    }
+    let first = waypoint.kind == walkthrough::Kind::Code
+        && next
+            .walkthrough
+            .as_mut()
+            .is_some_and(|session| session.inserted.insert(waypoint.id.clone()));
+    let tab_width = next.tab_width;
+    let buffer = next
+        .buffers
+        .entry(path.clone())
+        .or_insert_with(|| Buffer::open("", preview::is_markdown(&path), tab_width));
+    buffer.escape();
+    match waypoint.kind {
+        walkthrough::Kind::Context => buffer.go_to_place(Place {
+            line: waypoint.line,
+            column: 1,
+        }),
+        walkthrough::Kind::Code => {
+            if first {
+                let commented = walkthrough::with_comment(
+                    buffer.shown(),
+                    waypoint.line,
+                    walkthrough::comment_token(&waypoint.file),
+                    &waypoint.text,
+                );
+                buffer.rewrite(&commented);
+            }
+            buffer.go_to_place(Place {
+                line: waypoint.line + 1,
+                column: 1,
+            });
+            let indent = buffer.line_text(buffer.line).map_or(0, |text| {
+                text.chars().take_while(|c| c.is_whitespace()).count()
+            });
+            buffer.column = indent + 1;
+        }
+    }
+    next.current_buffer = Some(path);
+    effects.push(Effect::SaveState(state_json(next)));
+    effects
 }
 
 fn refuse_walkthrough(next: &mut State, failure: walkthrough::Failure) -> Vec<Effect> {
@@ -6385,7 +6626,7 @@ fn refuse_walkthrough(next: &mut State, failure: walkthrough::Failure) -> Vec<Ef
     };
     let fix = (session.fixes < story::ATTEMPTS).then(|| walkthrough::Request {
         action: walkthrough::Action::Fix,
-        waypoint: walkthrough::current(session),
+        waypoint: session.current.clone(),
         detail: format!("Refused: {}", failure.describe()),
     });
     session.failure = Some(failure);
@@ -6766,6 +7007,12 @@ fn on_pane_action(state: &State, mut next: State, event: Event, wheeled: bool) -
         Event::PaneAction(reading::PREVIOUS) => return Ok(update(state, Event::PreviousUtterance)),
         Event::PaneAction(reading::PLAY_PAUSE) => return Ok(update(state, Event::PlayPause)),
         Event::PaneAction(reading::NEXT) => return Ok(update(state, Event::NextUtterance)),
+        Event::PaneAction(walkthrough::PREVIOUS) => {
+            return Ok(update(state, Event::StepWaypoint(Direction::Left)))
+        }
+        Event::PaneAction(walkthrough::NEXT) => {
+            return Ok(update(state, Event::StepWaypoint(Direction::Right)))
+        }
         Event::PaneAction(reading::STOP) => return Ok(update(state, Event::StopReading)),
         Event::PaneAction(reading::SPEED) => {
             return Ok(update(
@@ -7828,6 +8075,12 @@ pub(crate) fn state_json(state: &State) -> String {
         "buffers": buffers,
         "current_buffer": state.current_buffer.as_deref().and_then(relative),
         "breakpoints": breakpoints,
+        "walkthrough": state.walkthrough.as_ref().and_then(|session| {
+            session.current.as_ref().map(|current| serde_json::json!({
+                "current": current,
+                "inserted": session.inserted,
+            }))
+        }),
         "snippets": state.snippets,
         "exception_filters": state.exception_filters,
         "evaluator": state.evaluator_at.map(|at| serde_json::json!({
@@ -8195,7 +8448,11 @@ pub fn editor_chips(state: &State) -> Vec<Chip> {
         tone: Tone::Plain,
     });
     chips.push(inject_chip());
-    chips.extend(reading::transport(state));
+    let walking = walkthrough::transport(state);
+    match walking.is_empty() {
+        true => chips.extend(reading::transport(state)),
+        false => chips.extend(walking),
+    }
     chips
 }
 
