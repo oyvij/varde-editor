@@ -383,21 +383,20 @@ pub fn held(text: &str, line: usize) -> Option<&str> {
     Some(text.split('\n').nth(line.checked_sub(1)?)?.trim())
 }
 
-pub fn follow(breakpoints: &mut Vec<Breakpoint>, file: &std::path::Path, old: &str, new: &str) {
+pub fn carry(old: &str, new: &str) -> impl Fn(usize) -> Result<usize, usize> {
     let mut options = git2::DiffOptions::new();
     options.context_lines(0);
-    let Ok(patch) = git2::Patch::from_buffers(
+    let patch = git2::Patch::from_buffers(
         old.as_bytes(),
         None,
         new.as_bytes(),
         None,
         Some(&mut options),
-    ) else {
-        return;
-    };
+    );
     // A hunk side holding no lines names the line it sits after, not the first line it holds
-    let hunks: Vec<(usize, usize, usize, usize)> = (0..patch.num_hunks())
-        .filter_map(|index| patch.hunk(index).ok())
+    let hunks: Vec<(usize, usize, usize, usize)> = patch
+        .iter()
+        .flat_map(|patch| (0..patch.num_hunks()).filter_map(|index| patch.hunk(index).ok()))
         .map(|(hunk, _)| {
             let (old_lines, new_lines) = (hunk.old_lines() as usize, hunk.new_lines() as usize);
             let start = |at: u32, lines: usize| at as usize + usize::from(lines == 0);
@@ -409,7 +408,7 @@ pub fn follow(breakpoints: &mut Vec<Breakpoint>, file: &std::path::Path, old: &s
             )
         })
         .collect();
-    let carried = |line: usize| {
+    move |line: usize| {
         let mut offset = 0isize;
         for &(old_start, old_lines, new_start, new_lines) in &hunks {
             if line < old_start {
@@ -420,15 +419,22 @@ pub fn follow(breakpoints: &mut Vec<Breakpoint>, file: &std::path::Path, old: &s
                 continue;
             }
             let within = line - old_start;
-            return (within < new_lines).then_some(new_start + within);
+            return match within < new_lines {
+                true => Ok(new_start + within),
+                false => Err(new_start + new_lines),
+            };
         }
-        usize::try_from(line as isize + offset).ok()
-    };
+        Ok(line.saturating_add_signed(offset))
+    }
+}
+
+pub fn follow(breakpoints: &mut Vec<Breakpoint>, file: &std::path::Path, old: &str, new: &str) {
+    let carried = carry(old, new);
     breakpoints.retain_mut(|breakpoint| {
         if breakpoint.file != file {
             return true;
         }
-        let Some(line) = carried(breakpoint.line) else {
+        let Ok(line) = carried(breakpoint.line) else {
             return false;
         };
         breakpoint.line = line;

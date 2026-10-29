@@ -14,7 +14,7 @@ Feature: Predictions make the reviewer commit to a reason
   answer on the first wrong pick removes any reason to think afterwards. Only a correct pick replaces
   the choices.
 
-  The Walkthrough records that a Prediction was put to the reviewer, never which choice they picked.
+  The Story position records that a Prediction was put to the reviewer, never which choice they picked.
   A stored history of wrong answers is a score by another name, and this is a senior reviewer reading
   a colleague's change, not a learner being assessed.
 
@@ -80,12 +80,12 @@ Feature: Predictions make the reviewer commit to a reason
     Then the overlay is "none"
     And I am walking "Keys reach the child"
 
-  Scenario: The walkthrough never records which choice was picked
+  Scenario: The story position never records which choice was picked
     Given I am walking "Keys reach the child"
     And I pressed "n"
     When I press "2"
-    Then the walkthrough records step 2 as put
-    And the walkthrough holds no choice
+    Then the story position records step 2 as put
+    And the story position holds no choice
 
   Scenario: A prediction already put is not asked again
     Given I am walking "Keys reach the child"

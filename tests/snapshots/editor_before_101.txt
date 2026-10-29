@@ -2,7 +2,7 @@ fixture 0 scrolled 0
 Buffer {
     area: Rect { x: 0, y: 0, width: 60, height: 16 },
     content: [
-        "╭main.rs  [visual]─────────────────── ▶ AI Inject :inject ─╮",
+        "╭main.rs  [visual]───────────────────────────────── ◆ ─ ▶ ─╮",
         "│▶    1 ▼  fn·step1(count:·usize)·{                        │",
         "│     2    │···let·count·=·count·+·2;·//·step              │",
         "│     3▌   │···let·count·=·count·+·3;·//·step              │",
@@ -21,8 +21,9 @@ Buffer {
     ],
     styles: [
         x: 0, y: 0, fg: Cyan, bg: Reset, underline: Reset, modifier: NONE,
-        x: 37, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
-        x: 49, y: 0, fg: DarkGray, bg: Reset, underline: Reset, modifier: NONE,
+        x: 51, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 54, y: 0, fg: Cyan, bg: Reset, underline: Reset, modifier: NONE,
+        x: 55, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 58, y: 0, fg: Cyan, bg: Reset, underline: Reset, modifier: NONE,
         x: 1, y: 1, fg: Green, bg: Reset, underline: Reset, modifier: NONE,
         x: 2, y: 1, fg: DarkGray, bg: Reset, underline: Reset, modifier: NONE,
@@ -190,7 +191,7 @@ fixture 0 scrolled 1
 Buffer {
     area: Rect { x: 0, y: 0, width: 60, height: 16 },
     content: [
-        "╭main.rs  [visual]─────────────────── ▶ AI Inject :inject ─╮",
+        "╭main.rs  [visual]───────────────────────────────── ◆ ─ ▶ ─╮",
         "│     2    │···let·count·=·count·+·2;·//·step              │",
         "│     3▌   │···let·count·=·count·+·3;·//·step              │",
         "│     4 ▼  │···if·count·>·3·{                              │",
@@ -209,8 +210,9 @@ Buffer {
     ],
     styles: [
         x: 0, y: 0, fg: Cyan, bg: Reset, underline: Reset, modifier: NONE,
-        x: 37, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
-        x: 49, y: 0, fg: DarkGray, bg: Reset, underline: Reset, modifier: NONE,
+        x: 51, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 54, y: 0, fg: Cyan, bg: Reset, underline: Reset, modifier: NONE,
+        x: 55, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 58, y: 0, fg: Cyan, bg: Reset, underline: Reset, modifier: NONE,
         x: 1, y: 1, fg: DarkGray, bg: Reset, underline: Reset, modifier: NONE,
         x: 11, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
@@ -380,7 +382,7 @@ fixture 0 scrolled 5
 Buffer {
     area: Rect { x: 0, y: 0, width: 60, height: 16 },
     content: [
-        "╭main.rs  [visual]─────────────────── ▶ AI Inject :inject ─╮",
+        "╭main.rs  [visual]───────────────────────────────── ◆ ─ ▶ ─╮",
         "│     6    │···}                                           │",
         "│     7    }                                               │",
         "│     8                                                    │",
@@ -399,8 +401,9 @@ Buffer {
     ],
     styles: [
         x: 0, y: 0, fg: Cyan, bg: Reset, underline: Reset, modifier: NONE,
-        x: 37, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
-        x: 49, y: 0, fg: DarkGray, bg: Reset, underline: Reset, modifier: NONE,
+        x: 51, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 54, y: 0, fg: Cyan, bg: Reset, underline: Reset, modifier: NONE,
+        x: 55, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 58, y: 0, fg: Cyan, bg: Reset, underline: Reset, modifier: NONE,
         x: 1, y: 1, fg: DarkGray, bg: Reset, underline: Reset, modifier: NONE,
         x: 11, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
@@ -555,7 +558,7 @@ fixture 0 scrolled 7
 Buffer {
     area: Rect { x: 0, y: 0, width: 60, height: 16 },
     content: [
-        "╭main.rs  [visual]─────────────────── ▶ AI Inject :inject ─╮",
+        "╭main.rs  [visual]───────────────────────────────── ◆ ─ ▶ ─╮",
         "│     8                                                    │",
         "│     9 ►  fn·step9(count:·usize)·{⋯                       │",
         "│    15    }                                               │",
@@ -574,8 +577,9 @@ Buffer {
     ],
     styles: [
         x: 0, y: 0, fg: Cyan, bg: Reset, underline: Reset, modifier: NONE,
-        x: 37, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
-        x: 49, y: 0, fg: DarkGray, bg: Reset, underline: Reset, modifier: NONE,
+        x: 51, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 54, y: 0, fg: Cyan, bg: Reset, underline: Reset, modifier: NONE,
+        x: 55, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 58, y: 0, fg: Cyan, bg: Reset, underline: Reset, modifier: NONE,
         x: 1, y: 1, fg: DarkGray, bg: Reset, underline: Reset, modifier: NONE,
         x: 11, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
@@ -728,7 +732,7 @@ fixture 0 scrolled 8
 Buffer {
     area: Rect { x: 0, y: 0, width: 60, height: 16 },
     content: [
-        "╭main.rs  [visual]─────────────────── ▶ AI Inject :inject ─╮",
+        "╭main.rs  [visual]───────────────────────────────── ◆ ─ ▶ ─╮",
         "│     9 ►  fn·step9(count:·usize)·{⋯                       │",
         "│    15    }                                               │",
         "│    16                                                    │",
@@ -747,8 +751,9 @@ Buffer {
     ],
     styles: [
         x: 0, y: 0, fg: Cyan, bg: Reset, underline: Reset, modifier: NONE,
-        x: 37, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
-        x: 49, y: 0, fg: DarkGray, bg: Reset, underline: Reset, modifier: NONE,
+        x: 51, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 54, y: 0, fg: Cyan, bg: Reset, underline: Reset, modifier: NONE,
+        x: 55, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 58, y: 0, fg: Cyan, bg: Reset, underline: Reset, modifier: NONE,
         x: 1, y: 1, fg: DarkGray, bg: Reset, underline: Reset, modifier: NONE,
         x: 8, y: 1, fg: Cyan, bg: Reset, underline: Reset, modifier: NONE,
@@ -915,7 +920,7 @@ fixture 0 scrolled 17
 Buffer {
     area: Rect { x: 0, y: 0, width: 60, height: 16 },
     content: [
-        "╭main.rs  [visual]─────────────────── ▶ AI Inject :inject ─╮",
+        "╭main.rs  [visual]───────────────────────────────── ◆ ─ ▶ ─╮",
         "│    23    }                                               │",
         "│    24                                                    │",
         "│    25 ▼  fn·step25(count:·usize)·{                       │",
@@ -934,8 +939,9 @@ Buffer {
     ],
     styles: [
         x: 0, y: 0, fg: Cyan, bg: Reset, underline: Reset, modifier: NONE,
-        x: 37, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
-        x: 49, y: 0, fg: DarkGray, bg: Reset, underline: Reset, modifier: NONE,
+        x: 51, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 54, y: 0, fg: Cyan, bg: Reset, underline: Reset, modifier: NONE,
+        x: 55, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 58, y: 0, fg: Cyan, bg: Reset, underline: Reset, modifier: NONE,
         x: 1, y: 1, fg: DarkGray, bg: Reset, underline: Reset, modifier: NONE,
         x: 11, y: 1, fg: Indexed(245), bg: Indexed(236), underline: Reset, modifier: NONE,
@@ -1086,7 +1092,7 @@ fixture 0 scrolled 30
 Buffer {
     area: Rect { x: 0, y: 0, width: 60, height: 16 },
     content: [
-        "╭main.rs  [visual]─────────────────── ▶ AI Inject :inject ─╮",
+        "╭main.rs  [visual]───────────────────────────────── ◆ ─ ▶ ─╮",
         "│▶   41 ▼  fn·step41(count:·usize)·{                       │",
         "│    42    │···let·count·=·count·+·42;·//·step             │",
         "│    43    │···let·count·=·count·+·43;·//·step             │",
@@ -1105,8 +1111,9 @@ Buffer {
     ],
     styles: [
         x: 0, y: 0, fg: Cyan, bg: Reset, underline: Reset, modifier: NONE,
-        x: 37, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
-        x: 49, y: 0, fg: DarkGray, bg: Reset, underline: Reset, modifier: NONE,
+        x: 51, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 54, y: 0, fg: Cyan, bg: Reset, underline: Reset, modifier: NONE,
+        x: 55, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 58, y: 0, fg: Cyan, bg: Reset, underline: Reset, modifier: NONE,
         x: 1, y: 1, fg: Green, bg: Reset, underline: Reset, modifier: NONE,
         x: 2, y: 1, fg: DarkGray, bg: Reset, underline: Reset, modifier: NONE,
@@ -1301,7 +1308,7 @@ fixture 0 scrolled 44
 Buffer {
     area: Rect { x: 0, y: 0, width: 60, height: 16 },
     content: [
-        "╭main.rs  [visual]─────────────────── ▶ AI Inject :inject ─╮",
+        "╭main.rs  [visual]───────────────────────────────── ◆ ─ ▶ ─╮",
         "│    55    }                                               │",
         "│    56                                                    │",
         "│▶   57 ▼  fn·step57(count:·usize)·{                       │",
@@ -1320,8 +1327,9 @@ Buffer {
     ],
     styles: [
         x: 0, y: 0, fg: Cyan, bg: Reset, underline: Reset, modifier: NONE,
-        x: 37, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
-        x: 49, y: 0, fg: DarkGray, bg: Reset, underline: Reset, modifier: NONE,
+        x: 51, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 54, y: 0, fg: Cyan, bg: Reset, underline: Reset, modifier: NONE,
+        x: 55, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 58, y: 0, fg: Cyan, bg: Reset, underline: Reset, modifier: NONE,
         x: 1, y: 1, fg: DarkGray, bg: Reset, underline: Reset, modifier: NONE,
         x: 11, y: 1, fg: Indexed(245), bg: Reset, underline: Reset, modifier: NONE,
@@ -1456,7 +1464,7 @@ fixture 0 scrolled 49
 Buffer {
     area: Rect { x: 0, y: 0, width: 60, height: 16 },
     content: [
-        "╭main.rs  [visual]─────────────────── ▶ AI Inject :inject ─╮",
+        "╭main.rs  [visual]───────────────────────────────── ◆ ─ ▶ ─╮",
         "│    60 ▼  │···if·count·>·3·{                              │",
         "│    61    │···│···println!("{count}·61");                 │",
         "│    62    │···}                                           │",
@@ -1475,8 +1483,9 @@ Buffer {
     ],
     styles: [
         x: 0, y: 0, fg: Cyan, bg: Reset, underline: Reset, modifier: NONE,
-        x: 37, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
-        x: 49, y: 0, fg: DarkGray, bg: Reset, underline: Reset, modifier: NONE,
+        x: 51, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 54, y: 0, fg: Cyan, bg: Reset, underline: Reset, modifier: NONE,
+        x: 55, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 58, y: 0, fg: Cyan, bg: Reset, underline: Reset, modifier: NONE,
         x: 1, y: 1, fg: DarkGray, bg: Reset, underline: Reset, modifier: NONE,
         x: 8, y: 1, fg: Cyan, bg: Reset, underline: Reset, modifier: NONE,
@@ -1556,7 +1565,7 @@ fixture 0 scrolled 60
 Buffer {
     area: Rect { x: 0, y: 0, width: 60, height: 16 },
     content: [
-        "╭main.rs  [visual]─────────────────── ▶ AI Inject :inject ─╮",
+        "╭main.rs  [visual]───────────────────────────────── ◆ ─ ▶ ─╮",
         "│                                                          │",
         "│                                                          │",
         "│                                                          │",
@@ -1575,8 +1584,9 @@ Buffer {
     ],
     styles: [
         x: 0, y: 0, fg: Cyan, bg: Reset, underline: Reset, modifier: NONE,
-        x: 37, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
-        x: 49, y: 0, fg: DarkGray, bg: Reset, underline: Reset, modifier: NONE,
+        x: 51, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 54, y: 0, fg: Cyan, bg: Reset, underline: Reset, modifier: NONE,
+        x: 55, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 58, y: 0, fg: Cyan, bg: Reset, underline: Reset, modifier: NONE,
         x: 1, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 59, y: 1, fg: Cyan, bg: Reset, underline: Reset, modifier: NONE,
@@ -1625,7 +1635,7 @@ fixture 1 scrolled 0
 Buffer {
     area: Rect { x: 0, y: 0, width: 60, height: 16 },
     content: [
-        "╭main.rs  [normal]─────────────────── ▶ AI Inject :inject ─╮",
+        "╭main.rs  [normal]───────────────────────────────── ◆ ─ ▶ ─╮",
         "│▶    1 ▼  step1(count:·usize)·{                           │",
         "│     2    ·let·count·=·count·+·2;·//·step                 │",
         "│     3▌   ·let·count·=·count·+·3;·//·step                 │",
@@ -1644,8 +1654,9 @@ Buffer {
     ],
     styles: [
         x: 0, y: 0, fg: Cyan, bg: Reset, underline: Reset, modifier: NONE,
-        x: 37, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
-        x: 49, y: 0, fg: DarkGray, bg: Reset, underline: Reset, modifier: NONE,
+        x: 51, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 54, y: 0, fg: Cyan, bg: Reset, underline: Reset, modifier: NONE,
+        x: 55, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 58, y: 0, fg: Cyan, bg: Reset, underline: Reset, modifier: NONE,
         x: 1, y: 1, fg: Green, bg: Reset, underline: Reset, modifier: NONE,
         x: 2, y: 1, fg: DarkGray, bg: Reset, underline: Reset, modifier: NONE,
@@ -1803,7 +1814,7 @@ fixture 1 scrolled 1
 Buffer {
     area: Rect { x: 0, y: 0, width: 60, height: 16 },
     content: [
-        "╭main.rs  [normal]─────────────────── ▶ AI Inject :inject ─╮",
+        "╭main.rs  [normal]───────────────────────────────── ◆ ─ ▶ ─╮",
         "│     2    ·let·count·=·count·+·2;·//·step                 │",
         "│     3▌   ·let·count·=·count·+·3;·//·step                 │",
         "│     4 ▼  ·if·count·>·3·{                                 │",
@@ -1822,8 +1833,9 @@ Buffer {
     ],
     styles: [
         x: 0, y: 0, fg: Cyan, bg: Reset, underline: Reset, modifier: NONE,
-        x: 37, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
-        x: 49, y: 0, fg: DarkGray, bg: Reset, underline: Reset, modifier: NONE,
+        x: 51, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 54, y: 0, fg: Cyan, bg: Reset, underline: Reset, modifier: NONE,
+        x: 55, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 58, y: 0, fg: Cyan, bg: Reset, underline: Reset, modifier: NONE,
         x: 1, y: 1, fg: DarkGray, bg: Reset, underline: Reset, modifier: NONE,
         x: 11, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
@@ -1985,7 +1997,7 @@ fixture 1 scrolled 5
 Buffer {
     area: Rect { x: 0, y: 0, width: 60, height: 16 },
     content: [
-        "╭main.rs  [normal]─────────────────── ▶ AI Inject :inject ─╮",
+        "╭main.rs  [normal]───────────────────────────────── ◆ ─ ▶ ─╮",
         "│     6    ·}                                              │",
         "│     7                                                    │",
         "│     8                                                    │",
@@ -2004,8 +2016,9 @@ Buffer {
     ],
     styles: [
         x: 0, y: 0, fg: Cyan, bg: Reset, underline: Reset, modifier: NONE,
-        x: 37, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
-        x: 49, y: 0, fg: DarkGray, bg: Reset, underline: Reset, modifier: NONE,
+        x: 51, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 54, y: 0, fg: Cyan, bg: Reset, underline: Reset, modifier: NONE,
+        x: 55, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 58, y: 0, fg: Cyan, bg: Reset, underline: Reset, modifier: NONE,
         x: 1, y: 1, fg: DarkGray, bg: Reset, underline: Reset, modifier: NONE,
         x: 11, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
@@ -2152,7 +2165,7 @@ fixture 1 scrolled 7
 Buffer {
     area: Rect { x: 0, y: 0, width: 60, height: 16 },
     content: [
-        "╭main.rs  [normal]─────────────────── ▶ AI Inject :inject ─╮",
+        "╭main.rs  [normal]───────────────────────────────── ◆ ─ ▶ ─╮",
         "│     8                                                    │",
         "│     9 ►  step9(count:·usize)·{⋯                          │",
         "│    15                                                    │",
@@ -2171,8 +2184,9 @@ Buffer {
     ],
     styles: [
         x: 0, y: 0, fg: Cyan, bg: Reset, underline: Reset, modifier: NONE,
-        x: 37, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
-        x: 49, y: 0, fg: DarkGray, bg: Reset, underline: Reset, modifier: NONE,
+        x: 51, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 54, y: 0, fg: Cyan, bg: Reset, underline: Reset, modifier: NONE,
+        x: 55, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 58, y: 0, fg: Cyan, bg: Reset, underline: Reset, modifier: NONE,
         x: 1, y: 1, fg: DarkGray, bg: Reset, underline: Reset, modifier: NONE,
         x: 11, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
@@ -2317,7 +2331,7 @@ fixture 1 scrolled 8
 Buffer {
     area: Rect { x: 0, y: 0, width: 60, height: 16 },
     content: [
-        "╭main.rs  [normal]─────────────────── ▶ AI Inject :inject ─╮",
+        "╭main.rs  [normal]───────────────────────────────── ◆ ─ ▶ ─╮",
         "│     9 ►  step9(count:·usize)·{⋯                          │",
         "│    15                                                    │",
         "│    16                                                    │",
@@ -2336,8 +2350,9 @@ Buffer {
     ],
     styles: [
         x: 0, y: 0, fg: Cyan, bg: Reset, underline: Reset, modifier: NONE,
-        x: 37, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
-        x: 49, y: 0, fg: DarkGray, bg: Reset, underline: Reset, modifier: NONE,
+        x: 51, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 54, y: 0, fg: Cyan, bg: Reset, underline: Reset, modifier: NONE,
+        x: 55, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 58, y: 0, fg: Cyan, bg: Reset, underline: Reset, modifier: NONE,
         x: 1, y: 1, fg: DarkGray, bg: Reset, underline: Reset, modifier: NONE,
         x: 8, y: 1, fg: Cyan, bg: Reset, underline: Reset, modifier: NONE,
@@ -2494,7 +2509,7 @@ fixture 1 scrolled 17
 Buffer {
     area: Rect { x: 0, y: 0, width: 60, height: 16 },
     content: [
-        "╭main.rs  [normal]─────────────────── ▶ AI Inject :inject ─╮",
+        "╭main.rs  [normal]───────────────────────────────── ◆ ─ ▶ ─╮",
         "│    23                                                    │",
         "│    24                                                    │",
         "│    25 ▼  step25(count:·usize)·{                          │",
@@ -2513,8 +2528,9 @@ Buffer {
     ],
     styles: [
         x: 0, y: 0, fg: Cyan, bg: Reset, underline: Reset, modifier: NONE,
-        x: 37, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
-        x: 49, y: 0, fg: DarkGray, bg: Reset, underline: Reset, modifier: NONE,
+        x: 51, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 54, y: 0, fg: Cyan, bg: Reset, underline: Reset, modifier: NONE,
+        x: 55, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 58, y: 0, fg: Cyan, bg: Reset, underline: Reset, modifier: NONE,
         x: 1, y: 1, fg: DarkGray, bg: Reset, underline: Reset, modifier: NONE,
         x: 11, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
@@ -2656,7 +2672,7 @@ fixture 1 scrolled 30
 Buffer {
     area: Rect { x: 0, y: 0, width: 60, height: 16 },
     content: [
-        "╭main.rs  [normal]─────────────────── ▶ AI Inject :inject ─╮",
+        "╭main.rs  [normal]───────────────────────────────── ◆ ─ ▶ ─╮",
         "│▶   41 ▼  step41(count:·usize)·{                          │",
         "│    42    ·let·count·=·count·+·42;·//·step                │",
         "│    43    ·let·count·=·count·+·43;·//·step                │",
@@ -2675,8 +2691,9 @@ Buffer {
     ],
     styles: [
         x: 0, y: 0, fg: Cyan, bg: Reset, underline: Reset, modifier: NONE,
-        x: 37, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
-        x: 49, y: 0, fg: DarkGray, bg: Reset, underline: Reset, modifier: NONE,
+        x: 51, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 54, y: 0, fg: Cyan, bg: Reset, underline: Reset, modifier: NONE,
+        x: 55, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 58, y: 0, fg: Cyan, bg: Reset, underline: Reset, modifier: NONE,
         x: 1, y: 1, fg: Green, bg: Reset, underline: Reset, modifier: NONE,
         x: 2, y: 1, fg: DarkGray, bg: Reset, underline: Reset, modifier: NONE,
@@ -2864,7 +2881,7 @@ fixture 1 scrolled 44
 Buffer {
     area: Rect { x: 0, y: 0, width: 60, height: 16 },
     content: [
-        "╭main.rs  [normal]─────────────────── ▶ AI Inject :inject ─╮",
+        "╭main.rs  [normal]───────────────────────────────── ◆ ─ ▶ ─╮",
         "│    55                                                    │",
         "│    56                                                    │",
         "│▶   57 ▼  step57(count:·usize)·{                          │",
@@ -2883,8 +2900,9 @@ Buffer {
     ],
     styles: [
         x: 0, y: 0, fg: Cyan, bg: Reset, underline: Reset, modifier: NONE,
-        x: 37, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
-        x: 49, y: 0, fg: DarkGray, bg: Reset, underline: Reset, modifier: NONE,
+        x: 51, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 54, y: 0, fg: Cyan, bg: Reset, underline: Reset, modifier: NONE,
+        x: 55, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 58, y: 0, fg: Cyan, bg: Reset, underline: Reset, modifier: NONE,
         x: 1, y: 1, fg: DarkGray, bg: Reset, underline: Reset, modifier: NONE,
         x: 11, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
@@ -3013,7 +3031,7 @@ fixture 1 scrolled 49
 Buffer {
     area: Rect { x: 0, y: 0, width: 60, height: 16 },
     content: [
-        "╭main.rs  [normal]─────────────────── ▶ AI Inject :inject ─╮",
+        "╭main.rs  [normal]───────────────────────────────── ◆ ─ ▶ ─╮",
         "│    60 ▼  ·if·count·>·3·{                                 │",
         "│    61    ·│···println!("{count}·61");                    │",
         "│    62    ·}                                              │",
@@ -3032,8 +3050,9 @@ Buffer {
     ],
     styles: [
         x: 0, y: 0, fg: Cyan, bg: Reset, underline: Reset, modifier: NONE,
-        x: 37, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
-        x: 49, y: 0, fg: DarkGray, bg: Reset, underline: Reset, modifier: NONE,
+        x: 51, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 54, y: 0, fg: Cyan, bg: Reset, underline: Reset, modifier: NONE,
+        x: 55, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 58, y: 0, fg: Cyan, bg: Reset, underline: Reset, modifier: NONE,
         x: 1, y: 1, fg: DarkGray, bg: Reset, underline: Reset, modifier: NONE,
         x: 8, y: 1, fg: Cyan, bg: Reset, underline: Reset, modifier: NONE,
@@ -3110,7 +3129,7 @@ fixture 1 scrolled 60
 Buffer {
     area: Rect { x: 0, y: 0, width: 60, height: 16 },
     content: [
-        "╭main.rs  [normal]─────────────────── ▶ AI Inject :inject ─╮",
+        "╭main.rs  [normal]───────────────────────────────── ◆ ─ ▶ ─╮",
         "│                                                          │",
         "│                                                          │",
         "│                                                          │",
@@ -3129,8 +3148,9 @@ Buffer {
     ],
     styles: [
         x: 0, y: 0, fg: Cyan, bg: Reset, underline: Reset, modifier: NONE,
-        x: 37, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
-        x: 49, y: 0, fg: DarkGray, bg: Reset, underline: Reset, modifier: NONE,
+        x: 51, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 54, y: 0, fg: Cyan, bg: Reset, underline: Reset, modifier: NONE,
+        x: 55, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 58, y: 0, fg: Cyan, bg: Reset, underline: Reset, modifier: NONE,
         x: 1, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 59, y: 1, fg: Cyan, bg: Reset, underline: Reset, modifier: NONE,

@@ -966,7 +966,7 @@ a paste that reaches the open buffer is **one edit, in whatever mode the buffer 
 line endings are line breaks however the source spelled them. Insert mode used to be the condition,
 which left a paste in normal mode replayed as keystrokes — read as commands until an `i`, `a` or `o`
 turned the rest into typing, one auto-indenting Enter per line, so three indented lines came back as
-a staircase. A read-only surface still takes none of it: a diff, a walkthrough and a Preview answer
+a staircase. A read-only surface still takes none of it: a diff, a Story being walked and a Preview answer
 the editor's keys ahead of the buffer.
 **R16.5** **Ctrl and Command are aliases** on copy and on paste. Command+V pasted long before
 Ctrl+V did, because the host terminal answers it and sends the text on as a paste — which made one
@@ -1092,7 +1092,7 @@ beside `ConfirmSubmit`. Authoring clears whatever the CLI is showing, exactly as
 swallowing git errors into `None` is defensible for a status poll and wrong for an explicit command.
 **R22.6** `:story` on an already-authored range **loads it**; `:story!` **re-authors** (Q57). Loading
 is instant and offline; re-authoring costs minutes, clears the CLI's prompt and discards the
-Walkthrough, so it takes the bang.
+Story position, so it takes the bang.
 **R22.7** While authoring, the spine reads `authoring`, with **no timeout**. A guessed timeout is
 wrong on a slow run and slow on a fast one — the same reasoning that made `Event::AiSpoke` replace a
 fixed delay. A CLI that dies is detected by `AiExited`, which every site that stops holding a pane
@@ -1245,7 +1245,7 @@ narrates, still opens, still takes a comment — a stale step is often exactly w
 base moves under it.
 **R24.10** A comment **records its story and step** alongside file, line, type and revision, so a
 submitted review says which *claim* the reviewer rejected.
-**R24.11** A Walkthrough is **not remembered**: entering a Story starts at its first Step every time,
+**R24.11** A Story position is **not remembered**: entering a Story starts at its first Step every time,
 and nothing survives a restart (Q62).
 
 - ✅ Entering a story puts the cursor on the first step's site
@@ -1287,11 +1287,11 @@ read around it cannot review it. Rejected: `j` steps and `Ctrl+d` scrolls — a 
 per view is precisely the difference the cheatsheet sweep exists to close, and F22 has just given the
 cheatsheet a view dimension.
 
-**Q62 — Is a Walkthrough remembered when a Story is left, or across a restart? Resolved: no.** A
-Walkthrough is disposable (`CONTEXT.md`), and stepping a Story again from the top costs a few keys.
+**Q62 — Is a Story position remembered when a Story is left, or across a restart? Resolved: no.** A
+Story position is disposable (`CONTEXT.md`), and stepping a Story again from the top costs a few keys.
 Rejected: remembering the position per Story, persisted, and discarded with a notice when the Story is
 re-authored — specified and never missed in daily use, so it would be storage and a staleness rule
-paying no rent (issue #7, `.out-of-scope/walkthrough-memory.md`).
+paying no rent (issue #7, `.out-of-scope/story-position-memory.md`).
 
 ## F25 — Predictions — **DEFINED**
 
@@ -1303,7 +1303,7 @@ and steps on, which is what makes it non-blocking (Q64).
 **R25.3** A **wrong pick shows that choice's feedback and leaves the choices up**. You may pick again
 as often as you like.
 **R25.4** **Only a correct pick replaces the choices** with its feedback.
-**R25.5** The Walkthrough records **that a Prediction was put, never which choice** was picked.
+**R25.5** The Story position records **that a Prediction was put, never which choice** was picked.
 **R25.6** A Prediction already put is **not asked again**; re-authoring puts it afresh.
 **R25.7** A Prediction may ask **any *why* about the step**, not only about the next hop — the
 questions the CLIs actually wrote were better than the definition was.
@@ -1314,7 +1314,7 @@ questions the CLIs actually wrote were better than the definition was.
 - ✅ A wrong pick may be followed by another
 - ✅ A correct pick replaces the choices with its feedback
 - ✅ Answering never blocks the walk
-- ✅ The walkthrough never records which choice was picked
+- ✅ The story position never records which choice was picked
 - ✅ A prediction already put is not asked again
 - ✅ A prediction skipped is not asked again either
 - ✅ A prediction re-authored is put afresh
@@ -3503,7 +3503,7 @@ Skill, no environment variable and no other prompt names the Vault (ADR 0025).
 **R51.6** A Skill whose frontmatter carries `metadata: { varde-asks: "<label>" }` opens a one-line
 question box before it is handed over; the answer goes in the pasted line. An empty answer or
 Escape hands nothing over.
-**R51.7** Varde ships one Workflow, `knowledge-vault`: the Skills `init-vault`, `update-knowledge`,
+**R51.7** Varde ships the Workflow `knowledge-vault`: the Skills `init-vault`, `update-knowledge`,
 `search-knowledge`, `sweep-knowledge` and `maintain-vault`, the agent `agents/knowledge-searcher.md`
 and the files they share in `shared/`. Every one of its Skills opts into the Vault;
 `search-knowledge` and `maintain-vault` ask a question first. The agent is never picked by the user
@@ -3566,6 +3566,132 @@ cheatsheet lists it as `gd` "definition / follow link".
 **Q67** Should the Skills modal give each row a letter, the way the palette does, or is Enter on a
 selected row enough? Refinement; no scenario turns on it.
 
+## F52 — Walkthrough — **DEFINED**
+
+The spec is GitHub issue #116, rewritten: an agent plans a change and guides the developer through
+writing it in Varde's own editor. Scenarios live in `features/walkthrough_artifact.feature`,
+`walkthrough_requests.feature`, `walkthrough_waypoints.feature`, `waypoint_list.feature`,
+`walkthrough_evaluation.feature` and `walkthrough_ending.feature`, one per ticket. `GLOSSARY.md`'s
+"Building with a guide" section is the vocabulary: Walkthrough, Waypoint, `checkpoint`, Waypoint
+list, Finish and Revert. The old Walkthrough, one person's place in a Story, is now **Story
+position**. One decision was hard enough to reverse that it became an ADR:
+`0031-a-walkthrough-is-a-file-the-agent-owns.md`.
+
+**One seam.** Every scenario drives `update` from the World. The agent is never run: its answers are
+"the walkthrough file changes to" a JSON DocString, and every hand-over is asserted as an Effect — a
+paste into the AI pane, or a background run with its command and stdin. A background exit is an
+Event. Unit tests beside the code cover parsing and validating the plan, shifting Waypoint lines,
+the request queue, and inserting and removing landing comments.
+
+**⛔ Not scenarios, deliberately:** the Skill's prose beyond the actions, schema and write rule it
+names; glyphs and theme colours; the context box's Markdown beyond one bold run; a real agent.
+
+**R52.1** The plan is **one `walkthrough.json`**, in `.varde/` or in the Sidecar for a Bare
+workspace, in ADR 0031's schema. The agent owns everything in it; Varde reads it on every change and
+**never writes it**. One Walkthrough exists at a time.
+**R52.2** **Plan order is file order.** Varde never sorts.
+**R52.3** A file that does not parse, or a Waypoint whose line is past its file's end or whose path
+leaves the workspace, **leaves the last valid plan in use** with the notice `walkthrough-invalid`.
+A Waypoint in a missing file is valid. One fix request names the failing Waypoints, for **two
+rounds**, as Stories do; the third broken file sends nothing.
+**R52.4** The `walkthrough` Skill ships under ADR 0026. It names the actions `plan`, `evaluate`,
+`adjust`, `write`, `revert` and `fix`, documents the schema, asks for **build order**, and allows
+writing source files only on `write`, `adjust` (the reverts the new approach needs) and `revert`.
+**R52.5** `:guide` and the `◆ AI Guide` Chip open the Inquiry box, modal `walkthrough` with no
+session and `adjust-walkthrough` during one. `Ctrl+S` sends and `Esc` sends nothing.
+**R52.6** A request is **one line** naming the Skill, the action, the plan file and the current
+Waypoint. The first `plan` also carries the open buffers and the cursor's file, line and column.
+Nothing else is handed over: no index, language server or MCP server.
+**R52.7** `walkthrough.driver` is `"pane"` (default) or `"background"`; `walkthrough.command`
+defaults to `claude -p`. The pane driver pastes, starting the AI session on demand and holding the
+request until it is ready. The background driver runs the command once per request, off the loop,
+with the request on stdin; stdout is ignored and a non-zero exit is the notice
+`walkthrough-command-failed`; when that request was the first `plan`, no session is left, so the next
+`:guide` plans again. Resume flags are the user's to add to the command, and only the global config
+sets `[walkthrough]`, as only it sets `[ai]`.
+**R52.8** **One request in flight.** The next goes when the plan file changes or the background
+command exits. A queued evaluation is replaced by a newer one; `adjust` and `revert` queue ahead of
+evaluations. The spinner names the running and queued actions, on the fake clock.
+**R52.9** Before every request Varde **saves every buffer the Walkthrough touches**, and that save
+asks for no evaluation. Buffers it does not touch are left alone.
+**R52.10** Varde **lands on the `checkpoint`**, or the first Waypoint when it is `null`, on the
+plan's arrival and on every later change of the file, in Edit view, with the buffer editable.
+**R52.11** Landing on a code Waypoint for the first time inserts its text **at the Waypoint's line**,
+in the language's line-comment token and the line's indent, and opens an empty indented line below
+it; the original line moves down. The cursor waits there in normal mode. Never before landing, never
+twice; Varde records each inserted comment (Q68).
+**R52.12** A context Waypoint writes nothing and is never evaluated. Its lines carry the context
+mark and a bordered box under them renders its Markdown with the Preview renderer, **at most 72
+columns or the pane's width**, scrolled by `j`/`k` while it has focus. Landing on it gives the
+box focus; `Esc` hands `j` and `k` back to the cursor.
+**R52.13** `[` and `]`, and the Transport's previous and next Chips, step between Waypoints; past
+either end they stay. **No verdict blocks a step.**
+**R52.14** Waypoint lines **move with edits above them**, Varde's own landing comments included. A
+rewrite of the file by the agent replaces those positions.
+**R52.15** A Waypoint in a missing file opens an **unsaved buffer at its path**. `:w` creates its
+missing folders inside the workspace and refuses a path that resolves outside it — through a linked
+folder, since R52.3 already refuses a plan path that leaves the workspace — as `outside-workspace`,
+writing nothing. A hand-over's save (R52.9) of such a buffer goes the same way.
+**R52.16** In a project workspace a session **resumes on the last visited Waypoint** after a
+restart; a session ended by Finish or Revert does not resume, whatever the file says (Q71). In a
+Bare workspace it ends with Varde.
+**R52.17** The **Waypoint list** opens in the Corner when a session starts: files in plan order,
+Waypoints nested, each marked `lgtm`, `open`, `failing`, `context` or `new`, and `ai` beside its
+status when the agent wrote it. The current Waypoint is lit; `Enter` lands on the selected one.
+**R52.18** While a session is active, every walkthrough file in the tree carries **one named theme
+colour**, a `new` one once it exists. It shows no state, and it goes when the session ends.
+**R52.19** Saving a file the current code Waypoint touches, the `check` Chip or `:guide check`
+sends `evaluate` for that Waypoint; the Chip and command do not save. Typing sends nothing (Q69).
+**R52.20** The footer shows the **current Waypoint's latest verdict** — `failing` with the agent's
+message, `lgtm`, or none — for as long as it is current. Another notice shows over it and gives way
+back to it.
+**R52.21** `▶ AI Write` on the Waypoint's line, left of the minimap, and `:guide write` send `write`.
+When the agent's update arrives, the buffer reloads, the cursor stays on the Waypoint and the
+Waypoint is marked `ai`.
+**R52.22** The Transport holds previous, next, check, `◆ AI Guide`, `✓ finish` and `↶ revert`,
+replacing the single exit Chip. Every one has a key or a command (ADR 0022, ADR 0027).
+**R52.23** **Finish** (`✓ finish`, `:guide finish`) is allowed at any time: it removes every inserted
+comment, keeps the developer's code, ends the session, closes the Waypoint list, clears the tree
+colour and sends nothing. `✓ finish` is **lit only when the status is `completed`**, and `completed`
+ends nothing.
+**R52.24** **Revert** (`↶ revert`, `:guide revert`) asks `confirm-revert-walkthrough` first.
+Declining sends nothing; confirming sends one `revert`, and the session is `reverting` until the
+agent sets `ended`. Varde writes no source file during a revert.
+**R52.25** `:guide!` during a session asks `replace-walkthrough`: `k` finishes, `r` reverts without a
+second confirmation, `Esc` changes nothing. After the end action — for `r`, once the file says
+`ended` — the `walkthrough` box opens and its prompt goes as `plan`. With no session `:guide!` is
+`:guide` (Q70).
+
+- ✅ Walkthrough artifact and Skill: `walkthrough_artifact.feature`
+- ✅ Start, adjust, drivers, queue, hand-over saves and fix rounds: `walkthrough_requests.feature`
+- ✅ Landing, comments, context boxes, stepping, anchoring, new files, restarts:
+  `walkthrough_waypoints.feature`
+- ✅ Waypoint list and tree colour: `waypoint_list.feature`
+- ✅ Evaluation, the footer verdict and AI Write: `walkthrough_evaluation.feature`
+- ✅ Finish, Revert and `:guide!`: `walkthrough_ending.feature`
+
+**Q68 — Where does a landing comment go? Resolved: at the Waypoint's line, the line moving down.**
+The Waypoint's line is where the new code goes, so the instruction sits there and the developer
+writes beneath it, above whatever followed. Rejected: below the line — it reads as a note on the
+existing code rather than an instruction for new code, and a Waypoint at line 1 of a new file has
+no line to sit below.
+**Q69 — What key does check and AI Write take? Resolved: `:guide check` and `:guide write`.**
+ADR 0022 asks for a key or command beside each Chip; one command with words keeps the cheatsheet to
+one row and leaves `[`/`]` the only new keys. Rejected: new single keys in normal mode, where the
+editor's keys are already spent.
+**Q70 — Does `:guide!`'s `r` confirm a second time? Resolved: no.** Choosing `r` in that box is the
+confirmation; asking again teaches the developer to press `y` without reading.
+**Q71 — How does a finished session stay finished across a restart? Resolved: Varde records it.**
+Finish sends nothing and Varde never writes the plan file, so the file still says `active`. Varde
+keeps whether a session is active, and its last visited Waypoint, in its own `state.json`, and
+resumes only a session that record calls active. The next `:guide` starts a new `plan`, which the
+agent writes over the old file. Rejected: Varde writing `ended` into the file — the file is the
+agent's (ADR 0031) — and deleting it, which loses the plan the developer may want to read.
+**⛔ Varde snapshots and restores files.** Recommended and rejected by the user: reverts belong to
+the agent (ADR 0031).
+**⛔ A standalone snippet-at-cursor command**, as #116 first asked. Writing a snippet survives only
+as a Waypoint's `▶ AI Write`.
+
 ## Spec status
 
 Every feature is defined in Gherkin — **1707 scenario headings across 65 feature files** — and no
@@ -3575,7 +3701,7 @@ Q41, Q42, Q53, Q54, Q55, Q56, Q57, Q58, Q59, Q60, Q63, Q64, Q65.
 
 Per `AGENTS.md`, implementation begins now that the spec is complete — not before.
 
-**F22–F25 (stories and walkthroughs) are specified and not implemented.** Their route was charted on
+**F22–F25 (stories and walking them) are specified and not implemented.** Their route was charted on
 `.scratch/story-walkthrough/map.md`, and the eleven tickets under it hold the measurements behind
 every answered question above — three real authoring runs, 21 prior-art sources, and a 30-commit
 coverage census. Two decisions were hard enough to reverse that they became ADRs:
@@ -3600,6 +3726,11 @@ implementation tickets are sub-issues of it. The two ADRs are
 **F51 (keeping knowledge) is implemented**, as GitHub spec #150 split vertically into tickets
 #151–#161. The three ADRs are `0025-the-vault-is-told-never-found.md`,
 `0026-a-shipped-skill-belongs-to-varde.md` and `0027-an-ai-facing-chip-carries-a-word.md`.
+
+**F52 (the Walkthrough) is specified and not implemented.** The spec is issue #116, rewritten, and
+its implementation tickets are sub-issues of it. The ADR is
+`0031-a-walkthrough-is-a-file-the-agent-owns.md`. No blocking questions remain: Q68–Q71 are
+resolved above.
 
 **F31 (language intelligence) is specified and not implemented.** The spec is
 `.scratch/richer-editor/spec.md` and the twelve tickets under it — half one is F14's colour, half two

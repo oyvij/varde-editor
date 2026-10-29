@@ -12,14 +12,15 @@ use varde::lsp;
 use varde::minimap;
 use varde::tree::Row;
 use varde::{
-    filter, keys, mark, palette_rows, reading, review, story, tools, tree, wait, FilterKeys, Mark,
-    Modal, Pane, Place, Selection, State, View,
+    filter, keys, mark, palette_rows, reading, review, story, tools, tree, wait, walkthrough,
+    FilterKeys, Mark, Modal, Pane, Place, Selection, State, View,
 };
 
 const DIRTY: Color = Color::LightYellow;
 
 const WARNING: Color = Color::Indexed(208);
 const READING: Color = Color::Cyan;
+const WALKTHROUGH: Color = Color::Magenta;
 const FAINT: Style = Style::new().fg(Color::Reset).add_modifier(Modifier::DIM);
 const FAINT_INK: u16 = 12;
 
@@ -39,6 +40,8 @@ pub enum Tone {
     Hint,
     Notice,
     Warning,
+    Failing,
+    Lgtm,
 }
 
 pub struct Chrome<'a> {
@@ -223,6 +226,9 @@ pub fn draw(
             layout::Corner::Conflicts => {
                 frame.render_widget(conflicts_widget(state, areas.corner.width), areas.corner)
             }
+            layout::Corner::Waypoints => {
+                frame.render_widget(waypoints_widget(state, areas.corner.width), areas.corner)
+            }
         }
     }
     let caret_is_free = state.modal == Modal::None && typing.is_none() && !finding;
@@ -250,8 +256,18 @@ pub fn draw(
             Rect::new(x, y, 1, 1),
         );
     }
+    if let Some(chip) = varde::walkthrough::write_chip(state, &areas.panes) {
+        frame.render_widget(
+            Paragraph::new(Span::styled(
+                varde::walkthrough::AI_WRITE,
+                Style::default().add_modifier(Modifier::REVERSED),
+            )),
+            Rect::new(chip.x, chip.y, chip.width, chip.height),
+        );
+    }
 
     hover(frame, state, &areas.panes);
+    context_box(frame, state, &areas.panes);
     breakpoint_reason(frame, state, &areas.panes);
     diagnostic_box(frame, state, &areas.panes);
     candidates(frame, state, &areas.panes);
@@ -383,6 +399,8 @@ fn status_line(
         Tone::Hint => Color::DarkGray,
         Tone::Notice => Color::Yellow,
         Tone::Warning => WARNING,
+        Tone::Failing => Color::Red,
+        Tone::Lgtm => Color::Green,
     });
     let Some(tag) = forms.into_iter().find(|tag| 2 * (tag.width() + 1) <= width) else {
         return Line::from(Span::styled(truncate(status, width), tone));
@@ -445,7 +463,7 @@ fn draw_modal(frame: &mut Frame, state: &State, chrome: &Chrome) {
         ),
         Modal::SetValue | Modal::NewWatch => {}
         Modal::Comment => overlay(frame, "COMMENT", comment_lines(state, chrome)),
-        Modal::Inquiry { text, tag } => inquiry_box(frame, state, text, *tag),
+        Modal::Inquiry { text, ask } => inquiry_box(frame, state, text, *ask),
         Modal::ConfirmSubmit => overlay(
             frame,
             "SUBMIT",
@@ -464,6 +482,25 @@ fn draw_modal(frame: &mut Frame, state: &State, chrome: &Chrome) {
                 Line::from("  This clears the AI's prompt line."),
                 Line::from(""),
                 Line::from("  (y) author    (n) cancel"),
+            ],
+        ),
+        Modal::ConfirmRevertWalkthrough => overlay(
+            frame,
+            "REVERT",
+            vec![
+                Line::from("  The AI restores every file this walkthrough touched."),
+                Line::from("  Your code in them is lost."),
+                Line::from(""),
+                Line::from("  (y) revert    (n) cancel"),
+            ],
+        ),
+        Modal::ReplaceWalkthrough => overlay(
+            frame,
+            "NEW WALKTHROUGH",
+            vec![
+                Line::from("  End this walkthrough before starting the next."),
+                Line::from(""),
+                Line::from("  (k) keep your code    (r) revert    (Esc) cancel"),
             ],
         ),
         Modal::Tools { row } => {
@@ -1071,6 +1108,68 @@ fn conflicts_lines(state: &State, width: u16) -> Vec<Line<'static>> {
         .collect()
 }
 
+fn waypoints_widget(state: &State, width: u16) -> Paragraph<'static> {
+    let inner = width.saturating_sub(2) as usize;
+    let selected = walkthrough::selected(state).filter(|_| state.focus == Pane::Waypoints);
+    let scroll = state
+        .walkthrough
+        .as_ref()
+        .map_or(0, |session| session.scroll);
+    let lines: Vec<Line<'static>> = walkthrough::listed(state)
+        .into_iter()
+        .map(|listed| match listed {
+            walkthrough::Listed::File(file) => Line::from(Span::styled(
+                truncate(
+                    &format!(
+                        " {}",
+                        file.replace(|character: char| character.is_control(), "")
+                    ),
+                    inner,
+                ),
+                Style::default()
+                    .fg(WALKTHROUGH)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            walkthrough::Listed::Waypoint {
+                id,
+                text,
+                mark,
+                ai,
+                lit,
+            } => {
+                let (glyph, colour) = match mark {
+                    walkthrough::Mark::Lgtm => ("✓", Color::Green),
+                    walkthrough::Mark::Open => ("○", Color::DarkGray),
+                    walkthrough::Mark::Failing => ("✗", Color::Red),
+                    walkthrough::Mark::Context => ("i", Color::Blue),
+                    walkthrough::Mark::New => ("+", Color::Yellow),
+                };
+                let text = text.replace(|character: char| character.is_control(), " ");
+                let label = match ai {
+                    true => format!("{} AI", mark.slug()),
+                    false => mark.slug().to_string(),
+                };
+                let mut style = match lit {
+                    true => Style::default().fg(READING).add_modifier(Modifier::BOLD),
+                    false => Style::default(),
+                };
+                if selected.as_deref() == Some(id.as_str()) {
+                    style = style.add_modifier(Modifier::REVERSED);
+                }
+                let room = inner.saturating_sub(label.chars().count() + 6);
+                Line::from(vec![
+                    Span::styled(format!("  {glyph} "), style.fg(colour)),
+                    Span::styled(format!("{:<room$}", truncate(&text, room)), style),
+                    Span::styled(format!(" {label}"), style.fg(colour)),
+                ])
+            }
+        })
+        .collect();
+    Paragraph::new(lines)
+        .scroll((scroll as u16, 0))
+        .block(pane_block("waypoints", state, Pane::Waypoints))
+}
+
 fn severity_labels(frame: &mut Frame, state: &State, showing: lsp::Severity, corner: Area) {
     let labels = varde::lsp::severity_labels(state, corner.width);
     let Some(mut x) = corner
@@ -1276,7 +1375,9 @@ fn tree_lines(state: &State, rows: &[Row], width: u16) -> Vec<Line<'static>> {
                 .unwrap_or_default();
             let (icon, kind) = varde::tree::icon(&name, row.is_dir, row.expanded);
             let (glyph, mark_colour) = glyph(mark(state, &row.path));
-            let mut style = if row.dimmed {
+            let mut style = if walkthrough::coloured(state, &row.path) {
+                Style::default().fg(WALKTHROUGH)
+            } else if row.dimmed {
                 Style::default().fg(Color::DarkGray)
             } else {
                 Style::default()
@@ -1954,6 +2055,8 @@ fn source_lines(
         let reading = spoken.is_some_and(|(from, to)| number >= from && number <= to);
         if let Some(severity) = lsp::mark(state, path, number) {
             *line = barred(line, number, severity_colour(severity));
+        } else if varde::walkthrough::context_mark(state, path, number) {
+            *line = barred(line, number, Color::Blue);
         } else if reading {
             *line = barred(line, number, READING);
         } else if changed.binary_search(&number).is_ok() {
@@ -3085,6 +3188,20 @@ fn hover(frame: &mut Frame, state: &State, panes: &layout::Layout) {
     hover_chips(frame, state, placement.spot(state, panes));
 }
 
+fn context_box(frame: &mut Frame, state: &State, panes: &layout::Layout) {
+    let Some(shown) = varde::walkthrough::context_box(state) else {
+        return;
+    };
+    let dark = state.editor_theme != "light";
+    let columns = shown.width.saturating_sub(2);
+    let lines = shown
+        .shown()
+        .iter()
+        .map(|row| preview_line(row, dark, columns))
+        .collect();
+    over_buffer_line(frame, state, panes, shown.placement(), lines);
+}
+
 fn breakpoint_reason(frame: &mut Frame, state: &State, panes: &layout::Layout) {
     let Some((line, why)) = varde::debug::explained(state) else {
         return;
@@ -4024,25 +4141,22 @@ fn comment_lines(state: &State, chrome: &Chrome) -> Vec<Line<'static>> {
     lines
 }
 
-fn inquiry_box(
-    frame: &mut Frame,
-    state: &State,
-    text: &varde::editor::Buffer,
-    picked: varde::story::Tag,
-) {
+fn inquiry_box(frame: &mut Frame, state: &State, text: &varde::editor::Buffer, ask: varde::Ask) {
     let screen = frame.area();
     let area = layout::inquiry_box(screen.width, screen.height);
     let mut tags = vec![Span::raw("  ")];
-    for (tag, word) in varde::story::TAGS {
-        tags.push(match tag == picked {
-            true => Span::styled(
-                format!(" {word} "),
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::REVERSED),
-            ),
-            false => Span::styled(format!(" {word} "), Style::default().fg(Color::DarkGray)),
-        });
+    if let varde::Ask::Story(picked) = ask {
+        for (tag, word) in varde::story::TAGS {
+            tags.push(match tag == picked {
+                true => Span::styled(
+                    format!(" {word} "),
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::REVERSED),
+                ),
+                false => Span::styled(format!(" {word} "), Style::default().fg(Color::DarkGray)),
+            });
+        }
     }
     let caret_row = text.line.saturating_sub(1);
     let typed: Vec<Line<'static>> = text
@@ -4070,6 +4184,7 @@ fn inquiry_box(
             "  {}",
             keys::INQUIRY_BOX_KEYS
                 .iter()
+                .filter(|(key, _)| matches!(ask, varde::Ask::Story(_)) || *key != "Tab")
                 .map(|(key, word)| format!("{key} {word}"))
                 .collect::<Vec<_>>()
                 .join(" · ")
@@ -4083,7 +4198,12 @@ fn inquiry_box(
             Block::default()
                 .borders(Borders::ALL)
                 .border_type(BorderType::Thick)
-                .title("INQUIRY"),
+                .title(
+                    varde::asking(state)
+                        .unwrap_or_default()
+                        .replace('-', " ")
+                        .to_uppercase(),
+                ),
         ),
         box_area,
     );
@@ -5064,10 +5184,10 @@ mod tests {
         state.speech.speed = 1.25;
         let chips = varde::editor_chips(&state);
         for (width, drawn) in [
-            (40, " \u{25b6} \u{2500} \u{25ba} \u{2500} \u{ab} \u{2500} \u{bb} \u{2500} \u{25a0} \u{2500} 1.25x \u{2500}"),
+            (40, " \u{25c6} \u{2500} \u{25b6} \u{2500} \u{25ba} \u{2500} \u{ab} \u{2500} \u{bb} \u{2500} \u{25a0} \u{2500} 1.25x \u{2500}"),
             (
-                120,
-                " \u{25b6} AI Inject :inject \u{2500} \u{25ba} :pause \u{2500} \u{ab} :prev \u{2500} \u{bb} :next \u{2500} \u{25a0} :stop \u{2500} 1.25x :speed \u{2500}",
+                150,
+                " \u{25c6} AI Guide :guide \u{2500} \u{25b6} AI Inject :inject \u{2500} \u{25ba} :pause \u{2500} \u{ab} :prev \u{2500} \u{bb} :next \u{2500} \u{25a0} :stop \u{2500} 1.25x :speed \u{2500}",
             ),
         ] {
             let area = ratatui::layout::Rect::new(0, 0, width, 4);
@@ -5257,7 +5377,7 @@ mod tests {
             &state,
             "a-very-long-document-name-indeed-and-then-some-more-of-it.md",
         );
-        assert!(top.contains("indeed-and-then"), "the name gave: {top:?}");
+        assert!(top.contains("indeed-and-th"), "the name gave: {top:?}");
         assert!(!top.contains("Ada"), "{top:?}");
         assert!(top.ends_with(" 1.00x \u{2500}\u{256e}"), "{top:?}");
     }
@@ -5268,7 +5388,7 @@ mod tests {
         let mut state = State::default();
         state.current_buffer = Some(std::path::PathBuf::from("/w/guide.md"));
         state.speech.speed = 1.0;
-        let area = ratatui::layout::Rect::new(0, 0, 44, 4);
+        let area = ratatui::layout::Rect::new(0, 0, 48, 4);
         let mut buffer = ratatui::buffer::Buffer::empty(area);
         let name = "a-very-long-document-name-indeed.md";
         Block::default()
@@ -5277,16 +5397,16 @@ mod tests {
                 name,
                 &varde::editor::Buffer::open("x", false, 4),
                 "normal",
-                title_room(&state, 44),
+                title_room(&state, 48),
             ))
-            .title(right_title(&state, 0, 44))
+            .title(right_title(&state, 0, 48))
             .render(area, &mut buffer);
-        let top: String = (0..44)
+        let top: String = (0..48)
             .map(|column| buffer[(column, 0)].symbol().to_string())
             .collect();
         assert!(top.contains('\u{2026}'), "the name was not cut: {top:?}");
         assert!(top.ends_with(" 1.00x \u{2500}\u{2510}"), "{top:?}");
-        assert!(top.contains("[normal]\u{2500} \u{25b6}"), "{top:?}");
+        assert!(top.contains("[normal]\u{2500} \u{25c6}"), "{top:?}");
     }
 
     #[test]

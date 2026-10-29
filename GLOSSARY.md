@@ -54,7 +54,7 @@ _Avoid_: selected file, tree highlight
 **Corner**:
 The one pane-sized slot beneath the file tree, at the tree's width, taking its columns from the
 shell. It names its occupant — the Risk list, the Buffers pane, the Cursor history, the Frames, the
-Breakpoint list, the Diagnostic list or the Conflict list — or nothing at all, so "both on screen at once" is not a state it can hold and
+Breakpoint list, the Diagnostic list, the Conflict list or the Waypoint list — or nothing at all, so "both on screen at once" is not a state it can hold and
 asking for one while another shows is a replacement. Every occupant is the same rectangle: which
 pane is in the Corner changes what a click means, never where the Corner is.
 _Avoid_: the risk pane's slot, bottom-left pane, second sidebar
@@ -452,13 +452,14 @@ One narrative through a change: a name, a premise and an ordered chain of steps 
 code runs rather than how the files are arranged. Authored, durable for the life of the review, and
 readable by someone who did not write it. A Story set may hold several. A Story's name states the
 concrete subject — what changed — never a standalone metaphor; the premise is where the *why* goes.
-_Avoid_: tour, trail, walkthrough (that is the act), narrative, guide
+_Avoid_: tour, trail, walkthrough (that is a guided build session), narrative, guide (that is what a
+Walkthrough's agent does)
 
 **Step**:
 The atom of a Story — a name, one claim about one Site, with why it exists and what flows in and
 out of it. A Step is where the cursor goes and what a comment can be made against. Its name is
 short enough to sit in the step-menu; its claim is the full sentence the band narrates.
-_Avoid_: stop, node, frame, slide
+_Avoid_: stop (that is a Waypoint), node, frame, slide
 
 **Step-menu**:
 The list of a Story's Steps, named, shown to the left of the gutter while walking one, with the
@@ -470,17 +471,17 @@ _Avoid_: step list, step sidebar, outline
 Where in the code a Step points: a file, a side of the change, a range of lines, and the text those
 lines held when the Story was written. Not an Anchor — that word is already the fixed end of a
 selection, and one word for two things is how a glossary stops being one.
-_Avoid_: anchor, location, position, target, region
+_Avoid_: anchor, location, position (that is a Story position), target, region
 
-**Walkthrough**:
-One person's position in a Story: what has been walked, what was skipped, where they are. Started,
-stopped and restarted freely; disposable, and never shared. A Story is authored, a Walkthrough is
+**Story position**:
+One person's place in a Story: what has been walked, what was skipped, where they are. Started,
+stopped and restarted freely; disposable, and never shared. A Story is authored, a Story position is
 lived.
-_Avoid_: session, progress, run, playthrough
+_Avoid_: walkthrough (that is a guided build session), session, progress, run, playthrough
 
 **Site mark**:
 How the code on screen says which lines the current Step points at: the Site's lines carry a bar and
-their colour, everything else is flattened to one grey. It is drawn from where the Walkthrough
+their colour, everything else is flattened to one grey. It is drawn from where the Story position
 stands, never asked for and never dismissed — a reviewer sent to a file with no idea which lines the
 claim is about is reading a screen of code, not a Step. Not a Selection: it is not copied, not
 extended, and it exists whether or not anything is selected.
@@ -497,7 +498,7 @@ why the Story goes where it goes next. Three reasons to choose between, one keyp
 never blocking, and a wrong pick is told why it is wrong and may pick again. It exists to make the
 reviewer commit to a reason, which is what turns reading into comprehension. Never a bet on which
 line runs next: that is trivia, and it measures nothing.
-_Avoid_: quiz, question, test, checkpoint, score
+_Avoid_: quiz, question, test, checkpoint (that is the Waypoint a Walkthrough resumes at), score
 
 **Nudge**:
 The extra sentence a Step holds in reserve for a reviewer who wants more, written when the Story was
@@ -532,6 +533,47 @@ claim, nothing authored - and it says nothing about whether leaving those hunks 
 Deletions are counted separately, so a range that deleted nothing is distinguishable from a range
 whose deletions nobody walked.
 _Avoid_: gap, leftovers, uncovered, missed
+
+### Building with a guide
+
+**Walkthrough**:
+A session in which an agent plans a change and guides the developer through writing it in Edit view,
+in the order a developer would build it. The developer writes the code; the agent plans, checks and
+reverts. One at a time, held in one `walkthrough.json` the agent writes and Varde only reads
+(`docs/adr/0031-a-walkthrough-is-a-file-the-agent-owns.md`). Remembered across a restart in a project
+workspace, ended with Varde in a Bare one. Not a Story position: a Story is read, a Walkthrough is
+built.
+_Avoid_: tour, pairing session, guided mode, tutorial, plan (that is the list of Waypoints it holds)
+
+**Waypoint**:
+One place a Walkthrough stops: a file, a line, and what to do there. A code Waypoint carries the
+instruction Varde writes into the file as a comment on landing, and the agent's verdict on what the
+developer wrote under it. A context Waypoint carries Markdown explaining why, is shown beside the
+code and writes nothing. Its line moves with edits above it, the way a Breakpoint's does.
+_Avoid_: step (that is a Story's atom), task, todo, checkpoint (that is one particular Waypoint)
+
+**`checkpoint`**:
+The Waypoint a revised plan resumes at, named by the agent in the file. Every change to the file
+lands on it.
+_Avoid_: resume point, bookmark, current Waypoint (that is where the developer is)
+
+**Waypoint list**:
+The Corner occupant that shows a Walkthrough's plan: its files in plan order, each Waypoint nested
+under its file and marked by status, the current one lit. A Waypoint list shows state; the file tree
+only shows which files the Walkthrough touches.
+_Avoid_: plan pane, outline, step-menu (that is a Story's), checklist
+
+**Finish**:
+Ending a Walkthrough and keeping the code: every comment Varde inserted is removed, everything the
+developer wrote stays, and nothing is sent to the agent. Allowed at any time, and only ever done by
+the developer — the agent marking the plan `completed` lights it, never triggers it.
+_Avoid_: done, accept, close, complete (that is the plan's status)
+
+**Revert**:
+Ending a Walkthrough and dropping the attempt: confirmed first, then the agent restores every file the
+session touched and marks the file `ended`. Varde never restores a file itself — unlike an Iteration,
+whose Gate Varde owns.
+_Avoid_: undo, rollback, discard, reset, restore (that is what the agent does on Revert)
 
 ### Paying down risk
 
@@ -732,7 +774,8 @@ _Avoid_: chunk, clip, segment, phrase, sentence (the text is a sentence; this is
 
 **Transport**:
 A row of Chips on a pane's top border, driving something in flight: a Reading on the editor's —
-play and pause, previous, next, stop, and the speed, drawn only for a markdown buffer — and a Debug
+play and pause, previous, next, stop, and the speed, drawn only for a markdown buffer — a
+Walkthrough on the editor's too — previous, next, check, AI Guide, finish and revert — and a Debug
 session on the Variables' — continue and pause, stepping over, into and out, and stop. Right-aligned
 the way the Risk pane's action icons are, and clickable. It is an affordance and a reminder, never
 the only way in: everything it offers has a key binding, because a control you can only reach with
@@ -842,7 +885,7 @@ _Avoid_: external frame, framework frame, hidden frame
 A line the program pauses at when it reaches it, marked in the gutter. It moves with its line as the
 Buffer is edited, and a project remembers it across runs along with the text the line held.
 Reaching it pauses only the thread that reached it, unless the Breakpoint says to pause them all.
-_Avoid_: stop, marker
+_Avoid_: stop (that is a Waypoint), marker
 
 **Exception filter**:
 A kind of exception the program can be told to pause on — caught, uncaught, a Rust panic, one named

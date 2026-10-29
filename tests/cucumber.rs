@@ -19,6 +19,7 @@ use varde::tools;
 use varde::tree::{self, Entry};
 use varde::tree_actions::{Action, Target};
 use varde::wait;
+use varde::walkthrough;
 use varde::{
     layout, mouse, reading, update, DiffLine, Direction, Effect, Event, FilterKeys, Modal, Opened,
     Pane, Place, ReplaceFailed, Selection, State, Tap, View, PALETTE,
@@ -42,6 +43,7 @@ pub struct VardeWorld {
     dirs: BTreeSet<PathBuf>,
     files: BTreeMap<PathBuf, String>,
     absent: BTreeSet<PathBuf>,
+    links: BTreeMap<PathBuf, PathBuf>,
     read_only: BTreeSet<PathBuf>,
     writes_failed: Vec<PathBuf>,
     wrote: Vec<PathBuf>,
@@ -67,6 +69,8 @@ pub struct VardeWorld {
     clipboard: Option<String>,
     browser: Vec<String>,
     keys_sent: Vec<(Pane, Vec<u8>)>,
+    handed_over: Vec<(String, usize)>,
+    background: Vec<String>,
     splits: Vec<usize>,
     highlighted: Vec<Vec<varde::highlight::Token>>,
     highlighted_source: String,
@@ -133,6 +137,7 @@ pub struct VardeWorld {
     candidates_armed: bool,
     signature_armed: bool,
     dwell_armed: Option<u64>,
+    notice_expiry: Option<u64>,
     reported: Vec<String>,
     hold_site_texts: bool,
     configs_unreadable: bool,
@@ -406,6 +411,7 @@ impl VardeWorld {
             | Pane::Frames
             | Pane::Diagnostics
             | Pane::Conflicts
+            | Pane::Waypoints
             | Pane::Variables
             | Pane::Output
             | Pane::Cheatsheet
@@ -838,6 +844,7 @@ impl VardeWorld {
                 self.reported.push(slug.to_string());
             }
             Effect::ClearNotice => self.notices.clear(),
+            Effect::ExpireNotice(after_ms) => self.notice_expiry = Some(after_ms),
             Effect::RunProgram { argv, .. } => {
                 self.program.push(argv);
                 self.output_pty = Some((2, 1));
@@ -920,7 +927,21 @@ impl VardeWorld {
             Effect::Scrolled(pane, direction) => self.scrolled.push((pane, direction)),
             Effect::SetClipboard(text) => self.clipboard = Some(text),
             Effect::OpenUrl(url) => self.browser.push(url),
-            Effect::SendKeys { pane, bytes } => self.keys_sent.push((pane, bytes)),
+            Effect::SendKeys { pane, bytes } => {
+                let sent = String::from_utf8_lossy(&bytes)
+                    .replace("\x1b[200~", "")
+                    .replace("\x1b[201~", "")
+                    .trim()
+                    .to_string();
+                if pane == Pane::Ai && sent.contains(walkthrough::SKILL) {
+                    self.handed_over.push((sent, self.wrote.len()));
+                }
+                self.keys_sent.push((pane, bytes));
+            }
+            Effect::RunWalkthroughCommand { command, stdin } => {
+                self.background.push(command);
+                self.handed_over.push((stdin, self.wrote.len()));
+            }
             Effect::Exit => self.exited = true,
             Effect::Relaunch => self.relaunched = true,
             Effect::StopAi => {
@@ -1080,6 +1101,31 @@ impl VardeWorld {
                 }
                 let read = self.read_files(&repo, &files);
                 let (state, effects) = update(&self.state, Event::StoryFiles(read));
+                self.state = state;
+                self.apply(effects);
+            }
+            Effect::ResolveWrite(path) => {
+                let parent = path.parent().expect("a folder").to_path_buf();
+                let folder = self
+                    .links
+                    .iter()
+                    .find_map(|(link, target)| Some(target.join(parent.strip_prefix(link).ok()?)))
+                    .unwrap_or(parent);
+                let root = self.state.root.clone();
+                let (state, effects) =
+                    update(&self.state, Event::WriteResolved { path, folder, root });
+                self.state = state;
+                self.apply(effects);
+            }
+            Effect::ReadWalkthroughFiles { root, plan, files } => {
+                let lines = files
+                    .into_iter()
+                    .filter_map(|file| {
+                        let count = self.files.get(&root.join(&file))?.lines().count();
+                        Some((file, count))
+                    })
+                    .collect();
+                let (state, effects) = update(&self.state, Event::WalkthroughFiles { plan, lines });
                 self.state = state;
                 self.apply(effects);
             }
@@ -1586,7 +1632,7 @@ fn folder_missing(world: &mut VardeWorld, path: String) {
 #[then(expr = "the folder {string} was created")]
 fn folder_created(world: &mut VardeWorld, path: String) {
     assert!(
-        world.dirs.contains(Path::new(&path)),
+        world.dirs.contains(&abs(world, &path)),
         "made: {:?}",
         world.dirs
     );
@@ -2219,6 +2265,7 @@ fn nothing_written(world: &mut VardeWorld) {
     assert!(wrote.is_empty(), "written: {wrote:?}");
 }
 
+#[when(expr = "Varde starts")]
 #[given(expr = "Varde started in the project")]
 #[given(expr = "Varde starts in the project")]
 #[when(expr = "Varde starts in the project")]
@@ -2695,7 +2742,8 @@ fn pointer_at(
         | Pane::Breakpoints
         | Pane::Frames
         | Pane::Diagnostics
-        | Pane::Conflicts => (panes.corner, 0, 0),
+        | Pane::Conflicts
+        | Pane::Waypoints => (panes.corner, 0, 0),
         Pane::Terminal | Pane::Variables => (panes.terminal, 0, 0),
         Pane::Evaluator => (panes.evaluator, 0, 0),
     };
@@ -3150,6 +3198,10 @@ fn enter_name(world: &mut VardeWorld, name: String) {
 fn press(world: &mut VardeWorld, key: String) {
     if key == "Space"
         || world.state.stepping
+        || matches!(
+            world.state.modal,
+            Modal::ConfirmRevertWalkthrough | Modal::ReplaceWalkthrough
+        )
         || world.state.focus == Pane::Evaluator
         || named_key(&key).is_some_and(|event| matches!(event.code, terminput::KeyCode::F(_)))
     {
@@ -3856,7 +3908,10 @@ fn prompt_for_the_tag(world: &mut VardeWorld, tag: String) {
 
 fn inquiry(world: &VardeWorld) -> (&Buffer, story::Tag) {
     match &world.state.modal {
-        Modal::Inquiry { text, tag } => (text, *tag),
+        Modal::Inquiry {
+            text,
+            ask: varde::Ask::Story(tag),
+        } => (text, *tag),
         other => panic!("the Inquiry box is not open: {other:?}"),
     }
 }
@@ -6450,7 +6505,8 @@ fn drag_past(world: &mut VardeWorld, side: String, pane: String) {
         | Pane::Breakpoints
         | Pane::Frames
         | Pane::Diagnostics
-        | Pane::Conflicts => world.panes().corner,
+        | Pane::Conflicts
+        | Pane::Waypoints => world.panes().corner,
         Pane::Evaluator => world.panes().evaluator,
     };
     let (at_column, at_row) = world.pointer.drag_from.expect("a button is down");
@@ -9669,7 +9725,7 @@ fn modal_is(world: &mut VardeWorld, expected: String) {
         Modal::Branches { .. } => "branches",
         Modal::Skills { .. } => "skills",
         Modal::SkillQuestion { .. } => "skill-question",
-        Modal::Inquiry { .. } => "inquiry",
+        Modal::Inquiry { .. } => varde::asking(&world.state).expect("an Inquiry box"),
         Modal::Comment => "comment",
         Modal::NameBox { .. } => "name-box",
         Modal::StepDetail => "step-detail",
@@ -9682,6 +9738,8 @@ fn modal_is(world: &mut VardeWorld, expected: String) {
         Modal::ExceptionClass => "exception-class",
         Modal::Breakpoint { .. } => "breakpoint",
         Modal::RunMark { .. } => "run-mark",
+        Modal::ConfirmRevertWalkthrough => "confirm-revert-walkthrough",
+        Modal::ReplaceWalkthrough => "replace-walkthrough",
     };
     assert_eq!(actual, expected);
 }
@@ -9724,8 +9782,8 @@ fn overlay_does_not_show_correct_choice(world: &mut VardeWorld) {
     );
 }
 
-#[then(expr = "the walkthrough records step {int} as put")]
-fn walkthrough_records_step_as_put(world: &mut VardeWorld, step_number: usize) {
+#[then(expr = "the story position records step {int} as put")]
+fn story_position_records_step_as_put(world: &mut VardeWorld, step_number: usize) {
     let Some(story::Walking::Story { story, .. }) = world.state.walking else {
         panic!("walking a story");
     };
@@ -9735,12 +9793,12 @@ fn walkthrough_records_step_as_put(world: &mut VardeWorld, step_number: usize) {
         .contains(&(story, step_number - 1)));
 }
 
-#[then(expr = "the walkthrough holds no choice")]
-fn walkthrough_holds_no_choice(world: &mut VardeWorld) {
+#[then(expr = "the story position holds no choice")]
+fn story_position_holds_no_choice(world: &mut VardeWorld) {
     let Some(story::Walking::Story { step, .. }) = world.state.walking else {
         panic!("walking a story");
     };
-    walkthrough_records_step_as_put(world, step + 1);
+    story_position_records_step_as_put(world, step + 1);
 }
 
 #[when(expr = "the story set is re-authored")]
@@ -16821,6 +16879,7 @@ fn chip(world: &VardeWorld, name: &str) -> varde::Chip {
         .into_iter()
         .chain(varde::debug::transport(&world.state))
         .chain(varde::tree_actions::transport(&world.state))
+        .chain(walkthrough::transport(&world.state))
         .find(|offered| offered.name == name)
         .or_else(|| row_chip(world, name))
         .unwrap_or_else(|| panic!("no {name:?} Chip"))
@@ -18749,4 +18808,1051 @@ fn palette_offers_no_entry(world: &mut VardeWorld, entry: String) {
 fn terminal_last_executed_docstring(world: &mut VardeWorld, step: &Step) {
     let expected = step.docstring().expect("docstring").trim();
     assert_eq!(world.executed.last().map(String::as_str), Some(expected));
+}
+
+fn walkthrough_file(world: &VardeWorld) -> PathBuf {
+    varde::varde_dir(&world.state.root, world.state.sidecar.as_deref()).join(walkthrough::FILE)
+}
+
+fn walkthrough_session(world: &VardeWorld) -> &walkthrough::Session {
+    world.state.walkthrough.as_ref().expect("a walkthrough")
+}
+
+#[given("no walkthrough is active")]
+fn no_walkthrough_is_active(world: &mut VardeWorld) {
+    world.state.walkthrough = None;
+}
+
+#[then("no walkthrough is active")]
+fn no_walkthrough_remains(world: &mut VardeWorld) {
+    assert_eq!(world.state.walkthrough, None);
+}
+
+#[given(expr = "I submitted the walkthrough {string}")]
+#[when(expr = "I submit the walkthrough {string}")]
+#[given(expr = "I adjusted the walkthrough with {string}")]
+#[when(expr = "I adjust the walkthrough with {string}")]
+fn submitted_the_walkthrough(world: &mut VardeWorld, prompt: String) {
+    run_story_command(world, ":guide".to_string());
+    type_in_inquiry_box(world, prompt);
+    route_key(world, "Ctrl+s", 0);
+}
+
+fn walkthrough_requests(world: &VardeWorld) -> Vec<String> {
+    world
+        .handed_over
+        .iter()
+        .map(|(request, _)| request.clone())
+        .collect()
+}
+
+fn last_walkthrough_request(world: &VardeWorld) -> String {
+    walkthrough_requests(world)
+        .pop()
+        .expect("a walkthrough request was sent")
+}
+
+fn requests_for(world: &VardeWorld, action: &str) -> Vec<String> {
+    let named = format!("Action: {action}.");
+    walkthrough_requests(world)
+        .into_iter()
+        .filter(|request| request.contains(&named))
+        .collect()
+}
+
+fn request_names_waypoint(request: &str, id: &str) -> bool {
+    request.contains(&format!("Waypoint: {id}."))
+}
+
+#[then("no walkthrough request was sent")]
+fn no_walkthrough_request_sent(world: &mut VardeWorld) {
+    assert!(world.handed_over.is_empty(), "{:?}", world.handed_over);
+}
+
+#[then(expr = "a {string} walkthrough request was sent")]
+#[then(expr = "an {string} walkthrough request was sent")]
+fn walkthrough_request_sent(world: &mut VardeWorld, action: String) {
+    assert!(
+        !requests_for(world, &action).is_empty(),
+        "{:?}",
+        walkthrough_requests(world)
+    );
+}
+
+#[then(expr = "no {string} walkthrough request was sent")]
+fn no_such_walkthrough_request_sent(world: &mut VardeWorld, action: String) {
+    assert!(
+        requests_for(world, &action).is_empty(),
+        "{:?}",
+        walkthrough_requests(world)
+    );
+}
+
+#[then(expr = "exactly {int} walkthrough request was sent")]
+#[then(expr = "exactly {int} walkthrough requests were sent")]
+fn exactly_requests_sent(world: &mut VardeWorld, count: usize) {
+    assert_eq!(world.handed_over.len(), count, "{:?}", world.handed_over);
+}
+
+#[then(expr = "exactly {int} {string} walkthrough request was sent")]
+#[then(expr = "exactly {int} {string} walkthrough requests were sent")]
+fn exactly_such_requests_sent(world: &mut VardeWorld, count: usize, action: String) {
+    assert_eq!(requests_for(world, &action).len(), count);
+}
+
+#[then(expr = "the walkthrough request names the Skill {string}")]
+fn request_names_skill(world: &mut VardeWorld, skill: String) {
+    let request = last_walkthrough_request(world);
+    assert!(request.contains(&format!("/{skill}/SKILL.md")), "{request}");
+}
+
+#[then("the walkthrough request names the plan file")]
+#[then("the background command's stdin names the plan file")]
+fn request_names_plan_file(world: &mut VardeWorld) {
+    let request = last_walkthrough_request(world);
+    let plan = walkthrough_file(world).display().to_string();
+    assert!(
+        request.contains(&format!("Plan file: {plan}.")),
+        "{request}"
+    );
+}
+
+#[then(expr = "the walkthrough request names Waypoint {string}")]
+#[then(expr = "the background command's stdin names Waypoint {string}")]
+fn request_names_the_waypoint(world: &mut VardeWorld, id: String) {
+    let request = last_walkthrough_request(world);
+    assert!(request_names_waypoint(&request, &id), "{request}");
+}
+
+#[then(expr = "the walkthrough request carries {string}")]
+fn request_carries(world: &mut VardeWorld, text: String) {
+    let request = last_walkthrough_request(world);
+    assert!(request.contains(&text), "{request}");
+}
+
+#[then(expr = "the walkthrough request carries the open buffers {string} and {string}")]
+fn request_carries_buffers(world: &mut VardeWorld, first: String, second: String) {
+    let request = last_walkthrough_request(world);
+    let open = request
+        .split("Open buffers: ")
+        .nth(1)
+        .and_then(|rest| rest.split(". ").next())
+        .unwrap_or_else(|| panic!("no open buffers in {request}"));
+    let open: BTreeSet<&str> = open.split(", ").collect();
+    assert!(
+        open.contains(first.as_str()) && open.contains(second.as_str()),
+        "{request}"
+    );
+}
+
+#[then(expr = "the walkthrough request carries the cursor at {string} line {int} column {int}")]
+fn request_carries_cursor(world: &mut VardeWorld, file: String, line: usize, column: usize) {
+    let request = last_walkthrough_request(world);
+    assert!(
+        request.contains(&format!("Cursor: {file} line {line} column {column}.")),
+        "{request}"
+    );
+}
+
+fn load_walkthrough_config(world: &mut VardeWorld) {
+    let (loaded, _, _) = startup::start(&world.startup).expect("Varde starts");
+    world.state.walkthrough_driver = loaded.walkthrough_driver;
+    world.state.walkthrough_command = loaded.walkthrough_command;
+}
+
+fn configure_walkthrough(world: &mut VardeWorld, key: &str, value: &str) {
+    let mut config = world.startup.global_config.clone().unwrap_or_default();
+    if !config.contains("[walkthrough]") {
+        config.push_str("\n[walkthrough]\n");
+    }
+    config.push_str(&format!("{key} = {value:?}\n"));
+    world.startup.global_config = Some(config);
+    load_walkthrough_config(world);
+}
+
+#[given("no walkthrough config is set")]
+fn no_walkthrough_config(world: &mut VardeWorld) {
+    world.startup.global_config = None;
+    world.startup.project_config = None;
+    load_walkthrough_config(world);
+}
+
+#[given(expr = "the walkthrough driver is {string}")]
+fn walkthrough_driver_set(world: &mut VardeWorld, driver: String) {
+    configure_walkthrough(world, "driver", &driver);
+}
+
+#[given(expr = "the walkthrough command is {string}")]
+fn walkthrough_command_set(world: &mut VardeWorld, command: String) {
+    configure_walkthrough(world, "command", &command);
+}
+
+#[then(expr = "the walkthrough driver is {string}")]
+fn walkthrough_driver_is(world: &mut VardeWorld, driver: String) {
+    let expected = match driver.as_str() {
+        "pane" => walkthrough::Driver::Pane,
+        "background" => walkthrough::Driver::Background,
+        other => panic!("no driver {other:?}"),
+    };
+    assert_eq!(world.state.walkthrough_driver, expected);
+}
+
+#[then(expr = "the walkthrough command is {string}")]
+fn walkthrough_command_is(world: &mut VardeWorld, command: String) {
+    assert_eq!(world.state.walkthrough_command, command);
+}
+
+#[then(expr = "a {string} walkthrough request was pasted into the AI pane")]
+fn request_pasted(world: &mut VardeWorld, action: String) {
+    let named = format!("Action: {action}.");
+    assert!(
+        ai_sends(world).iter().any(|sent| sent.contains(&named)),
+        "{:?}",
+        ai_sends(world)
+    );
+}
+
+#[then("no background command was run")]
+fn no_background_command(world: &mut VardeWorld) {
+    assert!(world.background.is_empty(), "{:?}", world.background);
+}
+
+#[then(expr = "the background command {string} was run once")]
+fn background_command_run_once(world: &mut VardeWorld, command: String) {
+    assert_eq!(world.background, vec![command]);
+}
+
+#[then(expr = "its stdin is a {string} walkthrough request")]
+fn stdin_is_request(world: &mut VardeWorld, action: String) {
+    let request = last_walkthrough_request(world);
+    assert!(request.contains(&format!("Action: {action}.")), "{request}");
+}
+
+#[when(expr = "the background command exits with status {int}")]
+fn background_command_exits(world: &mut VardeWorld, status: i32) {
+    world.send(Event::WalkthroughCommandExited(Some(status)));
+}
+
+#[then("no walkthrough request is in flight")]
+fn no_request_in_flight(world: &mut VardeWorld) {
+    let running =
+        (world.state.walkthrough.as_ref()).and_then(|session| session.queue.running.clone());
+    assert_eq!(running, None);
+}
+
+#[then(expr = "the walkthrough spinner names {string} as running")]
+fn spinner_names_running(world: &mut VardeWorld, action: String) {
+    let spinner = varde::walkthrough_spinner(&world.state).expect("a walkthrough spinner");
+    assert!(spinner.contains(&format!(" {action} running")), "{spinner}");
+}
+
+#[then(expr = "the walkthrough spinner names {string} as queued")]
+fn spinner_names_queued(world: &mut VardeWorld, action: String) {
+    let spinner = varde::walkthrough_spinner(&world.state).expect("a walkthrough spinner");
+    let queued = spinner
+        .split(" · ")
+        .find_map(|part| part.strip_suffix(" queued"))
+        .unwrap_or_else(|| panic!("nothing queued in {spinner}"));
+    assert!(queued.split(", ").any(|name| name == action), "{spinner}");
+}
+
+#[given(expr = "{string} has unsaved edits")]
+fn has_unsaved_edits(world: &mut VardeWorld, path: String) {
+    open_dirty(world, path);
+}
+
+#[then(expr = "{string} was saved before the request was sent")]
+fn saved_before_request(world: &mut VardeWorld, path: String) {
+    let full = world.state.root.join(&path);
+    let saved = world
+        .wrote
+        .iter()
+        .position(|written| *written == full)
+        .unwrap_or_else(|| panic!("{path} was not saved: {:?}", world.wrote));
+    let (_, wrote_before) = world.handed_over.first().expect("a request");
+    assert!(saved < *wrote_before, "{path} was saved after the request");
+}
+
+#[then(expr = "{string} was not saved")]
+fn was_not_saved(world: &mut VardeWorld, path: String) {
+    let full = world.state.root.join(&path);
+    assert!(!world.wrote.contains(&full), "{:?}", world.wrote);
+}
+
+fn hand_over(world: &mut VardeWorld, action: walkthrough::Action, waypoint: Option<String>) {
+    let mut next = world.state.clone();
+    let effects = varde::hand_over(
+        &mut next,
+        walkthrough::Request {
+            action,
+            waypoint,
+            detail: String::new(),
+        },
+    );
+    world.state = next;
+    world.apply(effects);
+}
+
+fn action_named(name: &str) -> walkthrough::Action {
+    use walkthrough::Action;
+    [
+        Action::Plan,
+        Action::Evaluate,
+        Action::Adjust,
+        Action::Write,
+        Action::Revert,
+        Action::Fix,
+    ]
+    .into_iter()
+    .find(|action| action.slug() == name)
+    .unwrap_or_else(|| panic!("no action {name:?}"))
+}
+
+#[given(expr = "a {string} walkthrough request is in flight")]
+#[given(expr = "an {string} walkthrough request is in flight")]
+fn request_in_flight(world: &mut VardeWorld, action: String) {
+    let current = walkthrough_session(world).current.clone();
+    hand_over(world, action_named(&action), current);
+    assert!(walkthrough_session(world).queue.running.is_some());
+}
+
+#[given(expr = "an evaluation of Waypoint {string} is queued")]
+#[when(expr = "an evaluation of Waypoint {string} is queued")]
+fn evaluation_queued(world: &mut VardeWorld, id: String) {
+    hand_over(world, walkthrough::Action::Evaluate, Some(id));
+}
+
+fn queued(world: &VardeWorld, with_waypoint: bool) -> Vec<String> {
+    walkthrough_session(world)
+        .queue
+        .waiting
+        .iter()
+        .map(|request| match (with_waypoint, &request.waypoint) {
+            (true, Some(id)) => format!("{} {id}", request.action.slug()),
+            _ => request.action.slug().to_string(),
+        })
+        .collect()
+}
+
+fn queue_holds(world: &VardeWorld, expected: Vec<String>) {
+    let with_waypoint = expected.iter().any(|entry| entry.contains(' '));
+    let held = queued(world, with_waypoint);
+    let held: Vec<String> = held
+        .iter()
+        .zip(&expected)
+        .map(|(held, wanted)| match wanted.contains(' ') {
+            true => held.clone(),
+            false => held.split(' ').next().unwrap_or_default().to_string(),
+        })
+        .collect();
+    assert_eq!(
+        held.len(),
+        queued(world, false).len(),
+        "{:?}",
+        queued(world, true)
+    );
+    assert_eq!(held, expected);
+}
+
+#[then(expr = "the walkthrough queue holds {string}")]
+fn queue_holds_one(world: &mut VardeWorld, entry: String) {
+    queue_holds(world, vec![entry]);
+}
+
+#[then("the walkthrough queue holds, in order:")]
+fn queue_holds_in_order(world: &mut VardeWorld, step: &Step) {
+    let expected = step
+        .table()
+        .expect("table")
+        .rows
+        .iter()
+        .map(|row| row[0].clone())
+        .collect();
+    queue_holds(world, expected);
+}
+
+#[then("the walkthrough queue is empty")]
+fn queue_is_empty(world: &mut VardeWorld) {
+    assert!(walkthrough_session(world).queue.waiting.is_empty());
+}
+
+fn refused_in_fix(world: &VardeWorld) -> String {
+    let fix = requests_for(world, "fix").pop().expect("a fix request");
+    fix.split("Refused: ")
+        .nth(1)
+        .unwrap_or_else(|| panic!("the fix request names no failure: {fix}"))
+        .to_string()
+}
+
+#[then(expr = "the fix request names Waypoint {string} as {string}")]
+fn fix_names_waypoint(world: &mut VardeWorld, id: String, problem: String) {
+    let refused = refused_in_fix(world);
+    assert!(
+        refused
+            .split(", ")
+            .any(|named| named == format!("{id} {problem}")),
+        "{refused}"
+    );
+}
+
+#[then(expr = "the fix request does not name Waypoint {string}")]
+fn fix_does_not_name_waypoint(world: &mut VardeWorld, id: String) {
+    let refused = refused_in_fix(world);
+    assert!(
+        refused
+            .split(", ")
+            .all(|named| !named.starts_with(&format!("{id} "))),
+        "{refused}"
+    );
+}
+#[given("a walkthrough is active on the plan:")]
+fn walkthrough_active_on_plan(world: &mut VardeWorld, step: &Step) {
+    world.state.walkthrough = Some(walkthrough::Session::default());
+    walkthrough_file_changes(world, step);
+    assert!(
+        walkthrough_session(world).plan.is_some(),
+        "the plan was refused"
+    );
+    world.opened.clear();
+}
+
+#[given("the walkthrough file changes to:")]
+#[when("the walkthrough file changes to:")]
+fn walkthrough_file_changes(world: &mut VardeWorld, step: &Step) {
+    let contents = step.docstring().expect("docstring").to_string();
+    let path = walkthrough_file(world);
+    world.files.insert(path, contents.clone());
+    world.send(Event::WalkthroughChanged(contents));
+}
+
+#[then(expr = "the walkthrough file is {string}")]
+fn walkthrough_file_is(world: &mut VardeWorld, path: String) {
+    assert_eq!(walkthrough_file(world), PathBuf::from(path));
+}
+
+#[then("the walkthrough file is in the Sidecar")]
+fn walkthrough_file_in_sidecar(world: &mut VardeWorld) {
+    assert!(walkthrough_file(world).starts_with(SIDECAR));
+}
+
+#[then("the walkthrough file was not written")]
+fn walkthrough_file_not_written(world: &mut VardeWorld) {
+    let path = walkthrough_file(world);
+    assert!(!world.wrote.contains(&path), "written: {:?}", world.wrote);
+}
+
+#[then(expr = "the walkthrough state is {string}")]
+fn walkthrough_state_is(world: &mut VardeWorld, expected: String) {
+    let actual = match &world.state.walkthrough {
+        None => "none",
+        Some(walkthrough::Session {
+            ending: walkthrough::Ending::Reverting | walkthrough::Ending::Replacing,
+            ..
+        }) => "reverting",
+        Some(walkthrough::Session { plan: None, .. }) => "planning",
+        Some(walkthrough::Session { plan: Some(_), .. }) => "active",
+    };
+    assert_eq!(actual, expected);
+}
+
+#[then("the plan holds the Waypoints, in order:")]
+fn plan_holds_waypoints(world: &mut VardeWorld, step: &Step) {
+    let expected: Vec<String> = step
+        .table()
+        .expect("table")
+        .rows
+        .iter()
+        .map(|row| row[0].clone())
+        .collect();
+    let plan = walkthrough_session(world).plan.as_ref().expect("a plan");
+    let ids: Vec<String> = plan.waypoints.iter().map(|w| w.id.clone()).collect();
+    assert_eq!(ids, expected);
+}
+
+#[then(expr = "the walkthrough failure is {string}")]
+fn walkthrough_failure_is(world: &mut VardeWorld, expected: String) {
+    let failure = walkthrough_session(world)
+        .failure
+        .as_ref()
+        .expect("a failure");
+    assert_eq!(failure.slug(), expected);
+}
+
+fn failing_waypoints(world: &VardeWorld) -> Vec<(String, &'static str)> {
+    match &walkthrough_session(world).failure {
+        Some(walkthrough::Failure::Waypoints(problems)) => problems
+            .iter()
+            .map(|(id, problem)| (id.clone(), problem.slug()))
+            .collect(),
+        other => panic!("no failing Waypoints: {other:?}"),
+    }
+}
+
+#[then(expr = "the walkthrough failure names Waypoint {string} as {string}")]
+fn walkthrough_failure_names(world: &mut VardeWorld, id: String, problem: String) {
+    let failing = failing_waypoints(world);
+    assert!(
+        failing
+            .iter()
+            .any(|(named, slug)| *named == id && *slug == problem),
+        "failing: {failing:?}"
+    );
+}
+
+#[then(expr = "the walkthrough failure does not name Waypoint {string}")]
+fn walkthrough_failure_does_not_name(world: &mut VardeWorld, id: String) {
+    let failing = failing_waypoints(world);
+    assert!(
+        failing.iter().all(|(named, _)| *named != id),
+        "failing: {failing:?}"
+    );
+}
+
+#[then("the walkthrough has no failure")]
+fn walkthrough_has_no_failure(world: &mut VardeWorld) {
+    assert_eq!(walkthrough_session(world).failure, None);
+}
+
+fn shipped_skill(world: &VardeWorld, name: &str) -> String {
+    let (file, _) = skills::SHIPPED
+        .iter()
+        .find(|(file, _)| file.ends_with(&format!("/{name}/{}", skills::FILE)))
+        .expect("a shipped Skill");
+    world
+        .files
+        .get(&world.startup.varde_home.join(file))
+        .cloned()
+        .expect("the Skill on disk")
+}
+
+#[then(expr = "the shipped Skill {string} is on disk")]
+fn shipped_skill_on_disk(world: &mut VardeWorld, name: String) {
+    let text = shipped_skill(world, &name);
+    assert_eq!(
+        skills::read(&name, &text).read.map(|front| front.name),
+        Ok(name)
+    );
+}
+
+#[then(regex = r#"^the Skill "([^"]+)" names the actions (.+)$"#)]
+fn skill_names_actions(world: &mut VardeWorld, name: String, actions: String) {
+    let text = shipped_skill(world, &name);
+    let actions: Vec<&str> = actions.split('"').skip(1).step_by(2).collect();
+    assert_eq!(actions.len(), 6, "{actions:?}");
+    for action in actions {
+        assert!(
+            text.contains(&format!("### `{action}`")),
+            "no section for {action}"
+        );
+    }
+}
+
+#[then(expr = "the Skill {string} documents the walkthrough file's schema")]
+fn skill_documents_schema(world: &mut VardeWorld, name: String) {
+    let text = shipped_skill(world, &name);
+    let example = text
+        .split("```json")
+        .nth(1)
+        .and_then(|rest| rest.split("```").next())
+        .expect("a JSON example");
+    let plan = walkthrough::parse(example).expect("the example parses");
+    assert!(plan
+        .waypoints
+        .iter()
+        .any(|w| w.kind == walkthrough::Kind::Code));
+    assert!(plan
+        .waypoints
+        .iter()
+        .any(|w| w.kind == walkthrough::Kind::Context));
+    for status in ["active", "completed", "ended"] {
+        assert!(text.contains(&format!("`{status}`")), "no status {status}");
+    }
+}
+
+#[then(
+    expr = "the Skill {string} asks for Waypoints in the order a developer would build the change"
+)]
+fn skill_asks_for_build_order(world: &mut VardeWorld, name: String) {
+    let text = shipped_skill(world, &name);
+    assert!(text.contains("order a developer would build the change"));
+}
+
+#[then(
+    expr = "the Skill {string} allows writing source files only on {string}, {string} and {string}"
+)]
+fn skill_allows_writing_only_on(
+    world: &mut VardeWorld,
+    name: String,
+    a: String,
+    b: String,
+    c: String,
+) {
+    let text = shipped_skill(world, &name);
+    let rule = text
+        .lines()
+        .find(|line| line.contains("source file"))
+        .expect("a rule on source files");
+    for action in [a, b, c] {
+        assert!(rule.contains(&format!("`{action}`")), "{rule}");
+    }
+    for action in ["plan", "evaluate", "fix"] {
+        assert!(!rule.contains(&format!("`{action}`")), "{rule}");
+    }
+}
+
+fn waypoint<'a>(world: &'a VardeWorld, id: &str) -> &'a walkthrough::Waypoint {
+    walkthrough_session(world)
+        .plan
+        .as_ref()
+        .expect("a plan")
+        .waypoints
+        .iter()
+        .find(|waypoint| waypoint.id == id)
+        .expect("the Waypoint in the plan")
+}
+
+fn shown_text(world: &VardeWorld, path: &str) -> String {
+    let full = world.state.root.join(path);
+    match world.state.buffers.get(&full) {
+        Some(buffer) => buffer.shown().to_string(),
+        None => world.files.get(&full).cloned().expect("the file"),
+    }
+}
+
+fn shown_line(world: &VardeWorld, path: &str, line: usize) -> String {
+    shown_text(world, path)
+        .split('\n')
+        .nth(line - 1)
+        .expect("the line")
+        .to_string()
+}
+
+fn context_box(world: &VardeWorld) -> walkthrough::ContextBox {
+    walkthrough::context_box(&world.state).expect("a context box")
+}
+
+#[then(expr = "the current Waypoint is {string}")]
+fn current_waypoint_is(world: &mut VardeWorld, id: String) {
+    assert_eq!(
+        walkthrough::current(&world.state).map(|waypoint| waypoint.id.as_str()),
+        Some(id.as_str())
+    );
+}
+
+#[then(expr = "line {int} of {string} reads {string}")]
+fn line_of_reads(world: &mut VardeWorld, line: usize, path: String, expected: String) {
+    assert_eq!(
+        shown_line(world, &path, line),
+        expected.replace("\\\"", "\"")
+    );
+}
+
+#[then(expr = "line {int} of {string} holds only its indent")]
+fn line_holds_only_indent(world: &mut VardeWorld, line: usize, path: String) {
+    let held = shown_line(world, &path, line);
+    let below = shown_line(world, &path, line + 1);
+    assert_eq!(held, below[..below.len() - below.trim_start().len()]);
+    assert!(!held.is_empty(), "no indent");
+}
+
+#[then(expr = "Waypoint {string} has no inserted comment")]
+fn waypoint_has_no_inserted_comment(world: &mut VardeWorld, id: String) {
+    assert!(!walkthrough_session(world).inserted.contains(&id));
+}
+
+#[then(expr = "{string} holds the comment {string} once")]
+fn holds_comment_once(world: &mut VardeWorld, path: String, comment: String) {
+    assert_eq!(shown_text(world, &path).matches(&comment).count(), 1);
+}
+
+#[then("Varde has inserted the comments for Waypoints:")]
+fn inserted_comments_for(world: &mut VardeWorld, step: &Step) {
+    let expected: BTreeSet<String> = step
+        .table()
+        .expect("table")
+        .rows
+        .iter()
+        .map(|row| row[0].clone())
+        .collect();
+    assert_eq!(walkthrough_session(world).inserted, expected);
+}
+
+#[then(expr = "line {int} of {string} carries the context mark")]
+fn carries_context_mark(world: &mut VardeWorld, line: usize, path: String) {
+    let full = world.state.root.join(&path);
+    assert!(walkthrough::context_mark(&world.state, &full, line));
+    assert!(!walkthrough::context_mark(&world.state, &full, line + 1));
+}
+
+#[then(expr = "the context box is shown under line {int}")]
+fn context_box_under(world: &mut VardeWorld, line: usize) {
+    assert_eq!(context_box(world).placement().from, line + 1);
+}
+
+#[then(expr = "the context box renders {string} in bold")]
+fn context_box_renders_bold(world: &mut VardeWorld, text: String) {
+    let shown = context_box(world);
+    assert!(
+        shown
+            .rows
+            .iter()
+            .flat_map(|row| &row.pieces)
+            .any(|piece| piece.text == text && piece.emphasis.strong),
+        "{:?}",
+        shown.rows
+    );
+}
+
+#[then(expr = "the context box renders {string}")]
+fn context_box_renders(world: &mut VardeWorld, text: String) {
+    let rendered: Vec<String> = context_box(world)
+        .rows
+        .iter()
+        .map(|row| row.text().trim().to_string())
+        .collect();
+    assert!(rendered.join(" ").contains(&text), "{rendered:?}");
+}
+
+#[then(expr = "{string} is unchanged")]
+fn file_is_unchanged(world: &mut VardeWorld, path: String) {
+    let full = world.state.root.join(&path);
+    assert!(!world.wrote.contains(&full), "written: {:?}", world.wrote);
+    assert_eq!(Some(&shown_text(world, &path)), world.files.get(&full));
+}
+
+#[then("the buffer has no unsaved edits")]
+fn buffer_has_no_unsaved_edits(world: &mut VardeWorld) {
+    let path = world.state.current_buffer.clone().expect("a buffer");
+    assert!(!world.state.buffers[&path].is_dirty());
+}
+
+#[then(expr = "the context box is {int} columns wide")]
+fn context_box_is_wide(world: &mut VardeWorld, columns: usize) {
+    assert_eq!(context_box(world).width, columns);
+}
+
+#[given("the context box has focus")]
+#[then("the context box has focus")]
+fn context_box_has_focus(world: &mut VardeWorld) {
+    assert!(walkthrough_session(world).box_focus.is_some());
+}
+
+#[then(regex = r"^the context box is scrolled (\d+) rows?$")]
+fn context_box_scrolled(world: &mut VardeWorld, rows: usize) {
+    assert_eq!(context_box(world).scroll, rows);
+}
+
+#[then(expr = "no context box row is wider than {int} columns")]
+fn no_context_row_wider(world: &mut VardeWorld, columns: usize) {
+    let shown = context_box(world);
+    assert!(shown.width <= columns);
+    for row in &shown.rows {
+        let drawn = varde::preview::prefix(row) + &row.text();
+        assert!(
+            unicode_width::UnicodeWidthStr::width(drawn.as_str()) + 2 <= columns,
+            "{drawn:?}"
+        );
+    }
+}
+
+#[then("every walkthrough Chip has a key or a command")]
+fn every_walkthrough_chip_has_keys(world: &mut VardeWorld) {
+    let chips = walkthrough::transport(&world.state);
+    assert!(!chips.is_empty());
+    for chip in chips {
+        assert!(!chip.keys.is_empty(), "{} has no key", chip.name);
+    }
+}
+
+#[then(expr = "Waypoint {string} is on line {int} of {string}")]
+fn waypoint_is_on_line(world: &mut VardeWorld, id: String, line: usize, path: String) {
+    let waypoint = waypoint(world, &id);
+    assert_eq!(
+        (waypoint.file.as_str(), waypoint.line),
+        (path.as_str(), line)
+    );
+}
+
+#[given(expr = "{string} links to the folder {string}")]
+fn links_to_folder(world: &mut VardeWorld, link: String, folder: String) {
+    let link = abs(world, &link);
+    world.links.insert(link, PathBuf::from(folder));
+}
+
+#[when("Varde restarts")]
+fn varde_restarts(world: &mut VardeWorld) {
+    world.startup.walkthrough_json = world.files.get(&walkthrough_file(world)).cloned();
+    starts_again_in_same_folder(world);
+}
+
+#[then("the Corner holds the Waypoint list")]
+fn corner_holds_waypoint_list(world: &mut VardeWorld) {
+    assert_eq!(world.state.corner, layout::Corner::Waypoints);
+}
+
+#[then("the Corner does not hold the Waypoint list")]
+fn corner_does_not_hold_waypoint_list(world: &mut VardeWorld) {
+    assert_ne!(world.state.corner, layout::Corner::Waypoints);
+}
+
+#[then("the Waypoint list shows, in order:")]
+fn waypoint_list_shows(world: &mut VardeWorld, step: &Step) {
+    let expected: Vec<(String, String)> = step
+        .table()
+        .expect("table")
+        .rows
+        .iter()
+        .skip(1)
+        .map(|row| (row[0].trim().to_string(), row[1].trim().to_string()))
+        .collect();
+    let listed: Vec<(String, String)> = walkthrough::listed(&world.state)
+        .into_iter()
+        .map(|row| match row {
+            walkthrough::Listed::File(file) => (file, String::new()),
+            walkthrough::Listed::Waypoint { id, .. } => (String::new(), id),
+        })
+        .collect();
+    assert_eq!(listed, expected);
+}
+
+fn listed_waypoint(world: &VardeWorld, wanted: &str) -> (walkthrough::Mark, bool, bool) {
+    walkthrough::listed(&world.state)
+        .into_iter()
+        .find_map(|row| match row {
+            walkthrough::Listed::Waypoint {
+                id, mark, ai, lit, ..
+            } if id == wanted => Some((mark, ai, lit)),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("Waypoint {wanted} is not in the Waypoint list"))
+}
+
+fn waypoint_marked(world: &VardeWorld, id: &str, named: &str) -> bool {
+    let (mark, ai, _) = listed_waypoint(world, id);
+    match named {
+        "ai" => ai,
+        named => mark.slug() == named,
+    }
+}
+
+#[then(expr = "Waypoint {string} is marked {string} in the Waypoint list")]
+fn waypoint_is_marked(world: &mut VardeWorld, id: String, mark: String) {
+    assert!(waypoint_marked(world, &id, &mark));
+}
+
+#[then(expr = "Waypoint {string} is not marked {string} in the Waypoint list")]
+fn waypoint_is_not_marked(world: &mut VardeWorld, id: String, mark: String) {
+    assert!(!waypoint_marked(world, &id, &mark));
+}
+
+#[given(expr = "Waypoint {string} is lit in the Waypoint list")]
+#[then(expr = "Waypoint {string} is lit in the Waypoint list")]
+fn waypoint_is_lit(world: &mut VardeWorld, id: String) {
+    assert!(listed_waypoint(world, &id).2);
+}
+
+#[then(expr = "Waypoint {string} is not lit in the Waypoint list")]
+fn waypoint_is_not_lit(world: &mut VardeWorld, id: String) {
+    assert!(!listed_waypoint(world, &id).2);
+}
+
+#[given("the Waypoint list has focus")]
+fn waypoint_list_has_focus(world: &mut VardeWorld) {
+    world.state.focus = Pane::Waypoints;
+}
+
+#[given(expr = "Waypoint {string} is selected in the Waypoint list")]
+fn waypoint_is_selected(world: &mut VardeWorld, wanted: String) {
+    let at = walkthrough::listed_ids(&world.state)
+        .iter()
+        .position(|id| *id == wanted)
+        .expect("listed");
+    let moves = at.abs_diff(walkthrough_session(world).selected);
+    let direction = match at < walkthrough_session(world).selected {
+        true => Direction::Up,
+        false => Direction::Down,
+    };
+    for _ in 0..moves {
+        world.send(Event::MoveSelection(direction));
+    }
+    assert_eq!(walkthrough_session(world).selected, at);
+}
+
+#[then(expr = "the tree row {string} carries the walkthrough colour")]
+fn tree_row_carries_colour(world: &mut VardeWorld, path: String) {
+    assert!(walkthrough::coloured(&world.state, &abs(world, &path)));
+}
+
+#[then(expr = "the tree row {string} does not carry the walkthrough colour")]
+fn tree_row_does_not_carry_colour(world: &mut VardeWorld, path: String) {
+    assert!(!walkthrough::coloured(&world.state, &abs(world, &path)));
+}
+
+#[then("no tree row carries the walkthrough colour")]
+fn no_tree_row_carries_colour(world: &mut VardeWorld) {
+    let mut paths: Vec<PathBuf> = tree::visible_rows(&world.state)
+        .into_iter()
+        .map(|row| row.path)
+        .collect();
+    paths.extend(world.known_files.iter().cloned());
+    assert!(!paths.is_empty());
+    for path in paths {
+        assert!(
+            !walkthrough::coloured(&world.state, &path),
+            "{}",
+            path.display()
+        );
+    }
+}
+
+#[then(expr = "Waypoint {string} is selected in the Waypoint list")]
+fn waypoint_is_now_selected(world: &mut VardeWorld, id: String) {
+    assert_eq!(walkthrough::selected(&world.state), Some(id));
+}
+
+#[then(expr = "the footer verdict is {string}")]
+fn footer_verdict_is(world: &mut VardeWorld, expected: String) {
+    assert!(world.notices.is_empty(), "notices: {:?}", world.notices);
+    let shown = match varde::walkthrough_footer(&world.state) {
+        None => "none",
+        Some(varde::Footer::Working(_)) => "working",
+        Some(varde::Footer::Verdict(walkthrough::Verdict::Lgtm)) => "lgtm",
+        Some(varde::Footer::Verdict(walkthrough::Verdict::Failing { .. })) => "failing",
+    };
+    assert_eq!(shown, expected);
+}
+
+#[then("the footer verdict carries the agent's message")]
+fn footer_verdict_carries_message(world: &mut VardeWorld) {
+    assert!(matches!(
+        varde::walkthrough_footer(&world.state),
+        Some(varde::Footer::Verdict(walkthrough::Verdict::Failing { message })) if !message.is_empty()
+    ));
+}
+
+#[when("the notice times out")]
+fn notice_times_out(world: &mut VardeWorld) {
+    assert!(!world.notices.is_empty(), "no notice was shown");
+    assert!(
+        world.notice_expiry.take().is_some(),
+        "the notice never times out"
+    );
+    world.notices.clear();
+}
+
+fn ai_write_chip(world: &VardeWorld, name: &str) -> layout::Area {
+    assert_eq!(name, "AI Write", "unknown Waypoint Chip {name:?}");
+    walkthrough::write_chip(&world.state, &world.panes()).expect("the Chip on screen")
+}
+
+#[then(expr = "the {string} Chip is drawn on line {int} of {string}")]
+fn chip_drawn_on_line(world: &mut VardeWorld, name: String, line: usize, path: String) {
+    let row = ai_write_chip(world, &name).y;
+    assert_eq!(
+        world.state.current_buffer,
+        Some(world.state.root.join(path))
+    );
+    let editor = world.panes().editor;
+    assert_eq!(
+        (row - editor.y - 1) as usize + world.state.editor_scroll + 1,
+        line
+    );
+}
+
+#[then(expr = "the {string} Chip ends left of the minimap")]
+fn chip_ends_left_of_minimap(world: &mut VardeWorld, name: String) {
+    let end = ai_write_chip(world, &name).right();
+    let minimap = varde::minimap::strip(&world.state, world.panes().editor);
+    assert!(minimap.width > 0, "no minimap");
+    assert!(
+        end <= minimap.x,
+        "the Chip ends at {end}, the minimap starts at {}",
+        minimap.x
+    );
+}
+
+#[when(expr = "I click the {string} Chip on the Waypoint's line")]
+fn click_waypoint_chip(world: &mut VardeWorld, name: String) {
+    let chip = ai_write_chip(world, &name);
+    let (column, row) = (chip.x, chip.y);
+    world.pointer = mouse::Pointer::default();
+    world.report(mouse::Kind::LeftDown, column, row);
+    world.report(mouse::Kind::LeftUp, column, row);
+}
+
+#[given(expr = "I asked the agent to write Waypoint {string}")]
+fn asked_agent_to_write(world: &mut VardeWorld, id: String) {
+    current_waypoint_is(world, id);
+    run_story_command(world, ":guide write".to_string());
+    assert_eq!(requests_for(world, "write").len(), 1);
+}
+
+#[given(expr = "the agent wrote {string} to line {int} of {string}")]
+fn agent_wrote_line(world: &mut VardeWorld, text: String, line: usize, path: String) {
+    let full = world.state.root.join(&path);
+    let disk = world.files.get(&full).cloned().expect("the file on disk");
+    let mut lines: Vec<&str> = disk.split('\n').collect();
+    lines[line - 1] = &text;
+    let contents = lines.join("\n");
+    world.files.insert(full.clone(), contents.clone());
+    world.send(Event::FileChanged {
+        path: full,
+        contents,
+    });
+}
+
+fn held_text(world: &VardeWorld, path: &str) -> String {
+    let absolute = abs(world, path);
+    match world.state.buffers.get(&absolute) {
+        Some(buffer) => buffer.shown().to_string(),
+        None => world.files.get(&absolute).cloned().unwrap_or_default(),
+    }
+}
+
+#[then(expr = "{string} holds no comment {string}")]
+fn holds_no_comment(world: &mut VardeWorld, path: String, comment: String) {
+    let inserted = format!("{} {comment}", walkthrough::comment_token(&path));
+    let text = held_text(world, &path);
+    assert!(!text.is_empty(), "{path} holds nothing");
+    assert!(text.lines().all(|line| line.trim() != inserted), "{text}");
+}
+
+#[then(expr = "{string} still holds {string}")]
+fn still_holds(world: &mut VardeWorld, path: String, expected: String) {
+    let text = held_text(world, &path);
+    assert!(text.contains(&expected), "{text}");
+}
+
+#[given("I reverted the walkthrough")]
+fn reverted_the_walkthrough(world: &mut VardeWorld) {
+    run_story_command(world, ":guide revert".to_string());
+    route_key(world, "y", 0);
+}
+
+fn transport_names(world: &VardeWorld) -> Vec<&'static str> {
+    walkthrough::transport(&world.state)
+        .iter()
+        .map(|chip| chip.name)
+        .collect()
+}
+
+#[then(expr = "the editor's Transport offers the {string} Chip")]
+fn editor_transport_offers(world: &mut VardeWorld, name: String) {
+    let names = transport_names(world);
+    assert!(names.contains(&name.as_str()), "{names:?}");
+    assert!(varde::editor_chips(&world.state)
+        .iter()
+        .any(|chip| chip.name == name));
+}
+
+#[then(expr = "the editor's Transport does not offer the {string} Chip")]
+fn editor_transport_does_not_offer(world: &mut VardeWorld, name: String) {
+    assert!(!transport_names(world).is_empty());
+    assert!(
+        !varde::editor_chips(&world.state)
+            .iter()
+            .any(|chip| chip.name == name),
+        "{:?}",
+        transport_names(world)
+    );
 }

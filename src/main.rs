@@ -111,6 +111,9 @@ fn main() -> Result<()> {
             .collect(),
         state_json: read(&varde_dir(&root, sidecar.as_deref()).join(STATE_FILE)),
         risk_json: read(&varde_dir(&root, sidecar.as_deref()).join(varde::risk::FILE)),
+        walkthrough_json: read(
+            &varde_dir(&root, sidecar.as_deref()).join(varde::walkthrough::FILE),
+        ),
         head: head_commit(&root),
         repo: git_status(&root),
         reviews: numbered(&varde::reviews_dir(&root, sidecar.as_deref(), &varde_home)),
@@ -585,9 +588,11 @@ struct Edge {
     candidates_due: Option<Instant>,
     signature_due: Option<Instant>,
     hover_due: Option<Instant>,
+    notice_due: Option<Instant>,
     hand: bool,
     analysed: Sender<(u64, Figures, Option<Figures>)>,
     tested: Sender<(bool, String)>,
+    ran: Sender<Option<i32>>,
     formatted: Sender<(String, PathBuf, u64, format::Answer)>,
     released: Sender<Option<String>>,
     replaced: Sender<Result<(), ReplaceFailed>>,
@@ -679,6 +684,7 @@ fn run(
 
     let (analysed_tx, analysed_rx) = channel();
     let (tested_tx, tested_rx) = channel();
+    let (ran_tx, ran_rx) = channel();
     let (formatted_tx, formatted_rx) = channel();
     let (released_tx, released_rx) = channel();
     let (replaced_tx, replaced_rx) = channel();
@@ -726,6 +732,7 @@ fn run(
         candidates_due: None,
         signature_due: None,
         hover_due: None,
+        notice_due: None,
         hand: false,
         servers: BTreeMap::new(),
         adapter: None,
@@ -747,6 +754,7 @@ fn run(
         area: ratatui::layout::Rect::new(0, 0, size.width, size.height),
         analysed: analysed_tx,
         tested: tested_tx,
+        ran: ran_tx,
         formatted: formatted_tx,
         released: released_tx,
         replaced: replaced_tx,
@@ -820,6 +828,9 @@ fn run(
             &listed_rx,
             &mut queue,
         );
+        while let Ok(status) = ran_rx.try_recv() {
+            queue.push_back(Event::WalkthroughCommandExited(status));
+        }
         dirty |= queue.len() != before;
         dirty |= resize_panes(&mut terminal, &state, &mut edge, &mut queue);
 
@@ -1001,6 +1012,11 @@ fn queue_due_windows(edge: &mut Edge, queue: &mut VecDeque<Event>) -> bool {
     if edge.hover_due.is_some_and(|due| now >= due) {
         edge.hover_due = None;
         queue.push_back(Event::HoverDue);
+        fired = true;
+    }
+    if edge.notice_due.is_some_and(|due| now >= due) {
+        edge.notice_due = None;
+        edge.status.text.clear();
         fired = true;
     }
     fired
@@ -1689,7 +1705,16 @@ fn render(terminal: &mut Screen, state: &State, edge: &mut Edge) -> Result<()> {
     terminal.draw(|frame| {
         edge.area = frame.area();
         let (status, tone) = if edge.status.text.is_empty() {
-            (hint(state.opened).to_string(), ui::Tone::Hint)
+            match varde::walkthrough_footer(state) {
+                Some(varde::Footer::Working(spinner)) => (spinner, ui::Tone::Hint),
+                Some(varde::Footer::Verdict(varde::walkthrough::Verdict::Lgtm)) => {
+                    ("LGTM".to_string(), ui::Tone::Lgtm)
+                }
+                Some(varde::Footer::Verdict(varde::walkthrough::Verdict::Failing { message })) => {
+                    (message.clone(), ui::Tone::Failing)
+                }
+                None => (hint(state.opened).to_string(), ui::Tone::Hint),
+            }
         } else {
             (edge.status.text.clone(), edge.status.tone)
         };
@@ -2339,6 +2364,7 @@ fn grid_lines(edge: &Edge, pane: Pane, split: usize, upto: usize) -> Option<Vec<
         | Pane::Frames
         | Pane::Diagnostics
         | Pane::Conflicts
+        | Pane::Waypoints
         | Pane::Variables
         | Pane::Cheatsheet => return None,
     };
@@ -2438,6 +2464,7 @@ fn perform_terminal(effect: Effect, split: usize, edge: &mut Edge) -> Option<Eff
             | Pane::Frames
             | Pane::Diagnostics
             | Pane::Conflicts
+            | Pane::Waypoints
             | Pane::Variables
             | Pane::Cheatsheet => {}
         },
@@ -2677,6 +2704,7 @@ fn perform_session(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>)
         }
         Effect::Notify(notice) => {
             let (text, tone) = notice_text(notice);
+            edge.notice_due = None;
             edge.status = Status {
                 text: text.to_string(),
                 tone,
@@ -2684,18 +2712,23 @@ fn perform_session(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>)
         }
         Effect::NotifyAbout { slug, about } => {
             let (text, tone) = notice_text(slug);
+            edge.notice_due = None;
             edge.status = Status {
                 text: format!("{text}: {about}"),
                 tone,
             };
         }
         Effect::NotifySaying { text, .. } => {
+            edge.notice_due = None;
             edge.status = Status {
                 text,
                 tone: ui::Tone::Notice,
             };
         }
         Effect::ClearNotice => edge.status.text.clear(),
+        Effect::ExpireNotice(after_ms) => {
+            edge.notice_due = Some(Instant::now() + Duration::from_millis(after_ms));
+        }
         Effect::Exit => {
             edge.status = Status {
                 text: "quit".to_string(),
@@ -2818,6 +2851,16 @@ fn perform_files(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>) -
     None
 }
 
+fn resolved(folder: &Path) -> PathBuf {
+    folder
+        .ancestors()
+        .find_map(|ancestor| {
+            let real = std::fs::canonicalize(ancestor).ok()?;
+            Some(real.join(folder.strip_prefix(ancestor).ok()?))
+        })
+        .unwrap_or_else(|| folder.to_path_buf())
+}
+
 fn perform_jobs(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>) {
     match effect {
         Effect::RunSearch(request) => {
@@ -2929,6 +2972,28 @@ fn perform_jobs(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>) {
             let read = file_hunks(&repo, inventory, &files);
             queue.push_back(Event::StoryFiles(read));
         }
+        Effect::ResolveWrite(path) => {
+            let folder = resolved(path.parent().unwrap_or(&edge.root));
+            let root = resolved(&edge.root);
+            queue.push_back(Event::WriteResolved { path, folder, root });
+        }
+        Effect::ReadWalkthroughFiles { root, plan, files } => {
+            let lines = files
+                .into_iter()
+                .filter_map(|file| {
+                    let path = root.join(&file);
+                    match std::fs::read_to_string(&path) {
+                        Ok(text) => Some((file, text.lines().count())),
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+                        Err(error) => {
+                            eprintln!("varde: cannot read {}: {error}", path.display());
+                            None
+                        }
+                    }
+                })
+                .collect();
+            queue.push_back(Event::WalkthroughFiles { plan, lines });
+        }
         Effect::WriteStoryContext {
             repo,
             spelling,
@@ -2963,6 +3028,13 @@ fn perform_jobs(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>) {
                     }
                 };
                 let _ = answer.send(outcome);
+            });
+        }
+        Effect::RunWalkthroughCommand { command, stdin } => {
+            let answer = edge.ran.clone();
+            let root = edge.root.clone();
+            std::thread::spawn(move || {
+                let _ = answer.send(run_walkthrough_command(&command, &root, &stdin));
             });
         }
         Effect::RunTests { command } => {
@@ -3057,6 +3129,40 @@ fn download(url: &str) -> Option<Vec<u8>> {
         }
         Err(error) => {
             eprintln!("varde: update failed: curl: {error}");
+            None
+        }
+    }
+}
+
+fn run_walkthrough_command(command: &str, root: &Path, stdin: &str) -> Option<i32> {
+    let words = shlex::split(command).unwrap_or_default();
+    let Some((program, arguments)) = words.split_first() else {
+        eprintln!("varde: walkthrough.command {command:?} is not a command");
+        return None;
+    };
+    let child = std::process::Command::new(program)
+        .args(arguments)
+        .current_dir(root)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+    let mut child = match child {
+        Ok(child) => child,
+        Err(error) => {
+            eprintln!("varde: walkthrough.command {command:?}: {error}");
+            return None;
+        }
+    };
+    if let Some(mut input) = child.stdin.take() {
+        if let Err(error) = std::io::Write::write_all(&mut input, stdin.as_bytes()) {
+            eprintln!("varde: walkthrough.command {command:?}: stdin: {error}");
+        }
+    }
+    match child.wait() {
+        Ok(status) => status.code(),
+        Err(error) => {
+            eprintln!("varde: walkthrough.command {command:?}: {error}");
             None
         }
     }
@@ -3768,6 +3874,21 @@ fn diff_lines(root: &Path, path: &Path) -> Diff {
 
 const NOTICES: &[(&str, &str, ui::Tone)] = &[
     (
+        "outside-workspace",
+        "Not written — that path resolves outside this workspace",
+        ui::Tone::Warning,
+    ),
+    (
+        "walkthrough-command-failed",
+        "The walkthrough command failed",
+        ui::Tone::Warning,
+    ),
+    (
+        "walkthrough-invalid",
+        "Walkthrough plan not loaded — still walking the last one that worked",
+        ui::Tone::Warning,
+    ),
+    (
         "broken-config",
         "Config not applied — still running on the last one that worked",
         ui::Tone::Warning,
@@ -4220,6 +4341,15 @@ fn watched_path(
         {
             queue_story_file(&path, state, queue);
         }
+        notify::EventKind::Create(_) | notify::EventKind::Modify(_)
+            if path
+                == varde::varde_dir(&state.root, state.sidecar.as_deref())
+                    .join(varde::walkthrough::FILE) =>
+        {
+            if let Ok(contents) = std::fs::read_to_string(&path) {
+                queue.push_back(Event::WalkthroughChanged(contents));
+            }
+        }
         // symlink_metadata, not exists: a dangling symlink is still an entry in the folder
         _ if ours && std::fs::symlink_metadata(&path).is_err() => {
             queue.push_back(Event::FilesRemoved(vec![path]));
@@ -4271,9 +4401,9 @@ fn queue_story_file(path: &Path, state: &State, queue: &mut VecDeque<Event>) {
 mod tests {
     use super::{
         alive, authorship, canonical, checkout, committed, describe, file_hunks, flatten, found,
-        hint, language, notice_text, path_status, pid_of, range_ends, read_branches, rewrite,
-        root_and_sidecar, samples, short_date, sidecar, space, stitch, sweep, trash, watched_path,
-        Args, ClapParser,
+        hint, language, notice_text, path_status, pid_of, range_ends, read_branches, resolved,
+        rewrite, root_and_sidecar, samples, short_date, sidecar, space, stitch, sweep, trash,
+        watched_path, Args, ClapParser,
     };
     use notify::event::{CreateKind, DataChange, ModifyKind, RenameMode};
     use std::collections::BTreeMap;
@@ -5144,6 +5274,82 @@ mod tests {
                 Event::FilesAppeared(vec![(folder, tree::Kind::Folder)]),
             ]
         );
+    }
+
+    #[test]
+    fn a_write_to_the_walkthrough_file_is_a_walkthrough_change() {
+        let root = tempfile::tempdir().expect("a temp directory");
+        fs::create_dir(root.path().join(".varde")).expect("the fixture folder");
+        let plan = root.path().join(".varde").join(varde::walkthrough::FILE);
+        fs::write(&plan, "{}").expect("the fixture file");
+        let mut state = State::default();
+        state.root = root.path().to_path_buf();
+        let mut queue = VecDeque::new();
+
+        for kind in [
+            notify::EventKind::Create(CreateKind::Any),
+            notify::EventKind::Modify(ModifyKind::Name(RenameMode::Any)),
+        ] {
+            watched_path(
+                &kind,
+                plan.clone(),
+                &state,
+                &root.path().join(".git"),
+                &root.path().join(".varde/stories"),
+                &mut queue,
+            );
+        }
+
+        assert_eq!(
+            Vec::from(queue),
+            [
+                Event::WalkthroughChanged("{}".to_string()),
+                Event::WalkthroughChanged("{}".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_folder_to_create_resolves_through_the_links_above_it() {
+        let root = tempfile::tempdir().expect("a temp directory");
+        let elsewhere = tempfile::tempdir().expect("a temp directory");
+        let root_path = resolved(root.path());
+        fs::create_dir(root.path().join("src")).expect("the fixture folder");
+        std::os::unix::fs::symlink(elsewhere.path(), root.path().join("linked"))
+            .expect("the fixture link");
+
+        assert!(resolved(&root.path().join("src/guide/deeper")).starts_with(&root_path));
+        assert!(!resolved(&root.path().join("linked/guide")).starts_with(&root_path));
+        assert!(resolved(&root.path().join("linked/guide")).starts_with(resolved(elsewhere.path())));
+    }
+
+    #[test]
+    fn in_a_bare_workspace_the_walkthrough_file_is_the_sidecars() {
+        let folder = tempfile::tempdir().expect("a temp directory");
+        let sidecar = tempfile::tempdir().expect("a temp directory");
+        fs::create_dir(folder.path().join(".varde")).expect("the fixture folder");
+        let in_folder = folder.path().join(".varde").join(varde::walkthrough::FILE);
+        let in_sidecar = sidecar.path().join(varde::walkthrough::FILE);
+        fs::write(&in_folder, "folder").expect("the fixture file");
+        fs::write(&in_sidecar, "sidecar").expect("the fixture file");
+        let mut state = State::default();
+        state.root = folder.path().to_path_buf();
+        state.sidecar = Some(sidecar.path().to_path_buf());
+        let mut queue = VecDeque::new();
+
+        for path in [in_folder, in_sidecar] {
+            watched_path(
+                &notify::EventKind::Modify(ModifyKind::Data(DataChange::Any)),
+                path,
+                &state,
+                &folder.path().join(".git"),
+                &sidecar.path().join("stories"),
+                &mut queue,
+            );
+        }
+
+        assert!(queue.contains(&Event::WalkthroughChanged("sidecar".to_string())));
+        assert!(!queue.contains(&Event::WalkthroughChanged("folder".to_string())));
     }
 
     #[test]

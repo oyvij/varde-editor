@@ -20,7 +20,7 @@ pub struct CommandLine {
     pub pick: Option<usize>,
 }
 
-pub const COMMANDS: [(&str, &str, &[View], &[Event]); 37] = [
+pub const COMMANDS: [(&str, &str, &[View], &[Event]); 43] = [
     (
         "format",
         "lay the file out",
@@ -161,6 +161,42 @@ pub const COMMANDS: [(&str, &str, &[View], &[Event]); 37] = [
         "story what you ask about the code",
         &[View::Edit, View::Story],
         &[Event::OpenInquiry],
+    ),
+    (
+        "guide",
+        "plan a change with the AI as your guide",
+        &[View::Edit],
+        &[Event::OpenGuide],
+    ),
+    (
+        "guide check",
+        "have the AI check the current Waypoint",
+        &[View::Edit],
+        &[Event::CheckWaypoint],
+    ),
+    (
+        "guide write",
+        "have the AI write the current Waypoint",
+        &[View::Edit],
+        &[Event::AiWrite],
+    ),
+    (
+        "guide!",
+        "replace the walkthrough, keeping or reverting it",
+        &[View::Edit],
+        &[Event::ReplaceWalkthrough],
+    ),
+    (
+        "guide finish",
+        "end the walkthrough, keeping your code",
+        &[View::Edit],
+        &[Event::FinishWalkthrough],
+    ),
+    (
+        "guide revert",
+        "end the walkthrough, the AI reverting every file",
+        &[View::Edit],
+        &[Event::RevertWalkthrough],
     ),
     (
         "ai",
@@ -740,7 +776,9 @@ fn modal_key(state: &State, drafts: &mut Drafts, event: KeyEvent, at_ms: u64) ->
         | Modal::ConfirmStory { .. }
         | Modal::Prediction { .. }
         | Modal::Restart
-        | Modal::RunMark { .. } => answered(&state.modal, event),
+        | Modal::RunMark { .. }
+        | Modal::ConfirmRevertWalkthrough
+        | Modal::ReplaceWalkthrough => answered(&state.modal, event),
         Modal::None if state.hover.as_ref().is_some_and(|hover| hover.focused) => {
             match (event.code, typed(event)) {
                 (KeyCode::Esc, _) => vec![Event::Cancel],
@@ -784,6 +822,11 @@ fn answered(modal: &Modal, event: KeyEvent) -> Vec<Event> {
         Modal::Prediction { .. } => prediction_answer(event),
         Modal::Restart => yes_no(Event::Restart, event),
         Modal::RunMark { .. } => run_mark_answer(event),
+        Modal::ConfirmRevertWalkthrough => yes_no(
+            Event::ConfirmRevert(crate::walkthrough::Ending::Reverting),
+            event,
+        ),
+        Modal::ReplaceWalkthrough => replace_answer(event),
         Modal::None
         | Modal::NameBox { .. }
         | Modal::SetValue
@@ -835,6 +878,17 @@ fn step_detail_answer(event: KeyEvent) -> Vec<Event> {
         KeyCode::Esc => vec![Event::Cancel],
         _ => match typed(event) {
             Some('D') => vec![Event::Key('D')],
+            _ => vec![],
+        },
+    }
+}
+
+fn replace_answer(event: KeyEvent) -> Vec<Event> {
+    match event.code {
+        KeyCode::Esc => vec![Event::Cancel],
+        _ => match typed(event) {
+            Some('k') => vec![Event::FinishWalkthrough, Event::OpenGuide],
+            Some('r') => vec![Event::ConfirmRevert(crate::walkthrough::Ending::Replacing)],
             _ => vec![],
         },
     }
@@ -913,6 +967,7 @@ fn child_owns_keys(state: &State, drafts: &Drafts) -> bool {
             | Pane::Frames
             | Pane::Diagnostics
             | Pane::Conflicts
+            | Pane::Waypoints
             | Pane::Variables
             | Pane::Cheatsheet => false,
         }
@@ -1544,6 +1599,7 @@ fn claims_colon(state: &State) -> bool {
         | Pane::Frames
         | Pane::Diagnostics
         | Pane::Conflicts
+        | Pane::Waypoints
         | Pane::Variables
         | Pane::Cheatsheet => true,
         Pane::Ai | Pane::Terminal | Pane::Output => false,
@@ -1571,6 +1627,7 @@ fn arrow_event(state: &State, event: KeyEvent, alt: bool, shift: bool) -> Option
             | Pane::Frames
             | Pane::Diagnostics
             | Pane::Conflicts
+            | Pane::Waypoints
             | Pane::Variables,
             false,
         ) => list_arrow(direction),
@@ -1579,6 +1636,7 @@ fn arrow_event(state: &State, event: KeyEvent, alt: bool, shift: bool) -> Option
             | Pane::Frames
             | Pane::Diagnostics
             | Pane::Conflicts
+            | Pane::Waypoints
             | Pane::Variables,
             true,
         ) => vec![],
@@ -1624,6 +1682,7 @@ fn pane_key(state: &State, event: KeyEvent) -> Vec<Event> {
         | Pane::Frames
         | Pane::Diagnostics
         | Pane::Conflicts
+        | Pane::Waypoints
         | Pane::Variables => list_pane_key(event),
         Pane::Cheatsheet => {
             let (direction, rows) = match (event.code, typed(event)) {
@@ -2472,7 +2531,7 @@ mod tests {
         State {
             modal: crate::Modal::Inquiry {
                 text: crate::editor::Buffer::text_box(""),
-                tag: crate::story::Tag::default(),
+                ask: crate::Ask::Story(crate::story::Tag::default()),
             },
             ..editing()
         }
@@ -2614,6 +2673,37 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn ending_a_walkthrough_is_answered_rather_than_typed_through() {
+        use crate::walkthrough::Ending;
+        let confirming = State {
+            modal: Modal::ConfirmRevertWalkthrough,
+            ..State::default()
+        };
+        assert_eq!(
+            press(&confirming, plain('y')),
+            vec![Event::ConfirmRevert(Ending::Reverting)]
+        );
+        assert_eq!(press(&confirming, plain('n')), vec![Event::Cancel]);
+        let replacing = State {
+            modal: Modal::ReplaceWalkthrough,
+            ..State::default()
+        };
+        assert_eq!(
+            press(&replacing, plain('k')),
+            vec![Event::FinishWalkthrough, Event::OpenGuide]
+        );
+        assert_eq!(
+            press(&replacing, plain('r')),
+            vec![Event::ConfirmRevert(Ending::Replacing)]
+        );
+        assert_eq!(
+            press(&replacing, KeyEvent::new(KeyCode::Esc)),
+            vec![Event::Cancel]
+        );
+        assert_eq!(press(&replacing, plain('y')), vec![]);
     }
 
     #[test]

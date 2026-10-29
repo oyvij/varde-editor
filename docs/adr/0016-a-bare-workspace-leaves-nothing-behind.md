@@ -58,7 +58,7 @@ The cost is a directory name nobody can eyeball.
 `root.join(".varde/…")`. The Sidecar has to be a single function all of them route through, or the
 next feature that writes to `.varde` writes into the user's project by accident and nothing fails.
 
-**A Bare workspace forgets everything.** View, tree divider, expanded folders, Walkthrough position,
+**A Bare workspace forgets everything.** View, tree divider, expanded folders, Story position,
 buffers — none of it survives, because `state.json` is in the Sidecar. That is not a shortcoming to
 be fixed later with a retention setting: a Bare workspace that remembers is a project, and somebody
 asking for one is asking for a different feature.

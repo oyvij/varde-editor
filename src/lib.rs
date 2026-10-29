@@ -31,6 +31,7 @@ pub mod tools;
 pub mod tree;
 pub mod tree_actions;
 pub mod wait;
+pub mod walkthrough;
 
 use editor::Buffer;
 use review::{Comment, GitFile};
@@ -70,6 +71,7 @@ pub enum Pane {
     Output,
     Diagnostics,
     Conflicts,
+    Waypoints,
     Evaluator,
     Cheatsheet,
 }
@@ -331,8 +333,16 @@ pub enum Modal {
     },
     Inquiry {
         text: Buffer,
-        tag: story::Tag,
+        ask: Ask,
     },
+    ConfirmRevertWalkthrough,
+    ReplaceWalkthrough,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Ask {
+    Story(story::Tag),
+    Walkthrough,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -597,6 +607,26 @@ pub enum Event {
         range: story::RangeStatus,
     },
     StoryFiles(Vec<story::FileHunks>),
+    WalkthroughChanged(String),
+    WalkthroughCommandExited(Option<i32>),
+    OpenGuide,
+    ReplaceWalkthrough,
+    FinishWalkthrough,
+    RevertWalkthrough,
+    ConfirmRevert(walkthrough::Ending),
+    StepWaypoint(Direction),
+    CheckWaypoint,
+    AiWrite,
+    ScrollContextBox(Direction),
+    WriteResolved {
+        path: PathBuf,
+        folder: PathBuf,
+        root: PathBuf,
+    },
+    WalkthroughFiles {
+        plan: walkthrough::Plan,
+        lines: BTreeMap<String, usize>,
+    },
     Story {
         explicit: Option<String>,
         force: bool,
@@ -880,6 +910,7 @@ pub enum Effect {
         text: String,
     },
     ClearNotice,
+    ExpireNotice(u64),
     ReadFolder(PathBuf),
     OpenVault(PathBuf),
     Scrolled(Pane, Direction),
@@ -962,6 +993,16 @@ pub enum Effect {
         range: Option<(String, String)>,
         files: Vec<String>,
     },
+    RunWalkthroughCommand {
+        command: String,
+        stdin: String,
+    },
+    ReadWalkthroughFiles {
+        root: PathBuf,
+        plan: walkthrough::Plan,
+        files: Vec<String>,
+    },
+    ResolveWrite(PathBuf),
     WriteStoryContext {
         repo: PathBuf,
         spelling: String,
@@ -1217,6 +1258,9 @@ pub struct State {
     pub running_version: String,
     pub replaced: bool,
     pub story_set: story::Set,
+    pub walkthrough: Option<walkthrough::Session>,
+    pub walkthrough_driver: walkthrough::Driver,
+    pub walkthrough_command: String,
     pub branch: Option<String>,
     pub left_branch: Option<String>,
     pub guest: Option<PathBuf>,
@@ -1478,6 +1522,9 @@ impl Default for State {
             running_version: String::new(),
             replaced: false,
             story_set: story::Set::None,
+            walkthrough: None,
+            walkthrough_driver: walkthrough::Driver::Pane,
+            walkthrough_command: String::new(),
             left_branch: None,
             guest: None,
             guests: Vec::new(),
@@ -1624,6 +1671,21 @@ fn settle(mut next: State, mut effects: Vec<Effect>, wheeled: bool) -> (State, V
             diagnostic_rows,
             corner_rows(&next),
         );
+        let waypoint_rows = walkthrough::listed(&next);
+        let waypoint_fits = corner_rows(&next);
+        if let Some(session) = &mut next.walkthrough {
+            let waypoints: Vec<usize> = (waypoint_rows.iter().enumerate())
+                .filter(|(_, row)| matches!(row, walkthrough::Listed::Waypoint { .. }))
+                .map(|(at, _)| at)
+                .collect();
+            session.selected = session.selected.min(waypoints.len().saturating_sub(1));
+            session.scroll = layout::viewport(
+                session.scroll,
+                waypoints.get(session.selected).copied().unwrap_or(0),
+                waypoint_rows.len(),
+                waypoint_fits,
+            );
+        }
         let conflict_rows = conflict::listed(&next).len();
         next.conflicts_selection = next
             .conflicts_selection
@@ -1851,6 +1913,17 @@ pub fn update(state: &State, event: Event) -> (State, Vec<Effect>) {
     if moved {
         effects.push(Effect::SaveState(state_json(&next)));
     }
+    anchor_waypoints(state, &mut next);
+    if walkthrough::verdict(&next).is_some()
+        && effects.iter().any(|effect| {
+            matches!(
+                effect,
+                Effect::Notify(_) | Effect::NotifyAbout { .. } | Effect::NotifySaying { .. }
+            )
+        })
+    {
+        effects.push(Effect::ExpireNotice(walkthrough::NOTICE_MS));
+    }
     debug::forget_changed(&state.breakpoints, &mut next);
     if next.shown_root() != state.shown_root() && !next.filter.is_empty() {
         effects.extend(filter::reindex(&mut next));
@@ -1865,6 +1938,42 @@ pub fn update(state: &State, event: Event) -> (State, Vec<Effect>) {
     }
     effects.extend(lsp::sync(&mut next));
     (next, effects)
+}
+
+fn anchor_waypoints(state: &State, next: &mut State) {
+    let Some(session) = next.walkthrough.as_mut() else {
+        return;
+    };
+    let before = state.walkthrough.as_ref();
+    let Some(plan) = session.plan.as_mut() else {
+        return;
+    };
+    for (path, buffer) in &next.buffers {
+        let old = match state.buffers.get(path) {
+            Some(was) if was.revision() == buffer.revision() => continue,
+            Some(was) => was.shown(),
+            None => buffer.disk.as_str(),
+        };
+        let file = relative(&next.root, path);
+        if old == buffer.shown() || plan.waypoints.iter().all(|waypoint| waypoint.file != file) {
+            continue;
+        }
+        let landed: Vec<(usize, usize)> = plan
+            .waypoints
+            .iter()
+            .enumerate()
+            .filter(|(_, waypoint)| {
+                waypoint.file == file
+                    && session.inserted.contains(&waypoint.id)
+                    && before.is_none_or(|before| !before.inserted.contains(&waypoint.id))
+            })
+            .map(|(index, waypoint)| (index, waypoint.line))
+            .collect();
+        walkthrough::follow(&mut plan.waypoints, &file, old, buffer.shown());
+        for (index, line) in landed {
+            plan.waypoints[index].line = line;
+        }
+    }
 }
 
 fn route(state: &State, event: Event) -> (State, Vec<Effect>) {
@@ -2164,7 +2273,14 @@ fn on_inquiry(mut next: State, event: Event, wheeled: bool) -> Answered {
         (_, Event::OpenInquiry) => {
             next.modal = Modal::Inquiry {
                 text: Buffer::text_box(""),
-                tag: story::Tag::default(),
+                ask: Ask::Story(story::Tag::default()),
+            };
+            vec![]
+        }
+        (_, Event::OpenGuide) => {
+            next.modal = Modal::Inquiry {
+                text: Buffer::text_box(""),
+                ask: Ask::Walkthrough,
             };
             vec![]
         }
@@ -2172,11 +2288,49 @@ fn on_inquiry(mut next: State, event: Event, wheeled: bool) -> Answered {
             next.modal = Modal::None;
             vec![]
         }
-        (Modal::Inquiry { tag, .. }, Event::NextTag) => {
+        (
+            Modal::Inquiry {
+                ask: Ask::Story(tag),
+                ..
+            },
+            Event::NextTag,
+        ) => {
             *tag = tag.next();
             vec![]
         }
-        (Modal::Inquiry { text, tag }, Event::SubmitInquiry { at_ms }) => {
+        (
+            Modal::Inquiry {
+                text,
+                ask: Ask::Walkthrough,
+            },
+            Event::SubmitInquiry { .. },
+        ) => {
+            let said = text.shown().to_string();
+            next.modal = Modal::None;
+            let request = match &next.walkthrough {
+                None => {
+                    next.walkthrough = Some(walkthrough::Session::default());
+                    walkthrough::Request {
+                        action: walkthrough::Action::Plan,
+                        waypoint: None,
+                        detail: format!("{} The developer asks: {said}", whereabouts(&next)),
+                    }
+                }
+                Some(session) => walkthrough::Request {
+                    action: walkthrough::Action::Adjust,
+                    waypoint: session.current.clone(),
+                    detail: format!("The developer says: {said}"),
+                },
+            };
+            hand_over(&mut next, request)
+        }
+        (
+            Modal::Inquiry {
+                text,
+                ask: Ask::Story(tag),
+            },
+            Event::SubmitInquiry { at_ms },
+        ) => {
             let (inquiry, tag) = (text.shown().to_string(), *tag);
             next.modal = Modal::None;
             next.last_inquiry_ms = (next.launched_ms + at_ms).max(next.last_inquiry_ms + 1);
@@ -2531,6 +2685,10 @@ fn route_ai_spoke(state: &State, next: State, event: Event, wheeled: bool) -> An
         Ok(answer) => return Ok(answer),
         Err(declined) => declined,
     };
+    let declined = match on_walkthrough(state, declined.0, declined.1, wheeled) {
+        Ok(answer) => return Ok(answer),
+        Err(declined) => declined,
+    };
     let declined = match on_story_resolved(state, declined.0, declined.1, wheeled) {
         Ok(answer) => return Ok(answer),
         Err(declined) => declined,
@@ -2796,7 +2954,34 @@ fn on_tapped(state: &State, mut next: State, event: Event, wheeled: bool) -> Ans
     Ok(settle(next, effects, wheeled))
 }
 
+fn waypoint_key(state: &State, event: &Event) -> Option<Event> {
+    let (Event::Key(key) | Event::EditorKey(key)) = event else {
+        return None;
+    };
+    let walking = walkthrough::current(state).is_some()
+        && state.focus == Pane::Editor
+        && state.modal == Modal::None
+        && state.edited().is_some_and(|buffer| {
+            buffer.mode == editor::Mode::Normal && buffer.pending().is_empty()
+        });
+    let reading = state
+        .walkthrough
+        .as_ref()
+        .is_some_and(|session| session.box_focus.is_some())
+        && walkthrough::context_box(state).is_some();
+    match key {
+        '[' if walking => Some(Event::StepWaypoint(Direction::Left)),
+        ']' if walking => Some(Event::StepWaypoint(Direction::Right)),
+        'j' if walking && reading => Some(Event::ScrollContextBox(Direction::Down)),
+        'k' if walking && reading => Some(Event::ScrollContextBox(Direction::Up)),
+        _ => None,
+    }
+}
+
 fn on_key(state: &State, mut next: State, event: Event, wheeled: bool) -> Answered {
+    if let Some(walked) = waypoint_key(state, &event) {
+        return Ok(update(state, walked));
+    }
     let effects = match event {
         Event::Key('t') if state.view == View::Story && state.modal == Modal::None => {
             next.story_listing = match state.story_listing {
@@ -2908,8 +3093,10 @@ fn on_key_3(state: &State, next: State, event: Event, _wheeled: bool) -> Answere
         }
 
         Event::Key(key @ ('j' | 'k'))
-            if matches!(state.focus, Pane::Frames | Pane::Conflicts)
-                && state.modal == Modal::None =>
+            if matches!(
+                state.focus,
+                Pane::Frames | Pane::Conflicts | Pane::Waypoints
+            ) && state.modal == Modal::None =>
         {
             Ok(match key {
                 'j' => update(state, Event::MoveSelection(Direction::Down)),
@@ -3304,6 +3491,7 @@ fn on_submit_review(state: &State, mut next: State, event: Event, wheeled: bool)
             | Pane::Frames
             | Pane::Diagnostics
             | Pane::Conflicts
+            | Pane::Waypoints
             | Pane::Variables
             | Pane::Cheatsheet => vec![],
         },
@@ -3471,6 +3659,7 @@ fn on_scroll(state: &State, mut next: State, event: Event, wheeled: bool) -> Ans
                     | Pane::Frames
                     | Pane::Diagnostics
                     | Pane::Conflicts
+                    | Pane::Waypoints
                     | Pane::Variables
                     | Pane::Cheatsheet => {
                         vec![]
@@ -3573,7 +3762,7 @@ fn on_scroll(state: &State, mut next: State, event: Event, wheeled: bool) -> Ans
                     );
                     vec![]
                 }
-                Pane::Evaluator => vec![],
+                Pane::Evaluator | Pane::Waypoints => vec![],
                 Pane::Cheatsheet => {
                     next.cheatsheet_scroll = match direction {
                         Direction::Up => state.cheatsheet_scroll.saturating_sub(WHEEL_ROWS),
@@ -3731,6 +3920,17 @@ fn on_buffer_opened(_state: &State, mut next: State, event: Event, wheeled: bool
             if let Some(at) = at {
                 land_at(&mut next, at);
                 frame_site(&mut next, at);
+            }
+            let opening = next
+                .walkthrough
+                .as_ref()
+                .and_then(|session| session.opening.clone())
+                .filter(|_| {
+                    walkthrough::current(&next)
+                        .is_some_and(|waypoint| next.root.join(&waypoint.file) == path)
+                });
+            if let Some(id) = opening {
+                effects.extend(land(&mut next, &id));
             }
             effects
         }
@@ -4903,6 +5103,19 @@ fn on_editor_escape(state: &State, mut next: State, event: Event, wheeled: bool)
             vec![]
         }
 
+        Event::EditorEscape
+            if state
+                .walkthrough
+                .as_ref()
+                .is_some_and(|session| session.box_focus.is_some())
+                && normal_mode(state) =>
+        {
+            if let Some(session) = &mut next.walkthrough {
+                session.box_focus = None;
+            }
+            vec![]
+        }
+
         Event::EditorEscape => {
             next.modal = Modal::None;
             if current_buffer(&next).is_none_or(|buffer| buffer.mode == editor::Mode::Normal) {
@@ -4923,11 +5136,35 @@ fn on_editor_escape(state: &State, mut next: State, event: Event, wheeled: bool)
             vec![Effect::Notify("vault-is-read-only")]
         }
 
+        Event::WriteBuffer
+            if state.walkthrough.as_ref().is_some_and(|session| {
+                state
+                    .current_buffer
+                    .as_deref()
+                    .is_some_and(|path| session.missing.contains(&relative(&state.root, path)))
+            }) =>
+        {
+            std::iter::once(Effect::ClearNotice)
+                .chain(next.current_buffer.clone().map(Effect::ResolveWrite))
+                .collect()
+        }
+
         Event::WriteBuffer => match (next.current_buffer.clone(), current(&mut next)) {
             (Some(path), Some(buffer)) => {
                 let contents = buffer.write();
                 risk::went_stale(&mut next.risk);
-                vec![Effect::WriteFile { contents, path }, Effect::ClearNotice]
+                let evaluate = walkthrough::current_code(state)
+                    .filter(|waypoint| state.root.join(&waypoint.file) == path)
+                    .map(|waypoint| walkthrough::Request {
+                        action: walkthrough::Action::Evaluate,
+                        waypoint: Some(waypoint.id.clone()),
+                        detail: String::new(),
+                    });
+                let mut effects = vec![Effect::WriteFile { contents, path }, Effect::ClearNotice];
+                if let Some(request) = evaluate {
+                    effects.extend(hand_over(&mut next, request));
+                }
+                effects
             }
             _ => vec![],
         },
@@ -6233,6 +6470,443 @@ fn on_drag_row(state: &State, mut next: State, event: Event, wheeled: bool) -> A
     Ok(settle(next, effects, wheeled))
 }
 
+fn on_walkthrough(state: &State, mut next: State, event: Event, wheeled: bool) -> Answered {
+    let effects = match (event, &state.walkthrough) {
+        (
+            Event::WalkthroughChanged(_)
+            | Event::WalkthroughFiles { .. }
+            | Event::WalkthroughCommandExited(_),
+            None,
+        ) => vec![],
+        (Event::WalkthroughChanged(contents), Some(session))
+            if session.ending != walkthrough::Ending::Walking
+                && walkthrough::parse(&contents)
+                    .is_ok_and(|plan| plan.status == walkthrough::Status::Ended) =>
+        {
+            for file in session.plan.iter().flat_map(walkthrough::files) {
+                if let Some(buffer) = next.buffers.get_mut(&state.root.join(file)) {
+                    buffer.reload();
+                }
+            }
+            let effects = end_walkthrough(&mut next);
+            if session.ending == walkthrough::Ending::Replacing {
+                next.modal = Modal::Inquiry {
+                    text: Buffer::text_box(""),
+                    ask: Ask::Walkthrough,
+                };
+            }
+            effects
+        }
+        (Event::WalkthroughChanged(contents), Some(_)) => {
+            let mut effects = match next.walkthrough_driver {
+                walkthrough::Driver::Pane => finish_hand_over(&mut next),
+                walkthrough::Driver::Background => vec![],
+            };
+            effects.extend(match walkthrough::parse(&contents) {
+                Ok(plan) => vec![Effect::ReadWalkthroughFiles {
+                    root: next.root.clone(),
+                    files: walkthrough::files(&plan),
+                    plan,
+                }],
+                Err(failure) => refuse_walkthrough(&mut next, failure),
+            });
+            effects
+        }
+        (Event::WalkthroughFiles { plan, lines }, Some(session)) => {
+            match walkthrough::check(&plan, &lines) {
+                Ok(()) => {
+                    let resumed = session.current.as_deref().filter(|id| {
+                        session.plan.is_none() && plan.waypoints.iter().any(|w| w.id == *id)
+                    });
+                    let target = resumed
+                        .or_else(|| walkthrough::landing(&plan, session.current.as_deref()))
+                        .map(str::to_string);
+                    let missing = walkthrough::files(&plan)
+                        .into_iter()
+                        .filter(|file| !lines.contains_key(file))
+                        .collect();
+                    if session.plan.is_none() {
+                        next.corner = layout::Corner::Waypoints;
+                    }
+                    if let Some(held) = &mut next.walkthrough {
+                        held.plan = Some(plan);
+                        held.failure = None;
+                        held.fixes = 0;
+                        held.missing = missing;
+                    }
+                    match target {
+                        Some(id) => land(&mut next, &id),
+                        None => vec![],
+                    }
+                }
+                Err(failure) => refuse_walkthrough(&mut next, failure),
+            }
+        }
+        (Event::WalkthroughCommandExited(status), Some(_)) => {
+            let mut effects = match status {
+                Some(0) => vec![],
+                Some(code) => vec![Effect::notify_about(
+                    "walkthrough-command-failed",
+                    format!("exit status {code}"),
+                )],
+                None => vec![Effect::notify_about(
+                    "walkthrough-command-failed",
+                    "no exit status".to_string(),
+                )],
+            };
+            let unplanned = state.walkthrough.as_ref().is_some_and(|session| {
+                session.plan.is_none()
+                    && session.queue.running.as_ref().map(|request| request.action)
+                        == Some(walkthrough::Action::Plan)
+            });
+            match (status, unplanned) {
+                (Some(0), _) | (_, false) => effects.extend(finish_hand_over(&mut next)),
+                (_, true) => next.walkthrough = None,
+            }
+            effects
+        }
+        (
+            Event::StepWaypoint(direction),
+            Some(walkthrough::Session {
+                plan: Some(plan),
+                current,
+                ..
+            }),
+        ) => match walkthrough::step(plan, current.as_deref(), direction) {
+            Some(id) => land(&mut next, id),
+            None => vec![],
+        },
+        (
+            Event::ScrollContextBox(direction),
+            Some(walkthrough::Session {
+                box_focus: Some(scroll),
+                ..
+            }),
+        ) => {
+            let last = walkthrough::context_box(state).map_or(0, |shown| shown.last_scroll());
+            let scrolled = match direction {
+                Direction::Up => scroll.saturating_sub(1),
+                _ => (scroll + 1).min(last),
+            };
+            if let Some(session) = &mut next.walkthrough {
+                session.box_focus = Some(scrolled);
+            }
+            vec![]
+        }
+        (asked @ (Event::CheckWaypoint | Event::AiWrite), Some(_)) => {
+            let action = match asked {
+                Event::CheckWaypoint => walkthrough::Action::Evaluate,
+                _ => walkthrough::Action::Write,
+            };
+            match walkthrough::current_code(state) {
+                Some(waypoint) => hand_over(
+                    &mut next,
+                    walkthrough::Request {
+                        action,
+                        waypoint: Some(waypoint.id.clone()),
+                        detail: String::new(),
+                    },
+                ),
+                None => vec![],
+            }
+        }
+        (
+            Event::StepWaypoint(_)
+            | Event::ScrollContextBox(_)
+            | Event::CheckWaypoint
+            | Event::AiWrite,
+            _,
+        ) => vec![],
+        (Event::ReplaceWalkthrough, None) => return Ok(update(state, Event::OpenGuide)),
+        (Event::ReplaceWalkthrough, Some(_)) => {
+            next.modal = Modal::ReplaceWalkthrough;
+            vec![]
+        }
+        (Event::FinishWalkthrough, Some(session)) => {
+            if let Some(plan) = &session.plan {
+                for waypoint in (plan.waypoints.iter())
+                    .filter(|waypoint| session.inserted.contains(&waypoint.id))
+                {
+                    let path = state.root.join(&waypoint.file);
+                    if let Some(buffer) = next.buffers.get_mut(&path) {
+                        if let Some(removed) = walkthrough::without_comment(
+                            buffer.shown(),
+                            waypoint.line,
+                            walkthrough::comment_token(&waypoint.file),
+                            &waypoint.text,
+                        ) {
+                            buffer.rewrite(&removed);
+                        }
+                    }
+                }
+            }
+            next.modal = Modal::None;
+            end_walkthrough(&mut next)
+        }
+        (Event::RevertWalkthrough, Some(session))
+            if session.ending == walkthrough::Ending::Walking =>
+        {
+            next.modal = Modal::ConfirmRevertWalkthrough;
+            vec![]
+        }
+        (Event::ConfirmRevert(ending), Some(session))
+            if session.ending == walkthrough::Ending::Walking =>
+        {
+            next.modal = Modal::None;
+            if let Some(held) = &mut next.walkthrough {
+                held.ending = ending;
+            }
+            hand_over(
+                &mut next,
+                walkthrough::Request {
+                    action: walkthrough::Action::Revert,
+                    waypoint: session.current.clone(),
+                    detail: String::new(),
+                },
+            )
+        }
+        (Event::FinishWalkthrough | Event::RevertWalkthrough | Event::ConfirmRevert(_), _) => {
+            next.modal = Modal::None;
+            vec![]
+        }
+        (Event::MoveSelection(direction), Some(session)) if state.focus == Pane::Waypoints => {
+            if let Some(held) = &mut next.walkthrough {
+                held.selected = match direction {
+                    Direction::Down => session.selected + 1,
+                    Direction::Up => session.selected.saturating_sub(1),
+                    Direction::Left | Direction::Right => session.selected,
+                };
+            }
+            vec![]
+        }
+        (Event::Activate, Some(_)) if state.focus == Pane::Waypoints => {
+            match walkthrough::selected(state) {
+                Some(id) => land(&mut next, &id),
+                None => vec![],
+            }
+        }
+        (Event::FileActivity(path), Some(_)) => {
+            if let Some(session) = &mut next.walkthrough {
+                session.missing.remove(&relative(&next.root, &path));
+            }
+            return Err((next, Event::FileActivity(path)));
+        }
+        (Event::WriteResolved { path, folder, root }, _) => {
+            match (folder.starts_with(&root), next.buffers.get_mut(&path)) {
+                (false, _) => vec![Effect::Notify("outside-workspace")],
+                (true, None) => vec![],
+                (true, Some(buffer)) => {
+                    let contents = buffer.write();
+                    if let Some(session) = &mut next.walkthrough {
+                        session.missing.remove(&relative(&next.root, &path));
+                    }
+                    vec![
+                        Effect::EnsureDir(path.parent().unwrap_or(&next.root).to_path_buf()),
+                        Effect::WriteFile { path, contents },
+                    ]
+                }
+            }
+        }
+        (other, _) => return Err((next, other)),
+    };
+    Ok(settle(next, effects, wheeled))
+}
+
+fn land(next: &mut State, id: &str) -> Vec<Effect> {
+    let Some(session) = next.walkthrough.as_mut() else {
+        return vec![];
+    };
+    let Some(waypoint) = session
+        .plan
+        .as_ref()
+        .and_then(|plan| plan.waypoints.iter().find(|waypoint| waypoint.id == id))
+        .cloned()
+    else {
+        return vec![];
+    };
+    session.current = Some(waypoint.id.clone());
+    session.box_focus = (waypoint.kind == walkthrough::Kind::Context).then_some(0);
+    session.opening = None;
+    let missing = session.missing.contains(&waypoint.file);
+    let selected = walkthrough::listed_ids(next)
+        .iter()
+        .position(|listed| *listed == waypoint.id);
+    if let (Some(session), Some(at)) = (next.walkthrough.as_mut(), selected) {
+        session.selected = at;
+    }
+    let mut effects = vec![];
+    if next.view != View::Edit {
+        move_to_view(next, View::Edit);
+        effects.push(Effect::RenderView(View::Edit));
+    }
+    next.focus = Pane::Editor;
+    let path = next.root.join(&waypoint.file);
+    if !next.buffers.contains_key(&path) && !missing {
+        if let Some(session) = next.walkthrough.as_mut() {
+            session.opening = Some(waypoint.id.clone());
+        }
+        effects.push(Effect::OpenBuffer(path));
+        return effects;
+    }
+    let first = waypoint.kind == walkthrough::Kind::Code
+        && next
+            .walkthrough
+            .as_mut()
+            .is_some_and(|session| session.inserted.insert(waypoint.id.clone()));
+    let tab_width = next.tab_width;
+    let buffer = next
+        .buffers
+        .entry(path.clone())
+        .or_insert_with(|| Buffer::open("", preview::is_markdown(&path), tab_width));
+    buffer.escape();
+    match waypoint.kind {
+        walkthrough::Kind::Context => buffer.go_to_place(Place {
+            line: waypoint.line,
+            column: 1,
+        }),
+        walkthrough::Kind::Code => {
+            if first {
+                let commented = walkthrough::with_comment(
+                    buffer.shown(),
+                    waypoint.line,
+                    walkthrough::comment_token(&waypoint.file),
+                    &waypoint.text,
+                );
+                buffer.rewrite(&commented);
+            }
+            buffer.go_to_place(Place {
+                line: waypoint.line + 1,
+                column: 1,
+            });
+            let indent = buffer.line_text(buffer.line).map_or(0, |text| {
+                text.chars().take_while(|c| c.is_whitespace()).count()
+            });
+            buffer.column = indent + 1;
+        }
+    }
+    next.current_buffer = Some(path);
+    effects.push(Effect::SaveState(state_json(next)));
+    effects
+}
+
+fn end_walkthrough(next: &mut State) -> Vec<Effect> {
+    next.walkthrough = None;
+    if next.corner == layout::Corner::Waypoints {
+        next.corner = layout::Corner::Hidden;
+    }
+    if next.focus == Pane::Waypoints {
+        next.focus = Pane::Editor;
+    }
+    vec![Effect::SaveState(state_json(next))]
+}
+
+fn refuse_walkthrough(next: &mut State, failure: walkthrough::Failure) -> Vec<Effect> {
+    let mut effects = vec![Effect::notify_about(
+        "walkthrough-invalid",
+        failure.describe(),
+    )];
+    let Some(session) = &mut next.walkthrough else {
+        return effects;
+    };
+    let fix = (session.fixes < story::ATTEMPTS).then(|| walkthrough::Request {
+        action: walkthrough::Action::Fix,
+        waypoint: session.current.clone(),
+        detail: format!("Refused: {}", failure.describe()),
+    });
+    session.failure = Some(failure);
+    if let Some(fix) = fix {
+        session.fixes += 1;
+        effects.extend(hand_over(next, fix));
+    }
+    effects
+}
+
+pub fn hand_over(next: &mut State, request: walkthrough::Request) -> Vec<Effect> {
+    let sending = (next.walkthrough.as_mut()).and_then(|session| session.queue.push(request));
+    send_to_agent(next, sending)
+}
+
+fn finish_hand_over(next: &mut State) -> Vec<Effect> {
+    let sending = (next.walkthrough.as_mut()).and_then(|session| session.queue.finish());
+    send_to_agent(next, sending)
+}
+
+fn send_to_agent(next: &mut State, request: Option<walkthrough::Request>) -> Vec<Effect> {
+    let Some(request) = request else {
+        return vec![];
+    };
+    let (files, missing) = next
+        .walkthrough
+        .as_ref()
+        .filter(|_| request.action != walkthrough::Action::Revert)
+        .map(|session| {
+            (
+                session
+                    .plan
+                    .as_ref()
+                    .map(walkthrough::files)
+                    .unwrap_or_default(),
+                session.missing.clone(),
+            )
+        })
+        .unwrap_or_default();
+    let mut effects = Vec::new();
+    let saved = match request.action {
+        walkthrough::Action::Evaluate => vec![],
+        _ => files,
+    };
+    for file in saved {
+        let path = next.root.join(&file);
+        if let Some(buffer) = next
+            .buffers
+            .get_mut(&path)
+            .filter(|buffer| buffer.is_dirty())
+        {
+            effects.push(if missing.contains(&file) {
+                Effect::ResolveWrite(path)
+            } else {
+                Effect::WriteFile {
+                    contents: buffer.write(),
+                    path,
+                }
+            });
+        }
+    }
+    let skill = next
+        .varde_home
+        .join(skills::FOLDER)
+        .join(walkthrough::SKILL)
+        .join(skills::FILE);
+    let plan = varde_dir(&next.root, next.sidecar.as_deref()).join(walkthrough::FILE);
+    let line = request.line(&skill, &next.root, &plan);
+    match next.walkthrough_driver {
+        walkthrough::Driver::Pane => effects.extend(queue_for_ai(next, Enter::Pressed, line)),
+        walkthrough::Driver::Background => effects.push(Effect::RunWalkthroughCommand {
+            command: next.walkthrough_command.clone(),
+            stdin: line,
+        }),
+    }
+    effects
+}
+
+fn whereabouts(state: &State) -> String {
+    let open: Vec<String> = state
+        .buffers
+        .keys()
+        .map(|path| relative(&state.root, path))
+        .collect();
+    let mut said = format!("Open buffers: {}.", open.join(", "));
+    if let (Some(path), Some(buffer)) = (&state.current_buffer, current_buffer(state)) {
+        said.push_str(&format!(
+            " Cursor: {} line {} column {}.",
+            relative(&state.root, path),
+            buffer.line,
+            buffer.column
+        ));
+    }
+    said
+}
+
 fn on_story_resolved(state: &State, mut next: State, event: Event, wheeled: bool) -> Answered {
     let effects = match event {
         Event::StoryResolved(resolution) => match resolution {
@@ -6522,6 +7196,7 @@ fn on_pane_action(state: &State, mut next: State, event: Event, wheeled: bool) -
         }
         Event::PaneAction(WIDEN_PREVIEW) => return Ok(update(state, Event::TogglePreviewWidth)),
         Event::PaneAction(SKILLS) => return Ok(update(state, Event::OpenSkills)),
+        Event::PaneAction(GUIDE) => return Ok(update(state, Event::OpenGuide)),
         Event::PaneAction(risk::RECOMPUTE) => return Ok(update(state, Event::RecomputeRisk)),
         Event::PaneAction(risk::START_LOOP) => {
             return Ok(update(
@@ -6533,6 +7208,19 @@ fn on_pane_action(state: &State, mut next: State, event: Event, wheeled: bool) -
         Event::PaneAction(reading::PREVIOUS) => return Ok(update(state, Event::PreviousUtterance)),
         Event::PaneAction(reading::PLAY_PAUSE) => return Ok(update(state, Event::PlayPause)),
         Event::PaneAction(reading::NEXT) => return Ok(update(state, Event::NextUtterance)),
+        Event::PaneAction(walkthrough::PREVIOUS) => {
+            return Ok(update(state, Event::StepWaypoint(Direction::Left)))
+        }
+        Event::PaneAction(walkthrough::NEXT) => {
+            return Ok(update(state, Event::StepWaypoint(Direction::Right)))
+        }
+        Event::PaneAction(walkthrough::CHECK) => return Ok(update(state, Event::CheckWaypoint)),
+        Event::PaneAction(walkthrough::FINISH) => {
+            return Ok(update(state, Event::FinishWalkthrough))
+        }
+        Event::PaneAction(walkthrough::REVERT) => {
+            return Ok(update(state, Event::RevertWalkthrough))
+        }
         Event::PaneAction(reading::STOP) => return Ok(update(state, Event::StopReading)),
         Event::PaneAction(reading::SPEED) => {
             return Ok(update(
@@ -7077,6 +7765,7 @@ fn on_bytes(state: &State, next: State, event: Event, wheeled: bool) -> Answered
             | Pane::Frames
             | Pane::Diagnostics
             | Pane::Conflicts
+            | Pane::Waypoints
             | Pane::Variables
             | Pane::Cheatsheet => vec![],
         },
@@ -7105,6 +7794,7 @@ fn on_pasted(state: &State, mut next: State, event: Event, wheeled: bool) -> Ans
                 | Pane::Frames
                 | Pane::Diagnostics
                 | Pane::Conflicts
+                | Pane::Waypoints
                 | Pane::Variables
                 | Pane::Cheatsheet => None,
             };
@@ -7332,6 +8022,7 @@ fn paste_bytes(text: &str, paste: keys::Paste) -> Vec<u8> {
 
 pub const INJECT: &str = "inject-to-ai";
 pub const WIDEN_PREVIEW: &str = "widen-preview";
+pub const GUIDE: &str = "guide";
 
 pub fn inject_chip() -> Chip {
     Chip {
@@ -7594,6 +8285,12 @@ pub(crate) fn state_json(state: &State) -> String {
         "buffers": buffers,
         "current_buffer": state.current_buffer.as_deref().and_then(relative),
         "breakpoints": breakpoints,
+        "walkthrough": state.walkthrough.as_ref().and_then(|session| {
+            session.current.as_ref().map(|current| serde_json::json!({
+                "current": current,
+                "inserted": session.inserted,
+            }))
+        }),
         "snippets": state.snippets,
         "exception_filters": state.exception_filters,
         "evaluator": state.evaluator_at.map(|at| serde_json::json!({
@@ -7866,6 +8563,7 @@ fn selected_row_actions(state: &State) -> Vec<&'static str> {
         | Pane::Output
         | Pane::Diagnostics
         | Pane::Conflicts
+        | Pane::Waypoints
         | Pane::Evaluator
         | Pane::Cheatsheet => Vec::new(),
     }
@@ -7886,6 +8584,7 @@ fn mouse_encoding(state: &State, pane: Pane) -> mouse::Encoding {
         | Pane::Frames
         | Pane::Diagnostics
         | Pane::Conflicts
+        | Pane::Waypoints
         | Pane::Variables
         | Pane::Cheatsheet => mouse::Encoding::None,
     }
@@ -7951,8 +8650,22 @@ pub fn editor_chips(state: &State) -> Vec<Chip> {
             tone: Tone::Plain,
         });
     }
+    chips.push(Chip {
+        action: GUIDE,
+        name: "AI Guide",
+        glyph: "\u{25c6}".to_string(),
+        keys: ":guide",
+        word: "AI Guide",
+        hue: Hue::Plain,
+        tone: Tone::Plain,
+    });
     chips.push(inject_chip());
-    chips.extend(reading::transport(state));
+    let walking = walkthrough::transport(state);
+    if walking.is_empty() {
+        chips.extend(reading::transport(state));
+    } else {
+        chips.extend(walking);
+    }
     chips
 }
 
@@ -8139,6 +8852,41 @@ const SPINNER: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '�
 
 pub fn spinner(tick: u64) -> char {
     SPINNER[(tick % SPINNER.len() as u64) as usize]
+}
+
+pub fn asking(state: &State) -> Option<&'static str> {
+    match (&state.modal, &state.walkthrough) {
+        (
+            Modal::Inquiry {
+                ask: Ask::Story(_), ..
+            },
+            _,
+        ) => Some("inquiry"),
+        (Modal::Inquiry { .. }, None) => Some("walkthrough"),
+        (Modal::Inquiry { .. }, Some(_)) => Some("adjust-walkthrough"),
+        _ => None,
+    }
+}
+
+pub fn walkthrough_spinner(state: &State) -> Option<String> {
+    let names = state.walkthrough.as_ref()?.queue.spinner()?;
+    let progress = wait::progress(state, wait::Kind::Walkthrough)?;
+    Some(format!(
+        "{} walkthrough · {names} · {}",
+        spinner(state.tick),
+        wait::line(progress)
+    ))
+}
+
+pub enum Footer<'a> {
+    Working(String),
+    Verdict(&'a walkthrough::Verdict),
+}
+
+pub fn walkthrough_footer(state: &State) -> Option<Footer<'_>> {
+    walkthrough_spinner(state)
+        .map(Footer::Working)
+        .or_else(|| walkthrough::verdict(state).map(Footer::Verdict))
 }
 
 pub fn tick_every(state: &State) -> Option<std::time::Duration> {
@@ -10086,6 +10834,35 @@ mod tests {
             buffers: [(path, buffer)].into_iter().collect(),
             ..State::default()
         }
+    }
+
+    #[test]
+    fn a_notice_times_out_only_over_a_verdict() {
+        let running = State {
+            ai_running: true,
+            ..State::default()
+        };
+        let start = Event::StartAi {
+            command: Some("claude".to_string()),
+            force: false,
+        };
+        let (_, effects) = update(&running, start.clone());
+        assert_eq!(effects, vec![Effect::Notify("ai-already-running")]);
+        let walking = State {
+            walkthrough: Some(walkthrough::Session {
+                plan: walkthrough::parse(
+                    r#"{"version": 1, "status": "active", "checkpoint": "w1", "waypoints": [
+                      {"id": "w1", "file": "a.rs", "line": 1, "kind": "code", "text": "Do", "verdict": {"state": "lgtm"}, "ai": false}
+                    ]}"#,
+                )
+                .ok(),
+                current: Some("w1".to_string()),
+                ..walkthrough::Session::default()
+            }),
+            ..running
+        };
+        let (_, effects) = update(&walking, start);
+        assert!(effects.contains(&Effect::ExpireNotice(walkthrough::NOTICE_MS)));
     }
 
     #[test]

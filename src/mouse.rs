@@ -501,6 +501,12 @@ fn pressed(
             ))]
         }
         (Pane::Editor, _)
+            if crate::walkthrough::write_chip(state, panes)
+                .is_some_and(|chip| chip.holds(input.column, input.row)) =>
+        {
+            vec![Event::AiWrite]
+        }
+        (Pane::Editor, _)
             if crate::debug::edit_chip(state, panes) == Some((input.column, input.row)) =>
         {
             vec![Event::EditBreakpoint(
@@ -804,6 +810,7 @@ fn dragged(
         | Pane::Frames
         | Pane::Diagnostics
         | Pane::Conflicts
+        | Pane::Waypoints
         | Pane::Variables
         | Pane::Cheatsheet => Outcome::default(),
         Pane::Evaluator => {
@@ -1082,6 +1089,7 @@ fn place_in(state: &State, panes: &Layout, pane: Pane, (column, row): (u16, u16)
         | Pane::Frames
         | Pane::Diagnostics
         | Pane::Conflicts
+        | Pane::Waypoints
         | Pane::Variables
         | Pane::Cheatsheet => (0, 0),
     };
@@ -1122,7 +1130,8 @@ fn text_area(state: &State, panes: &Layout, pane: Pane) -> Area {
         | Pane::Breakpoints
         | Pane::Frames
         | Pane::Diagnostics
-        | Pane::Conflicts => interior(panes.corner),
+        | Pane::Conflicts
+        | Pane::Waypoints => interior(panes.corner),
         Pane::Variables => interior(panes.terminal),
         Pane::Output => interior(panes.output),
         Pane::Evaluator => crate::layout::evaluator_split(panes.evaluator, snippet_rows(state)).0,
@@ -2212,6 +2221,7 @@ mod tests {
         let chip = |action| vec![Event::PaneAction(action)];
         let border = vec![Event::ClickPane(Pane::Editor)];
         let shed = [
+            (30..=32, crate::GUIDE),
             (26..=28, crate::INJECT),
             (22..=24, PLAY_PAUSE),
             (18..=20, PREVIOUS),
@@ -2220,6 +2230,7 @@ mod tests {
             (2..=8, SPEED),
         ];
         let whole = [
+            (80..=98, crate::GUIDE),
             (58..=78, crate::INJECT),
             (47..=56, PLAY_PAUSE),
             (37..=45, PREVIOUS),
@@ -2227,7 +2238,7 @@ mod tests {
             (17..=25, STOP),
             (2..=15, SPEED),
         ];
-        for (width, strip) in [(120, shed), (220, whole)] {
+        for (width, strip) in [(120, shed), (260, whole)] {
             for (columns, action) in strip {
                 let gap = columns.end() + 1;
                 assert_eq!(press(&state, width, gap, 0), border, "{width}: {gap}");
