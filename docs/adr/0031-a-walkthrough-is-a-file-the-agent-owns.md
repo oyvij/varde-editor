@@ -46,9 +46,9 @@ the agent wrote the snippet. A Waypoint's `line` is 1-based, and its file may no
 order is array order: Varde never sorts.
 
 Every request Varde makes is one line naming the shipped `walkthrough` Skill (ADR 0026), the action
-— `plan`, `evaluate`, `adjust`, `write` or `revert` — the plan file and the current Waypoint, pasted
-into the AI pane or given on stdin to a configured background command. Varde reads nothing the agent
-prints (ADR 0004, ADR 0006); the file is the only thing that comes back.
+— `plan`, `evaluate`, `adjust`, `write`, `revert` or `fix` — the plan file and the current
+Waypoint, pasted into the AI pane or given on stdin to a configured background command. Varde reads
+nothing the agent prints (ADR 0004, ADR 0006); the file is the only thing that comes back.
 
 ## Varde never restores a file
 
@@ -79,8 +79,10 @@ A plan that does not parse, or a Waypoint whose file or line is out of range, le
 plan in use, and Varde sends one fix request naming the failing Waypoints, for up to two rounds, as
 Stories do. Because Varde never writes the file, the agent can always rewrite it without merging
 with Varde's changes; what Varde must remember on its own — which comments it inserted, where each
-Waypoint's line has moved to under the developer's edits, the last Waypoint visited — it keeps in
-its own state. A rewrite of the file by the agent replaces those line positions.
+Waypoint's line has moved to under the developer's edits, the last Waypoint visited, and whether
+the session is still active — it keeps in its own state, so a session ended by Finish is not
+resumed from a file that still says `active`. A rewrite of the file by the agent replaces those
+line positions.
 
 Neither driver has provider-specific code. Resuming a provider's conversation is the user's choice,
 made by adding flags to `walkthrough.command`; each request names the plan file and the current

@@ -135,14 +135,14 @@ Feature: Evaluating a Waypoint, and AI Write
 
     Scenario: The agent's write reloads the buffer, keeps the cursor and marks the Waypoint AI
       Given I asked the agent to write Waypoint "w1"
-      And the agent wrote "    let plan = parse(text)?;" to line 14 of "src/plan.rs"
+      And the agent wrote "    let plan = parse(text)?;" to line 13 of "src/plan.rs"
       When the walkthrough file changes to:
         """
         {"version": 1, "status": "active", "checkpoint": "w1", "waypoints": [
           {"id": "w1", "file": "src/plan.rs", "line": 12, "kind": "code", "text": "Parse the plan", "verdict": {"state": "lgtm"}, "ai": true}
         ]}
         """
-      Then line 14 of "src/plan.rs" reads "    let plan = parse(text)?;"
+      Then line 13 of "src/plan.rs" reads "    let plan = parse(text)?;"
       And the current Waypoint is "w1"
       And the cursor is on line 13 of "src/plan.rs"
       And the footer verdict is "lgtm"

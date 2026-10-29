@@ -550,7 +550,7 @@ One place a Walkthrough stops: a file, a line, and what to do there. A code Wayp
 instruction Varde writes into the file as a comment on landing, and the agent's verdict on what the
 developer wrote under it. A context Waypoint carries Markdown explaining why, is shown beside the
 code and writes nothing. Its line moves with edits above it, the way a Breakpoint's does.
-_Avoid_: step (that is a Story's atom), stop, task, todo, checkpoint (that is one particular Waypoint)
+_Avoid_: step (that is a Story's atom), task, todo, checkpoint (that is one particular Waypoint)
 
 **`checkpoint`**:
 The Waypoint a revised plan resumes at, named by the agent in the file. Every change to the file

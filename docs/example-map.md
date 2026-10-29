@@ -3595,8 +3595,8 @@ leaves the workspace, **leaves the last valid plan in use** with the notice `wal
 A Waypoint in a missing file is valid. One fix request names the failing Waypoints, for **two
 rounds**, as Stories do; the third broken file sends nothing.
 **R52.4** The `walkthrough` Skill ships under ADR 0026. It names the actions `plan`, `evaluate`,
-`adjust`, `write` and `revert`, documents the schema, asks for **build order**, and allows writing
-source files only on `write`, `adjust` (the reverts the new approach needs) and `revert`.
+`adjust`, `write`, `revert` and `fix`, documents the schema, asks for **build order**, and allows
+writing source files only on `write`, `adjust` (the reverts the new approach needs) and `revert`.
 **R52.5** `:guide` and the `◆ AI Guide` Chip open the Inquiry box, modal `walkthrough` with no
 session and `adjust-walkthrough` during one. `Ctrl+S` sends and `Esc` sends nothing.
 **R52.6** A request is **one line** naming the Skill, the action, the plan file and the current
@@ -3626,10 +3626,12 @@ either end they stay. **No verdict blocks a step.**
 **R52.14** Waypoint lines **move with edits above them**, Varde's own landing comments included. A
 rewrite of the file by the agent replaces those positions.
 **R52.15** A Waypoint in a missing file opens an **unsaved buffer at its path**. `:w` creates its
-missing folders inside the workspace and refuses a path outside it as `outside-workspace`, writing
-nothing.
+missing folders inside the workspace and refuses a path that resolves outside it — through a linked
+folder, since R52.3 already refuses a plan path that leaves the workspace — as `outside-workspace`,
+writing nothing.
 **R52.16** In a project workspace a session **resumes on the last visited Waypoint** after a
-restart. In a Bare workspace it ends with Varde.
+restart; a session ended by Finish or Revert does not resume, whatever the file says (Q71). In a
+Bare workspace it ends with Varde.
 **R52.17** The **Waypoint list** opens in the Corner when a session starts: files in plan order,
 Waypoints nested, each marked `lgtm`, `open`, `failing`, `context` or `new`, and `ai` beside its
 status when the agent wrote it. The current Waypoint is lit; `Enter` lands on the selected one.
@@ -3676,6 +3678,12 @@ one row and leaves `[`/`]` the only new keys. Rejected: new single keys in norma
 editor's keys are already spent.
 **Q70 — Does `:guide!`'s `r` confirm a second time? Resolved: no.** Choosing `r` in that box is the
 confirmation; asking again teaches the developer to press `y` without reading.
+**Q71 — How does a finished session stay finished across a restart? Resolved: Varde records it.**
+Finish sends nothing and Varde never writes the plan file, so the file still says `active`. Varde
+keeps whether a session is active, and its last visited Waypoint, in its own `state.json`, and
+resumes only a session that record calls active. The next `:guide` starts a new `plan`, which the
+agent writes over the old file. Rejected: Varde writing `ended` into the file — the file is the
+agent's (ADR 0031) — and deleting it, which loses the plan the developer may want to read.
 **⛔ Varde snapshots and restores files.** Recommended and rejected by the user: reverts belong to
 the agent (ADR 0031).
 **⛔ A standalone snippet-at-cursor command**, as #116 first asked. Writing a snippet survives only
@@ -3718,7 +3726,7 @@ implementation tickets are sub-issues of it. The two ADRs are
 
 **F52 (the Walkthrough) is specified and not implemented.** The spec is issue #116, rewritten, and
 its implementation tickets are sub-issues of it. The ADR is
-`0031-a-walkthrough-is-a-file-the-agent-owns.md`. No blocking questions remain: Q68–Q70 are
+`0031-a-walkthrough-is-a-file-the-agent-owns.md`. No blocking questions remain: Q68–Q71 are
 resolved above.
 
 **F31 (language intelligence) is specified and not implemented.** The spec is

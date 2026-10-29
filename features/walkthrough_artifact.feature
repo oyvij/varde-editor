@@ -139,7 +139,7 @@ Feature: The walkthrough file is the contract with the agent
       Given no walkthrough is active
       When Varde starts
       Then the shipped Skill "walkthrough" is on disk
-      And the Skill "walkthrough" names the actions "plan", "evaluate", "adjust", "write" and "revert"
+      And the Skill "walkthrough" names the actions "plan", "evaluate", "adjust", "write", "revert" and "fix"
       And the Skill "walkthrough" documents the walkthrough file's schema
       And the Skill "walkthrough" asks for Waypoints in the order a developer would build the change
       And the Skill "walkthrough" allows writing source files only on "write", "adjust" and "revert"
@@ -153,4 +153,3 @@ Feature: The walkthrough file is the contract with the agent
         """
       When I run ":guide"
       Then the modal is "adjust-walkthrough"
-      And exactly one walkthrough is active

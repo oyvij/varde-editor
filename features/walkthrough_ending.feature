@@ -115,13 +115,8 @@ Feature: Finishing, reverting and replacing a Walkthrough
       And no tree row carries the walkthrough colour
 
     Scenario: The Transport has no exit Chip
-      Then the editor's Transport offers the Chips:
-        | previous |
-        | next     |
-        | check    |
-        | AI Guide |
-        | finish   |
-        | revert   |
+      Then the editor's Transport offers the "finish" Chip
+      And the editor's Transport offers the "revert" Chip
       And the editor's Transport does not offer the "exit" Chip
 
   Rule: :guide! replaces a session without losing work

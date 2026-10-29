@@ -148,6 +148,18 @@ Feature: Walking a Walkthrough's Waypoints in Edit view
       Then the context box is scrolled 1 row
       And the cursor is on line 4 of "src/lib.rs"
 
+    Scenario: k scrolls a focused context box back
+      Given the editor pane is 30 columns wide
+      And the context box has focus
+      And I pressed "j"
+      When I press "k"
+      Then the context box is scrolled 0 rows
+
+    Scenario: The context box wraps its Markdown inside its width
+      Given the editor pane is 30 columns wide
+      Then no context box row is wider than 30 columns
+      And the context box renders "never performed here."
+
   Rule: [ and ] step between Waypoints, whatever their verdict
 
     Background:
@@ -242,8 +254,8 @@ Feature: Walking a Walkthrough's Waypoints in Edit view
       Then the folder "src/guide" was created
       And the file "src/guide/plan.rs" was written
 
-    Scenario: :w refuses a planned path outside the workspace
-      Given the planned buffer's path is "/home/me/projects/elsewhere/plan.rs"
+    Scenario: :w refuses a planned path that resolves outside the workspace
+      Given "src/guide" links to the folder "/home/me/projects/elsewhere"
       When I run ":w"
       Then the notice is "outside-workspace"
       And no file was written
@@ -265,6 +277,11 @@ Feature: Walking a Walkthrough's Waypoints in Edit view
       When Varde restarts
       Then the walkthrough state is "active"
       And the current Waypoint is "w2"
+
+    Scenario: A finished session does not resume after a restart, though the file still says active
+      Given I ran ":guide finish"
+      When Varde restarts
+      Then no walkthrough is active
 
     Scenario: In a Bare workspace no session remains after Varde ends
       Given the workspace is a Bare workspace

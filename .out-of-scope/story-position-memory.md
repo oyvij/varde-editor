@@ -5,7 +5,7 @@ again starts at its first Step, and nothing about a Story position survives a re
 
 ## Why this is out of scope
 
-`CONTEXT.md` already defined a Story position, then called a Walkthrough, as disposable: "started,
+`GLOSSARY.md` already defined a Story position, then called a Walkthrough, as disposable: "started,
 stopped and restarted freely".
 Getting back to a Step is a few presses of `n`, so remembering it saves almost nothing, and it would
 cost:

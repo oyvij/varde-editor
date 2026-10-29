@@ -24,7 +24,7 @@ person's afternoon: it is a prompt and a file watcher.
 
 Two things follow that would otherwise look like omissions. Retention is **ten** story sets, not the
 fifty Varde keeps of reviews, because a story set is 30–70KB against a review's 1KB and none of them
-are meant to be read again. And a Walkthrough — one person's position in a Story — is **discarded
+are meant to be read again. And a Story position — one person's place in a Story — is **discarded
 outright** when the Story is re-authored rather than being carried across by story name and step
 index. Carrying it across would put the reviewer on a different claim while telling them it is where
 they left off, which is CodeTour's silent degradation reintroduced in the one place we promised not
