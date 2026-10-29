@@ -256,13 +256,13 @@ pub fn draw(
             Rect::new(x, y, 1, 1),
         );
     }
-    if let Some((x, y)) = varde::walkthrough::write_chip(state, &areas.panes) {
+    if let Some(chip) = varde::walkthrough::write_chip(state, &areas.panes) {
         frame.render_widget(
             Paragraph::new(Span::styled(
                 varde::walkthrough::AI_WRITE,
                 Style::default().add_modifier(Modifier::REVERSED),
             )),
-            Rect::new(x, y, varde::walkthrough::AI_WRITE.width() as u16, 1),
+            Rect::new(chip.x, chip.y, chip.width, chip.height),
         );
     }
 

@@ -19701,10 +19701,11 @@ fn waypoint_is_now_selected(world: &mut VardeWorld, id: String) {
 #[then(expr = "the footer verdict is {string}")]
 fn footer_verdict_is(world: &mut VardeWorld, expected: String) {
     assert!(world.notices.is_empty(), "notices: {:?}", world.notices);
-    let shown = match walkthrough::verdict(&world.state) {
+    let shown = match varde::walkthrough_footer(&world.state) {
         None => "none",
-        Some(walkthrough::Verdict::Lgtm) => "lgtm",
-        Some(walkthrough::Verdict::Failing { .. }) => "failing",
+        Some(varde::Footer::Working(_)) => "working",
+        Some(varde::Footer::Verdict(walkthrough::Verdict::Lgtm)) => "lgtm",
+        Some(varde::Footer::Verdict(walkthrough::Verdict::Failing { .. })) => "failing",
     };
     assert_eq!(shown, expected);
 }
@@ -19712,8 +19713,8 @@ fn footer_verdict_is(world: &mut VardeWorld, expected: String) {
 #[then("the footer verdict carries the agent's message")]
 fn footer_verdict_carries_message(world: &mut VardeWorld) {
     assert!(matches!(
-        walkthrough::verdict(&world.state),
-        Some(walkthrough::Verdict::Failing { message }) if !message.is_empty()
+        varde::walkthrough_footer(&world.state),
+        Some(varde::Footer::Verdict(walkthrough::Verdict::Failing { message })) if !message.is_empty()
     ));
 }
 
@@ -19727,14 +19728,14 @@ fn notice_times_out(world: &mut VardeWorld) {
     world.notices.clear();
 }
 
-fn ai_write_chip(world: &VardeWorld, name: &str) -> (u16, u16) {
+fn ai_write_chip(world: &VardeWorld, name: &str) -> layout::Area {
     assert_eq!(name, "AI Write", "unknown Waypoint Chip {name:?}");
     walkthrough::write_chip(&world.state, &world.panes()).expect("the Chip on screen")
 }
 
 #[then(expr = "the {string} Chip is drawn on line {int} of {string}")]
 fn chip_drawn_on_line(world: &mut VardeWorld, name: String, line: usize, path: String) {
-    let (_, row) = ai_write_chip(world, &name);
+    let row = ai_write_chip(world, &name).y;
     assert_eq!(
         world.state.current_buffer,
         Some(world.state.root.join(path))
@@ -19748,8 +19749,7 @@ fn chip_drawn_on_line(world: &mut VardeWorld, name: String, line: usize, path: S
 
 #[then(expr = "the {string} Chip ends left of the minimap")]
 fn chip_ends_left_of_minimap(world: &mut VardeWorld, name: String) {
-    let (column, _) = ai_write_chip(world, &name);
-    let end = column + unicode_width::UnicodeWidthStr::width(walkthrough::AI_WRITE) as u16;
+    let end = ai_write_chip(world, &name).right();
     let minimap = varde::minimap::strip(&world.state, world.panes().editor);
     assert!(minimap.width > 0, "no minimap");
     assert!(
@@ -19761,7 +19761,8 @@ fn chip_ends_left_of_minimap(world: &mut VardeWorld, name: String) {
 
 #[when(expr = "I click the {string} Chip on the Waypoint's line")]
 fn click_waypoint_chip(world: &mut VardeWorld, name: String) {
-    let (column, row) = ai_write_chip(world, &name);
+    let chip = ai_write_chip(world, &name);
+    let (column, row) = (chip.x, chip.y);
     world.pointer = mouse::Pointer::default();
     world.report(mouse::Kind::LeftDown, column, row);
     world.report(mouse::Kind::LeftUp, column, row);

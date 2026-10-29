@@ -6762,8 +6762,11 @@ fn send_to_agent(next: &mut State, request: Option<walkthrough::Request>) -> Vec
         })
         .unwrap_or_default();
     let mut effects = Vec::new();
-    let saving = request.action != walkthrough::Action::Evaluate;
-    for file in files.into_iter().filter(|_| saving) {
+    let saved = match request.action {
+        walkthrough::Action::Evaluate => vec![],
+        _ => files,
+    };
+    for file in saved {
         let path = next.root.join(&file);
         if let Some(buffer) = next
             .buffers
@@ -8778,6 +8781,17 @@ pub fn walkthrough_spinner(state: &State) -> Option<String> {
         spinner(state.tick),
         wait::line(progress)
     ))
+}
+
+pub enum Footer<'a> {
+    Working(String),
+    Verdict(&'a walkthrough::Verdict),
+}
+
+pub fn walkthrough_footer(state: &State) -> Option<Footer<'_>> {
+    walkthrough_spinner(state)
+        .map(Footer::Working)
+        .or_else(|| walkthrough::verdict(state).map(Footer::Verdict))
 }
 
 pub fn tick_every(state: &State) -> Option<std::time::Duration> {

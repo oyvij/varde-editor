@@ -1704,19 +1704,17 @@ fn render(terminal: &mut Screen, state: &State, edge: &mut Edge) -> Result<()> {
     let rows = tree::visible_rows(state);
     terminal.draw(|frame| {
         edge.area = frame.area();
-        let verdict = || {
-            varde::walkthrough::verdict(state).map(|verdict| match verdict {
-                varde::walkthrough::Verdict::Lgtm => ("LGTM".to_string(), ui::Tone::Lgtm),
-                varde::walkthrough::Verdict::Failing { message } => {
+        let (status, tone) = if edge.status.text.is_empty() {
+            match varde::walkthrough_footer(state) {
+                Some(varde::Footer::Working(spinner)) => (spinner, ui::Tone::Hint),
+                Some(varde::Footer::Verdict(varde::walkthrough::Verdict::Lgtm)) => {
+                    ("LGTM".to_string(), ui::Tone::Lgtm)
+                }
+                Some(varde::Footer::Verdict(varde::walkthrough::Verdict::Failing { message })) => {
                     (message.clone(), ui::Tone::Failing)
                 }
-            })
-        };
-        let (status, tone) = if edge.status.text.is_empty() {
-            varde::walkthrough_spinner(state)
-                .map(|spinner| (spinner, ui::Tone::Hint))
-                .or_else(verdict)
-                .unwrap_or_else(|| (hint(state.opened).to_string(), ui::Tone::Hint))
+                None => (hint(state.opened).to_string(), ui::Tone::Hint),
+            }
         } else {
             (edge.status.text.clone(), edge.status.tone)
         };

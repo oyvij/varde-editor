@@ -245,7 +245,10 @@ pub fn current_code(state: &crate::State) -> Option<&Waypoint> {
     current(state).filter(|waypoint| waypoint.kind == Kind::Code)
 }
 
-pub fn write_chip(state: &crate::State, panes: &crate::layout::Layout) -> Option<(u16, u16)> {
+pub fn write_chip(
+    state: &crate::State,
+    panes: &crate::layout::Layout,
+) -> Option<crate::layout::Area> {
     let waypoint = current_code(state)?;
     if state.view != crate::View::Edit
         || crate::previewing(state)
@@ -257,11 +260,14 @@ pub fn write_chip(state: &crate::State, panes: &crate::layout::Layout) -> Option
     let row = crate::story::row_of(state, waypoint.line as u32)
         .checked_sub(1 + state.editor_scroll)
         .filter(|row| *row < rows)?;
-    let column = columns.checked_sub(unicode_width::UnicodeWidthStr::width(AI_WRITE))?;
-    Some((
-        panes.editor.x + 1 + crate::gutter(state) + column as u16,
-        panes.editor.y + 1 + row as u16,
-    ))
+    let width = unicode_width::UnicodeWidthStr::width(AI_WRITE);
+    let column = columns.checked_sub(width)?;
+    Some(crate::layout::Area {
+        x: panes.editor.x + 1 + crate::gutter(state) + column as u16,
+        y: panes.editor.y + 1 + row as u16,
+        width: width as u16,
+        height: 1,
+    })
 }
 
 fn shown_context(state: &crate::State) -> Option<&Waypoint> {

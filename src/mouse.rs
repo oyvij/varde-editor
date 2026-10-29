@@ -501,12 +501,8 @@ fn pressed(
             ))]
         }
         (Pane::Editor, _)
-            if crate::walkthrough::write_chip(state, panes).is_some_and(|(x, y)| {
-                y == input.row
-                    && (x..x + unicode_width::UnicodeWidthStr::width(crate::walkthrough::AI_WRITE)
-                        as u16)
-                        .contains(&input.column)
-            }) =>
+            if crate::walkthrough::write_chip(state, panes)
+                .is_some_and(|chip| chip.holds(input.column, input.row)) =>
         {
             vec![Event::AiWrite]
         }
