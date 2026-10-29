@@ -32,7 +32,9 @@ Feature: Finishing, reverting and replacing a Walkthrough
         """
 
     Scenario: Finish removes every inserted comment and keeps the developer's code
-      Given I type "let plan = parse(text);" in the editor
+      Given I press "i" in the editor
+      And I type "let plan = parse(text);" in the editor
+      And I press "Escape" in the editor
       And I pressed "]"
       When I run ":guide finish"
       Then "src/plan.rs" holds no comment "Parse the plan"
@@ -113,6 +115,18 @@ Feature: Finishing, reverting and replacing a Walkthrough
         """
       Then no walkthrough is active
       And no tree row carries the walkthrough colour
+
+    Scenario: Once the agent has reverted, the walkthrough's buffers show the files on disk
+      Given I press "i" in the editor
+      And I type "let plan = parse(text);" in the editor
+      And I press "Escape" in the editor
+      And I reverted the walkthrough
+      When the walkthrough file changes to:
+        """
+        {"version": 1, "status": "ended", "checkpoint": null, "waypoints": []}
+        """
+      Then "src/plan.rs" has no unsaved edits
+      And "src/plan.rs" holds no comment "Parse the plan"
 
     Scenario: The Transport has no exit Chip
       Then the editor's Transport offers the "finish" Chip

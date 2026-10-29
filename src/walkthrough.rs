@@ -74,6 +74,15 @@ pub struct Session {
     pub box_focus: Option<usize>,
     pub selected: usize,
     pub scroll: usize,
+    pub ending: Ending,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Ending {
+    #[default]
+    Walking,
+    Reverting,
+    Replacing,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
@@ -195,6 +204,8 @@ pub const NEXT: &str = "waypoint-next";
 pub const CHECK: &str = "waypoint-check";
 pub const AI_WRITE: &str = "\u{25b6} AI Write";
 pub const NOTICE_MS: u64 = 4_000;
+pub const FINISH: &str = "walkthrough-finish";
+pub const REVERT: &str = "walkthrough-revert";
 
 const BOX_COLUMNS: usize = 72;
 const BOX_ROWS: usize = 8;
@@ -419,12 +430,28 @@ pub fn transport(state: &crate::State) -> Vec<crate::Chip> {
         hue: Hue::Step,
         tone: Tone::Plain,
     };
+    let completed = state
+        .walkthrough
+        .as_ref()
+        .and_then(|session| session.plan.as_ref())
+        .is_some_and(|plan| plan.status == Status::Completed);
     vec![
         chip(PREVIOUS, "previous", "\u{ab}", "["),
         chip(NEXT, "next", "\u{bb}", "]"),
         Chip {
             word: "AI Check",
             ..chip(CHECK, "check", "\u{25ce}", ":guide check")
+        },
+        Chip {
+            word: "finish",
+            hue: Hue::Go,
+            tone: if completed { Tone::Lit } else { Tone::Plain },
+            ..chip(FINISH, "finish", "\u{2713}", ":guide finish")
+        },
+        Chip {
+            word: "revert",
+            hue: Hue::Halt,
+            ..chip(REVERT, "revert", "\u{21b6}", ":guide revert")
         },
     ]
 }
@@ -534,6 +561,21 @@ pub fn with_comment(text: &str, line: usize, token: &str, comment: &str) -> Stri
     let indent = &held[..held.len() - held.trim_start().len()];
     let commented = format!("{indent}{token} {comment}");
     lines.splice(at..at, [commented.as_str(), indent]);
+    lines.join("\n")
+}
+
+pub fn without_comment(text: &str, line: usize, token: &str, comment: &str) -> String {
+    let mut lines: Vec<&str> = text.split('\n').collect();
+    let inserted = format!("{token} {comment}");
+    let near = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, held)| held.trim() == inserted)
+        .min_by_key(|(at, _)| at.abs_diff(line.saturating_sub(1)))
+        .map(|(at, _)| at);
+    if let Some(at) = near {
+        lines.remove(at);
+    }
     lines.join("\n")
 }
 
@@ -888,6 +930,44 @@ mod tests {
     #[test]
     fn a_landing_comment_in_an_empty_file_is_its_first_line() {
         assert_eq!(with_comment("", 1, "//", "Start"), "// Start\n\n");
+    }
+
+    #[test]
+    fn finishing_removes_the_landing_comment_and_keeps_the_code_below_it() {
+        let landed = with_comment("fn load() {\n    let text = 1;\n}", 2, "//", "Parse it");
+        let written = landed.replace("    \n", "    let plan = parse(text);\n");
+        assert_eq!(
+            without_comment(&written, 2, "//", "Parse it"),
+            "fn load() {\n    let plan = parse(text);\n    let text = 1;\n}"
+        );
+    }
+
+    #[test]
+    fn finishing_finds_the_comment_after_lines_were_added_or_removed_around_it() {
+        let text = "use a;\nuse b;\n\nfn load() {\n    # Parse it\n    let plan = 1;\n}";
+        assert_eq!(
+            without_comment(text, 3, "#", "Parse it"),
+            "use a;\nuse b;\n\nfn load() {\n    let plan = 1;\n}"
+        );
+        assert_eq!(
+            without_comment(text, 9, "#", "Parse it"),
+            "use a;\nuse b;\n\nfn load() {\n    let plan = 1;\n}"
+        );
+    }
+
+    #[test]
+    fn finishing_removes_the_comment_nearest_its_waypoint_when_the_same_text_repeats() {
+        let text = "// Parse it\na\nb\nc\n// Parse it\nd";
+        assert_eq!(
+            without_comment(text, 5, "//", "Parse it"),
+            "// Parse it\na\nb\nc\nd"
+        );
+    }
+
+    #[test]
+    fn finishing_leaves_a_comment_the_developer_rewrote() {
+        let text = "fn load() {\n    // Parse it, then check the version\n    let plan = 1;\n}";
+        assert_eq!(without_comment(text, 2, "//", "Parse it"), text);
     }
 
     fn followed(old: &str, new: &str) -> Vec<usize> {

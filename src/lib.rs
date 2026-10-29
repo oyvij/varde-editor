@@ -335,6 +335,8 @@ pub enum Modal {
         text: Buffer,
         ask: Ask,
     },
+    ConfirmRevertWalkthrough,
+    ReplaceWalkthrough,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -608,6 +610,10 @@ pub enum Event {
     WalkthroughChanged(String),
     WalkthroughCommandExited(Option<i32>),
     OpenGuide,
+    ReplaceWalkthrough,
+    FinishWalkthrough,
+    RevertWalkthrough,
+    ConfirmRevert(walkthrough::Ending),
     StepWaypoint(Direction),
     CheckWaypoint,
     AiWrite,
@@ -6472,6 +6478,26 @@ fn on_walkthrough(state: &State, mut next: State, event: Event, wheeled: bool) -
             | Event::WalkthroughCommandExited(_),
             None,
         ) => vec![],
+        (Event::WalkthroughChanged(contents), Some(session))
+            if walkthrough::parse(&contents)
+                .is_ok_and(|plan| plan.status == walkthrough::Status::Ended) =>
+        {
+            if session.ending != walkthrough::Ending::Walking {
+                for file in session.plan.iter().flat_map(walkthrough::files) {
+                    if let Some(buffer) = next.buffers.get_mut(&state.root.join(file)) {
+                        buffer.reload();
+                    }
+                }
+            }
+            let effects = end_walkthrough(&mut next);
+            if session.ending == walkthrough::Ending::Replacing {
+                next.modal = Modal::Inquiry {
+                    text: Buffer::text_box(""),
+                    ask: Ask::Walkthrough,
+                };
+            }
+            effects
+        }
         (Event::WalkthroughChanged(contents), Some(_)) => {
             let mut effects = match next.walkthrough_driver {
                 walkthrough::Driver::Pane => finish_hand_over(&mut next),
@@ -6592,6 +6618,59 @@ fn on_walkthrough(state: &State, mut next: State, event: Event, wheeled: bool) -
             | Event::AiWrite,
             _,
         ) => vec![],
+        (Event::ReplaceWalkthrough, None) => return Ok(update(state, Event::OpenGuide)),
+        (Event::ReplaceWalkthrough, Some(_)) => {
+            next.modal = Modal::ReplaceWalkthrough;
+            vec![]
+        }
+        (Event::FinishWalkthrough, Some(session)) => {
+            if let Some(plan) = &session.plan {
+                for waypoint in (plan.waypoints.iter())
+                    .filter(|waypoint| session.inserted.contains(&waypoint.id))
+                {
+                    let path = state.root.join(&waypoint.file);
+                    if let Some(buffer) = next.buffers.get_mut(&path) {
+                        let removed = walkthrough::without_comment(
+                            buffer.shown(),
+                            waypoint.line,
+                            walkthrough::comment_token(&waypoint.file),
+                            &waypoint.text,
+                        );
+                        if removed != buffer.shown() {
+                            buffer.rewrite(&removed);
+                        }
+                    }
+                }
+            }
+            next.modal = Modal::None;
+            end_walkthrough(&mut next)
+        }
+        (Event::RevertWalkthrough, Some(session))
+            if session.ending == walkthrough::Ending::Walking =>
+        {
+            next.modal = Modal::ConfirmRevertWalkthrough;
+            vec![]
+        }
+        (Event::ConfirmRevert(ending), Some(session))
+            if session.ending == walkthrough::Ending::Walking =>
+        {
+            next.modal = Modal::None;
+            if let Some(held) = &mut next.walkthrough {
+                held.ending = ending;
+            }
+            hand_over(
+                &mut next,
+                walkthrough::Request {
+                    action: walkthrough::Action::Revert,
+                    waypoint: session.current.clone(),
+                    detail: String::new(),
+                },
+            )
+        }
+        (Event::FinishWalkthrough | Event::RevertWalkthrough | Event::ConfirmRevert(_), _) => {
+            next.modal = Modal::None;
+            vec![]
+        }
         (Event::MoveSelection(direction), Some(session)) if state.focus == Pane::Waypoints => {
             if let Some(held) = &mut next.walkthrough {
                 held.selected = match direction {
@@ -6712,6 +6791,17 @@ fn land(next: &mut State, id: &str) -> Vec<Effect> {
     effects
 }
 
+fn end_walkthrough(next: &mut State) -> Vec<Effect> {
+    next.walkthrough = None;
+    if next.corner == layout::Corner::Waypoints {
+        next.corner = layout::Corner::Hidden;
+    }
+    if next.focus == Pane::Waypoints {
+        next.focus = Pane::Editor;
+    }
+    vec![Effect::SaveState(state_json(next))]
+}
+
 fn refuse_walkthrough(next: &mut State, failure: walkthrough::Failure) -> Vec<Effect> {
     let mut effects = vec![Effect::notify_about(
         "walkthrough-invalid",
@@ -6750,6 +6840,7 @@ fn send_to_agent(next: &mut State, request: Option<walkthrough::Request>) -> Vec
     let (files, missing) = next
         .walkthrough
         .as_ref()
+        .filter(|_| request.action != walkthrough::Action::Revert)
         .map(|session| {
             (
                 session
@@ -7126,6 +7217,12 @@ fn on_pane_action(state: &State, mut next: State, event: Event, wheeled: bool) -
             return Ok(update(state, Event::StepWaypoint(Direction::Right)))
         }
         Event::PaneAction(walkthrough::CHECK) => return Ok(update(state, Event::CheckWaypoint)),
+        Event::PaneAction(walkthrough::FINISH) => {
+            return Ok(update(state, Event::FinishWalkthrough))
+        }
+        Event::PaneAction(walkthrough::REVERT) => {
+            return Ok(update(state, Event::RevertWalkthrough))
+        }
         Event::PaneAction(reading::STOP) => return Ok(update(state, Event::StopReading)),
         Event::PaneAction(reading::SPEED) => {
             return Ok(update(

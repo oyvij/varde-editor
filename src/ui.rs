@@ -484,6 +484,25 @@ fn draw_modal(frame: &mut Frame, state: &State, chrome: &Chrome) {
                 Line::from("  (y) author    (n) cancel"),
             ],
         ),
+        Modal::ConfirmRevertWalkthrough => overlay(
+            frame,
+            "REVERT",
+            vec![
+                Line::from("  The AI restores every file this walkthrough touched."),
+                Line::from("  Your code in them is lost."),
+                Line::from(""),
+                Line::from("  (y) revert    (n) cancel"),
+            ],
+        ),
+        Modal::ReplaceWalkthrough => overlay(
+            frame,
+            "NEW WALKTHROUGH",
+            vec![
+                Line::from("  End this walkthrough before starting the next."),
+                Line::from(""),
+                Line::from("  (k) keep your code    (r) revert    (Esc) cancel"),
+            ],
+        ),
         Modal::Tools { row } => {
             let height = frame.area().height;
             overlay(frame, "TOOLS", tool_lines(state, *row, height))

@@ -20,7 +20,7 @@ pub struct CommandLine {
     pub pick: Option<usize>,
 }
 
-pub const COMMANDS: [(&str, &str, &[View], &[Event]); 40] = [
+pub const COMMANDS: [(&str, &str, &[View], &[Event]); 43] = [
     (
         "format",
         "lay the file out",
@@ -179,6 +179,24 @@ pub const COMMANDS: [(&str, &str, &[View], &[Event]); 40] = [
         "have the AI write the current Waypoint",
         &[View::Edit],
         &[Event::AiWrite],
+    ),
+    (
+        "guide!",
+        "replace the walkthrough, keeping or reverting it",
+        &[View::Edit],
+        &[Event::ReplaceWalkthrough],
+    ),
+    (
+        "guide finish",
+        "end the walkthrough, keeping your code",
+        &[View::Edit],
+        &[Event::FinishWalkthrough],
+    ),
+    (
+        "guide revert",
+        "end the walkthrough, the AI reverting every file",
+        &[View::Edit],
+        &[Event::RevertWalkthrough],
     ),
     (
         "ai",
@@ -758,7 +776,9 @@ fn modal_key(state: &State, drafts: &mut Drafts, event: KeyEvent, at_ms: u64) ->
         | Modal::ConfirmStory { .. }
         | Modal::Prediction { .. }
         | Modal::Restart
-        | Modal::RunMark { .. } => answered(&state.modal, event),
+        | Modal::RunMark { .. }
+        | Modal::ConfirmRevertWalkthrough
+        | Modal::ReplaceWalkthrough => answered(&state.modal, event),
         Modal::None if state.hover.as_ref().is_some_and(|hover| hover.focused) => {
             match (event.code, typed(event)) {
                 (KeyCode::Esc, _) => vec![Event::Cancel],
@@ -802,6 +822,11 @@ fn answered(modal: &Modal, event: KeyEvent) -> Vec<Event> {
         Modal::Prediction { .. } => prediction_answer(event),
         Modal::Restart => yes_no(Event::Restart, event),
         Modal::RunMark { .. } => run_mark_answer(event),
+        Modal::ConfirmRevertWalkthrough => yes_no(
+            Event::ConfirmRevert(crate::walkthrough::Ending::Reverting),
+            event,
+        ),
+        Modal::ReplaceWalkthrough => replace_answer(event),
         Modal::None
         | Modal::NameBox { .. }
         | Modal::SetValue
@@ -853,6 +878,17 @@ fn step_detail_answer(event: KeyEvent) -> Vec<Event> {
         KeyCode::Esc => vec![Event::Cancel],
         _ => match typed(event) {
             Some('D') => vec![Event::Key('D')],
+            _ => vec![],
+        },
+    }
+}
+
+fn replace_answer(event: KeyEvent) -> Vec<Event> {
+    match event.code {
+        KeyCode::Esc => vec![Event::Cancel],
+        _ => match typed(event) {
+            Some('k') => vec![Event::FinishWalkthrough, Event::OpenGuide],
+            Some('r') => vec![Event::ConfirmRevert(crate::walkthrough::Ending::Replacing)],
             _ => vec![],
         },
     }

@@ -3198,6 +3198,10 @@ fn enter_name(world: &mut VardeWorld, name: String) {
 fn press(world: &mut VardeWorld, key: String) {
     if key == "Space"
         || world.state.stepping
+        || matches!(
+            world.state.modal,
+            Modal::ConfirmRevertWalkthrough | Modal::ReplaceWalkthrough
+        )
         || world.state.focus == Pane::Evaluator
         || named_key(&key).is_some_and(|event| matches!(event.code, terminput::KeyCode::F(_)))
     {
@@ -9734,6 +9738,8 @@ fn modal_is(world: &mut VardeWorld, expected: String) {
         Modal::ExceptionClass => "exception-class",
         Modal::Breakpoint { .. } => "breakpoint",
         Modal::RunMark { .. } => "run-mark",
+        Modal::ConfirmRevertWalkthrough => "confirm-revert-walkthrough",
+        Modal::ReplaceWalkthrough => "replace-walkthrough",
     };
     assert_eq!(actual, expected);
 }
@@ -16873,6 +16879,7 @@ fn chip(world: &VardeWorld, name: &str) -> varde::Chip {
         .into_iter()
         .chain(varde::debug::transport(&world.state))
         .chain(varde::tree_actions::transport(&world.state))
+        .chain(walkthrough::transport(&world.state))
         .find(|offered| offered.name == name)
         .or_else(|| row_chip(world, name))
         .unwrap_or_else(|| panic!("no {name:?} Chip"))
@@ -19238,6 +19245,10 @@ fn walkthrough_file_not_written(world: &mut VardeWorld) {
 fn walkthrough_state_is(world: &mut VardeWorld, expected: String) {
     let actual = match &world.state.walkthrough {
         None => "none",
+        Some(walkthrough::Session {
+            ending: walkthrough::Ending::Reverting | walkthrough::Ending::Replacing,
+            ..
+        }) => "reverting",
         Some(walkthrough::Session { plan: None, .. }) => "planning",
         Some(walkthrough::Session { plan: Some(_), .. }) => "active",
     };
@@ -19788,4 +19799,60 @@ fn agent_wrote_line(world: &mut VardeWorld, text: String, line: usize, path: Str
         path: full,
         contents,
     });
+}
+
+fn held_text(world: &VardeWorld, path: &str) -> String {
+    let absolute = abs(world, path);
+    match world.state.buffers.get(&absolute) {
+        Some(buffer) => buffer.shown().to_string(),
+        None => world.files.get(&absolute).cloned().unwrap_or_default(),
+    }
+}
+
+#[then(expr = "{string} holds no comment {string}")]
+fn holds_no_comment(world: &mut VardeWorld, path: String, comment: String) {
+    let inserted = format!("{} {comment}", walkthrough::comment_token(&path));
+    let text = held_text(world, &path);
+    assert!(!text.is_empty(), "{path} holds nothing");
+    assert!(text.lines().all(|line| line.trim() != inserted), "{text}");
+}
+
+#[then(expr = "{string} still holds {string}")]
+fn still_holds(world: &mut VardeWorld, path: String, expected: String) {
+    let text = held_text(world, &path);
+    assert!(text.contains(&expected), "{text}");
+}
+
+#[given("I reverted the walkthrough")]
+fn reverted_the_walkthrough(world: &mut VardeWorld) {
+    run_story_command(world, ":guide revert".to_string());
+    route_key(world, "y", 0);
+}
+
+fn transport_names(world: &VardeWorld) -> Vec<&'static str> {
+    walkthrough::transport(&world.state)
+        .iter()
+        .map(|chip| chip.name)
+        .collect()
+}
+
+#[then(expr = "the editor's Transport offers the {string} Chip")]
+fn editor_transport_offers(world: &mut VardeWorld, name: String) {
+    let names = transport_names(world);
+    assert!(names.contains(&name.as_str()), "{names:?}");
+    assert!(varde::editor_chips(&world.state)
+        .iter()
+        .any(|chip| chip.name == name));
+}
+
+#[then(expr = "the editor's Transport does not offer the {string} Chip")]
+fn editor_transport_does_not_offer(world: &mut VardeWorld, name: String) {
+    assert!(!transport_names(world).is_empty());
+    assert!(
+        !varde::editor_chips(&world.state)
+            .iter()
+            .any(|chip| chip.name == name),
+        "{:?}",
+        transport_names(world)
+    );
 }
