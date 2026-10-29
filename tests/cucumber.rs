@@ -19511,6 +19511,7 @@ fn context_box_is_wide(world: &mut VardeWorld, columns: usize) {
 }
 
 #[given("the context box has focus")]
+#[then("the context box has focus")]
 fn context_box_has_focus(world: &mut VardeWorld) {
     assert!(walkthrough_session(world).box_focus.is_some());
 }
