@@ -332,8 +332,14 @@ pub enum Modal {
     },
     Inquiry {
         text: Buffer,
-        tag: story::Tag,
+        ask: Ask,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Ask {
+    Story(story::Tag),
+    Walkthrough,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -599,6 +605,8 @@ pub enum Event {
     },
     StoryFiles(Vec<story::FileHunks>),
     WalkthroughChanged(String),
+    WalkthroughCommandExited(Option<i32>),
+    OpenGuide,
     WalkthroughFiles {
         plan: walkthrough::Plan,
         lines: BTreeMap<String, usize>,
@@ -968,6 +976,10 @@ pub enum Effect {
         range: Option<(String, String)>,
         files: Vec<String>,
     },
+    RunWalkthroughCommand {
+        command: String,
+        stdin: String,
+    },
     ReadWalkthroughFiles {
         root: PathBuf,
         plan: walkthrough::Plan,
@@ -1229,6 +1241,8 @@ pub struct State {
     pub replaced: bool,
     pub story_set: story::Set,
     pub walkthrough: Option<walkthrough::Session>,
+    pub walkthrough_driver: walkthrough::Driver,
+    pub walkthrough_command: String,
     pub branch: Option<String>,
     pub left_branch: Option<String>,
     pub guest: Option<PathBuf>,
@@ -1491,6 +1505,8 @@ impl Default for State {
             replaced: false,
             story_set: story::Set::None,
             walkthrough: None,
+            walkthrough_driver: walkthrough::Driver::Pane,
+            walkthrough_command: String::new(),
             left_branch: None,
             guest: None,
             guests: Vec::new(),
@@ -2177,7 +2193,14 @@ fn on_inquiry(mut next: State, event: Event, wheeled: bool) -> Answered {
         (_, Event::OpenInquiry) => {
             next.modal = Modal::Inquiry {
                 text: Buffer::text_box(""),
-                tag: story::Tag::default(),
+                ask: Ask::Story(story::Tag::default()),
+            };
+            vec![]
+        }
+        (_, Event::OpenGuide) => {
+            next.modal = Modal::Inquiry {
+                text: Buffer::text_box(""),
+                ask: Ask::Walkthrough,
             };
             vec![]
         }
@@ -2185,11 +2208,49 @@ fn on_inquiry(mut next: State, event: Event, wheeled: bool) -> Answered {
             next.modal = Modal::None;
             vec![]
         }
-        (Modal::Inquiry { tag, .. }, Event::NextTag) => {
+        (
+            Modal::Inquiry {
+                ask: Ask::Story(tag),
+                ..
+            },
+            Event::NextTag,
+        ) => {
             *tag = tag.next();
             vec![]
         }
-        (Modal::Inquiry { text, tag }, Event::SubmitInquiry { at_ms }) => {
+        (
+            Modal::Inquiry {
+                text,
+                ask: Ask::Walkthrough,
+            },
+            Event::SubmitInquiry { .. },
+        ) => {
+            let said = text.shown().to_string();
+            next.modal = Modal::None;
+            let request = match &next.walkthrough {
+                None => {
+                    next.walkthrough = Some(walkthrough::Session::default());
+                    walkthrough::Request {
+                        action: walkthrough::Action::Plan,
+                        waypoint: None,
+                        detail: format!("{} The developer asks: {said}", whereabouts(&next)),
+                    }
+                }
+                Some(session) => walkthrough::Request {
+                    action: walkthrough::Action::Adjust,
+                    waypoint: walkthrough::current(session),
+                    detail: format!("The developer says: {said}"),
+                },
+            };
+            hand_over(&mut next, request)
+        }
+        (
+            Modal::Inquiry {
+                text,
+                ask: Ask::Story(tag),
+            },
+            Event::SubmitInquiry { at_ms },
+        ) => {
             let (inquiry, tag) = (text.shown().to_string(), *tag);
             next.modal = Modal::None;
             next.last_inquiry_ms = (next.launched_ms + at_ms).max(next.last_inquiry_ms + 1);
@@ -6252,26 +6313,54 @@ fn on_drag_row(state: &State, mut next: State, event: Event, wheeled: bool) -> A
 
 fn on_walkthrough(state: &State, mut next: State, event: Event, wheeled: bool) -> Answered {
     let effects = match (event, &state.walkthrough) {
-        (Event::WalkthroughChanged(_) | Event::WalkthroughFiles { .. }, None) => vec![],
-        (Event::WalkthroughChanged(contents), Some(_)) => match walkthrough::parse(&contents) {
-            Ok(plan) => vec![Effect::ReadWalkthroughFiles {
-                root: next.root.clone(),
-                files: walkthrough::files(&plan),
-                plan,
-            }],
-            Err(failure) => refuse_walkthrough(&mut next, failure),
-        },
+        (
+            Event::WalkthroughChanged(_)
+            | Event::WalkthroughFiles { .. }
+            | Event::WalkthroughCommandExited(_),
+            None,
+        ) => vec![],
+        (Event::WalkthroughChanged(contents), Some(_)) => {
+            let mut effects = match next.walkthrough_driver {
+                walkthrough::Driver::Pane => finish_hand_over(&mut next),
+                walkthrough::Driver::Background => vec![],
+            };
+            effects.extend(match walkthrough::parse(&contents) {
+                Ok(plan) => vec![Effect::ReadWalkthroughFiles {
+                    root: next.root.clone(),
+                    files: walkthrough::files(&plan),
+                    plan,
+                }],
+                Err(failure) => refuse_walkthrough(&mut next, failure),
+            });
+            effects
+        }
         (Event::WalkthroughFiles { plan, lines }, Some(_)) => {
             match walkthrough::check(&plan, &lines) {
                 Ok(()) => {
-                    next.walkthrough = Some(walkthrough::Session {
-                        plan: Some(plan),
-                        failure: None,
-                    });
+                    if let Some(session) = &mut next.walkthrough {
+                        session.plan = Some(plan);
+                        session.failure = None;
+                        session.fixes = 0;
+                    }
                     vec![]
                 }
                 Err(failure) => refuse_walkthrough(&mut next, failure),
             }
+        }
+        (Event::WalkthroughCommandExited(status), Some(_)) => {
+            let mut effects = match status {
+                Some(0) => vec![],
+                Some(code) => vec![Effect::notify_about(
+                    "walkthrough-command-failed",
+                    format!("exit status {code}"),
+                )],
+                None => vec![Effect::notify_about(
+                    "walkthrough-command-failed",
+                    "no exit status".to_string(),
+                )],
+            };
+            effects.extend(finish_hand_over(&mut next));
+            effects
         }
         (other, _) => return Err((next, other)),
     };
@@ -6279,11 +6368,100 @@ fn on_walkthrough(state: &State, mut next: State, event: Event, wheeled: bool) -
 }
 
 fn refuse_walkthrough(next: &mut State, failure: walkthrough::Failure) -> Vec<Effect> {
-    let effect = Effect::notify_about("walkthrough-invalid", failure.describe());
-    if let Some(session) = &mut next.walkthrough {
-        session.failure = Some(failure);
+    let mut effects = vec![Effect::notify_about(
+        "walkthrough-invalid",
+        failure.describe(),
+    )];
+    let Some(session) = &mut next.walkthrough else {
+        return effects;
+    };
+    let fix = (session.fixes < story::ATTEMPTS).then(|| walkthrough::Request {
+        action: walkthrough::Action::Fix,
+        waypoint: walkthrough::current(session),
+        detail: format!("Refused: {}", failure.describe()),
+    });
+    session.failure = Some(failure);
+    if let Some(fix) = fix {
+        session.fixes += 1;
+        effects.extend(hand_over(next, fix));
     }
-    vec![effect]
+    effects
+}
+
+pub fn hand_over(next: &mut State, request: walkthrough::Request) -> Vec<Effect> {
+    let Some(session) = &mut next.walkthrough else {
+        return vec![];
+    };
+    match session.queue.push(request) {
+        Some(request) => send_to_agent(next, request),
+        None => vec![],
+    }
+}
+
+fn finish_hand_over(next: &mut State) -> Vec<Effect> {
+    let Some(session) = &mut next.walkthrough else {
+        return vec![];
+    };
+    match session.queue.finish() {
+        Some(request) => send_to_agent(next, request),
+        None => vec![],
+    }
+}
+
+fn send_to_agent(next: &mut State, request: walkthrough::Request) -> Vec<Effect> {
+    let files = next
+        .walkthrough
+        .as_ref()
+        .and_then(|session| session.plan.as_ref())
+        .map(walkthrough::files)
+        .unwrap_or_default();
+    let mut effects = Vec::new();
+    for file in files {
+        let path = next.root.join(file);
+        if let Some(buffer) = next
+            .buffers
+            .get_mut(&path)
+            .filter(|buffer| buffer.is_dirty())
+        {
+            effects.push(Effect::WriteFile {
+                contents: buffer.write(),
+                path,
+            });
+        }
+    }
+    let skill = next
+        .varde_home
+        .join(skills::FOLDER)
+        .join(walkthrough::SKILL)
+        .join(skills::FILE);
+    let plan = varde_dir(&next.root, next.sidecar.as_deref()).join(walkthrough::FILE);
+    let line = request.line(&skill, &next.root, &plan);
+    match next.walkthrough_driver {
+        walkthrough::Driver::Pane => effects.extend(queue_for_ai(next, Enter::Pressed, line)),
+        walkthrough::Driver::Background => effects.push(Effect::RunWalkthroughCommand {
+            command: next.walkthrough_command.clone(),
+            stdin: line,
+        }),
+    }
+    effects
+}
+
+fn whereabouts(state: &State) -> String {
+    let open: Vec<String> = state
+        .buffers
+        .keys()
+        .map(|path| relative(&state.root, path))
+        .collect();
+    let mut said = format!("Open buffers: {}.", open.join(", "));
+    if let (Some(path), Some(buffer)) = (&state.current_buffer, current_buffer(state)) {
+        said.push_str(&format!(
+            " Cursor: {} line {} column {}.",
+            relative(&state.root, path),
+            buffer.line,
+            buffer.column
+        ));
+    }
+    said
 }
 
 fn on_story_resolved(state: &State, mut next: State, event: Event, wheeled: bool) -> Answered {
@@ -6575,6 +6753,7 @@ fn on_pane_action(state: &State, mut next: State, event: Event, wheeled: bool) -
         }
         Event::PaneAction(WIDEN_PREVIEW) => return Ok(update(state, Event::TogglePreviewWidth)),
         Event::PaneAction(SKILLS) => return Ok(update(state, Event::OpenSkills)),
+        Event::PaneAction(GUIDE) => return Ok(update(state, Event::OpenGuide)),
         Event::PaneAction(risk::RECOMPUTE) => return Ok(update(state, Event::RecomputeRisk)),
         Event::PaneAction(risk::START_LOOP) => {
             return Ok(update(
@@ -7385,6 +7564,7 @@ fn paste_bytes(text: &str, paste: keys::Paste) -> Vec<u8> {
 
 pub const INJECT: &str = "inject-to-ai";
 pub const WIDEN_PREVIEW: &str = "widen-preview";
+pub const GUIDE: &str = "guide";
 
 pub fn inject_chip() -> Chip {
     Chip {
@@ -8004,6 +8184,15 @@ pub fn editor_chips(state: &State) -> Vec<Chip> {
             tone: Tone::Plain,
         });
     }
+    chips.push(Chip {
+        action: GUIDE,
+        name: "AI Guide",
+        glyph: "\u{25c6}".to_string(),
+        keys: ":guide",
+        word: "AI Guide",
+        hue: Hue::Plain,
+        tone: Tone::Plain,
+    });
     chips.push(inject_chip());
     chips.extend(reading::transport(state));
     chips
@@ -8192,6 +8381,16 @@ const SPINNER: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '�
 
 pub fn spinner(tick: u64) -> char {
     SPINNER[(tick % SPINNER.len() as u64) as usize]
+}
+
+pub fn walkthrough_spinner(state: &State) -> Option<String> {
+    let names = state.walkthrough.as_ref()?.queue.spinner()?;
+    let progress = wait::progress(state, wait::Kind::Walkthrough)?;
+    Some(format!(
+        "{} walkthrough · {names} · {}",
+        spinner(state.tick),
+        wait::line(progress)
+    ))
 }
 
 pub fn tick_every(state: &State) -> Option<std::time::Duration> {

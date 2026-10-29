@@ -1,4 +1,5 @@
 use crate::risk::{self, Scope};
+use crate::walkthrough;
 use crate::{Effect, Opened, ReplaceFailed, State, View};
 use sha2::Digest;
 use std::collections::{BTreeMap, BTreeSet};
@@ -21,6 +22,10 @@ minimap = true
 
 [ai]
 env = ["HOME", "PATH", "USER", "LOGNAME", "SHELL", "TMPDIR", "LANG", "LC_ALL", "LC_CTYPE"]
+
+[walkthrough]
+driver = "pane"
+command = "claude -p"
 
 [risk]
 threshold = 15
@@ -882,6 +887,17 @@ const TEMPLATE_SETTINGS: &str = r#"# Varde reads this file on every start. A pro
 # here to pass it through. A project's config cannot add to this list.
 # env = ["HOME", "PATH", "USER", "LOGNAME", "SHELL", "TMPDIR", "LANG", "LC_ALL", "LC_CTYPE"]
 
+[walkthrough]
+
+# How `:guide` hands each request to the agent. "pane" pastes it into the AI
+# pane, starting the AI session if none is running. "background" runs `command`
+# once per request with the request on stdin, ignores what it prints, and shows
+# a non-zero exit in the footer. Add your CLI's resume flags to `command` if you
+# want one conversation across requests: each request already names the plan
+# file and the current Waypoint.
+# driver = "pane"
+# command = "claude -p"
+
 [risk]
 
 # The cyclomatic complexity a function may reach before Risk names it.
@@ -1427,6 +1443,7 @@ pub(crate) fn merged_config(
         let (mut overlay, mentioned) = parse(source, label)?;
         if label == PROJECT_LABEL {
             overlay.remove("ai");
+            overlay.remove("walkthrough");
             overlay.remove("knowledge");
         }
         origins.extend(mentioned);
@@ -1629,6 +1646,10 @@ fn configure(state: &mut State, config: &Config) {
             .and_then(|cap| cap.parse().ok())
             .unwrap_or(risk::DEFAULT_MAX_ITERATIONS),
         test_command: config.get("risk.test_command"),
+        walkthrough_driver: walkthrough::Driver::named(
+            &config.get("walkthrough.driver").unwrap_or_default(),
+        ),
+        walkthrough_command: config.get("walkthrough.command").unwrap_or_default(),
         servers: config.servers(),
         formatters: config.formatters(),
         facts: config.facts(),
@@ -2641,6 +2662,33 @@ mod tests {
     }
 
     #[test]
+    fn the_walkthrough_command_is_the_users_and_never_a_projects() {
+        let defaults = Config(merged_config(None, None).expect("parses"));
+        assert_eq!(defaults.get("walkthrough.driver").as_deref(), Some("pane"));
+        assert_eq!(
+            defaults.get("walkthrough.command").as_deref(),
+            Some("claude -p")
+        );
+        let project = "[walkthrough]\ndriver = \"background\"\ncommand = \"sh -c 'curl evil'\"\n";
+        let refused = Config(merged_config(None, Some(project)).expect("parses"));
+        assert_eq!(refused.get("walkthrough.driver").as_deref(), Some("pane"));
+        assert_eq!(
+            refused.get("walkthrough.command").as_deref(),
+            Some("claude -p")
+        );
+        let global = "[walkthrough]\ndriver = \"background\"\ncommand = \"claude -p --continue\"\n";
+        let chosen = Config(merged_config(Some(global), None).expect("parses"));
+        assert_eq!(
+            chosen.get("walkthrough.driver").as_deref(),
+            Some("background")
+        );
+        assert_eq!(
+            chosen.get("walkthrough.command").as_deref(),
+            Some("claude -p --continue")
+        );
+    }
+
+    #[test]
     fn the_seeded_config_is_commented_out_and_quotes_the_live_defaults() {
         let seeded: toml::Table = SEEDED_CONFIG.parse().expect("valid TOML");
         assert!(
@@ -2653,8 +2701,11 @@ mod tests {
         let uncommented = uncommented(SEEDED_CONFIG);
         let mut defaults = fresh().0;
         assert!(
-            defaults.remove("ai").is_some() && !uncommented.contains_key("ai"),
-            "a project's config names [ai], which a project cannot set"
+            defaults.remove("ai").is_some()
+                && defaults.remove("walkthrough").is_some()
+                && !uncommented.contains_key("ai")
+                && !uncommented.contains_key("walkthrough"),
+            "a project's config names [ai] or [walkthrough], which a project cannot set"
         );
         assert!(
             !uncommented.is_empty()

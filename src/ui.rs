@@ -445,7 +445,7 @@ fn draw_modal(frame: &mut Frame, state: &State, chrome: &Chrome) {
         ),
         Modal::SetValue | Modal::NewWatch => {}
         Modal::Comment => overlay(frame, "COMMENT", comment_lines(state, chrome)),
-        Modal::Inquiry { text, tag } => inquiry_box(frame, state, text, *tag),
+        Modal::Inquiry { text, ask } => inquiry_box(frame, state, text, *ask),
         Modal::ConfirmSubmit => overlay(
             frame,
             "SUBMIT",
@@ -4024,25 +4024,22 @@ fn comment_lines(state: &State, chrome: &Chrome) -> Vec<Line<'static>> {
     lines
 }
 
-fn inquiry_box(
-    frame: &mut Frame,
-    state: &State,
-    text: &varde::editor::Buffer,
-    picked: varde::story::Tag,
-) {
+fn inquiry_box(frame: &mut Frame, state: &State, text: &varde::editor::Buffer, ask: varde::Ask) {
     let screen = frame.area();
     let area = layout::inquiry_box(screen.width, screen.height);
     let mut tags = vec![Span::raw("  ")];
-    for (tag, word) in varde::story::TAGS {
-        tags.push(match tag == picked {
-            true => Span::styled(
-                format!(" {word} "),
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::REVERSED),
-            ),
-            false => Span::styled(format!(" {word} "), Style::default().fg(Color::DarkGray)),
-        });
+    if let varde::Ask::Story(picked) = ask {
+        for (tag, word) in varde::story::TAGS {
+            tags.push(match tag == picked {
+                true => Span::styled(
+                    format!(" {word} "),
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::REVERSED),
+                ),
+                false => Span::styled(format!(" {word} "), Style::default().fg(Color::DarkGray)),
+            });
+        }
     }
     let caret_row = text.line.saturating_sub(1);
     let typed: Vec<Line<'static>> = text
@@ -4070,6 +4067,7 @@ fn inquiry_box(
             "  {}",
             keys::INQUIRY_BOX_KEYS
                 .iter()
+                .filter(|(key, _)| matches!(ask, varde::Ask::Story(_)) || *key != "Tab")
                 .map(|(key, word)| format!("{key} {word}"))
                 .collect::<Vec<_>>()
                 .join(" · ")
@@ -4083,7 +4081,11 @@ fn inquiry_box(
             Block::default()
                 .borders(Borders::ALL)
                 .border_type(BorderType::Thick)
-                .title("INQUIRY"),
+                .title(match (ask, &state.walkthrough) {
+                    (varde::Ask::Story(_), _) => "INQUIRY",
+                    (varde::Ask::Walkthrough, None) => "WALKTHROUGH",
+                    (varde::Ask::Walkthrough, Some(_)) => "ADJUST WALKTHROUGH",
+                }),
         ),
         box_area,
     );

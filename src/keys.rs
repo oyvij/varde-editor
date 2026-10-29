@@ -20,7 +20,7 @@ pub struct CommandLine {
     pub pick: Option<usize>,
 }
 
-pub const COMMANDS: [(&str, &str, &[View], &[Event]); 37] = [
+pub const COMMANDS: [(&str, &str, &[View], &[Event]); 38] = [
     (
         "format",
         "lay the file out",
@@ -161,6 +161,12 @@ pub const COMMANDS: [(&str, &str, &[View], &[Event]); 37] = [
         "story what you ask about the code",
         &[View::Edit, View::Story],
         &[Event::OpenInquiry],
+    ),
+    (
+        "guide",
+        "plan a change with the AI as your guide",
+        &[View::Edit],
+        &[Event::OpenGuide],
     ),
     (
         "ai",
@@ -2472,7 +2478,7 @@ mod tests {
         State {
             modal: crate::Modal::Inquiry {
                 text: crate::editor::Buffer::text_box(""),
-                tag: crate::story::Tag::default(),
+                ask: crate::Ask::Story(crate::story::Tag::default()),
             },
             ..editing()
         }

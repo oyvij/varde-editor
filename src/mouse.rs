@@ -2212,6 +2212,7 @@ mod tests {
         let chip = |action| vec![Event::PaneAction(action)];
         let border = vec![Event::ClickPane(Pane::Editor)];
         let shed = [
+            (30..=32, crate::GUIDE),
             (26..=28, crate::INJECT),
             (22..=24, PLAY_PAUSE),
             (18..=20, PREVIOUS),
@@ -2220,6 +2221,7 @@ mod tests {
             (2..=8, SPEED),
         ];
         let whole = [
+            (80..=98, crate::GUIDE),
             (58..=78, crate::INJECT),
             (47..=56, PLAY_PAUSE),
             (37..=45, PREVIOUS),
@@ -2227,7 +2229,7 @@ mod tests {
             (17..=25, STOP),
             (2..=15, SPEED),
         ];
-        for (width, strip) in [(120, shed), (220, whole)] {
+        for (width, strip) in [(120, shed), (260, whole)] {
             for (columns, action) in strip {
                 let gap = columns.end() + 1;
                 assert_eq!(press(&state, width, gap, 0), border, "{width}: {gap}");

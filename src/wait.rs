@@ -13,6 +13,7 @@ pub enum Kind {
     Authoring,
     Install,
     Session,
+    Walkthrough,
 }
 
 fn all(state: &State) -> impl Iterator<Item = (Kind, &Wait)> {
@@ -28,7 +29,14 @@ fn all(state: &State) -> impl Iterator<Item = (Kind, &Wait)> {
         }) => Some((Kind::Session, wait)),
         _ => None,
     };
-    authoring.into_iter().chain(install).chain(session)
+    let walkthrough = (state.walkthrough.as_ref())
+        .filter(|session| session.queue.running.is_some())
+        .map(|session| (Kind::Walkthrough, &session.queue.wait));
+    authoring
+        .into_iter()
+        .chain(install)
+        .chain(session)
+        .chain(walkthrough)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,7 +99,14 @@ pub fn all_mut(state: &mut State) -> impl Iterator<Item = (Kind, &mut Wait)> {
         }) => Some((Kind::Session, wait)),
         _ => None,
     };
-    authoring.into_iter().chain(install).chain(session)
+    let walkthrough = (state.walkthrough.as_mut())
+        .filter(|session| session.queue.running.is_some())
+        .map(|session| (Kind::Walkthrough, &mut session.queue.wait));
+    authoring
+        .into_iter()
+        .chain(install)
+        .chain(session)
+        .chain(walkthrough)
 }
 
 pub fn counts(state: &State, kind: Kind, path: &Path) -> bool {
@@ -164,6 +179,7 @@ pub fn line(progress: Progress) -> String {
         }
         Kind::Install => format!("installing · {elapsed} · no timeout"),
         Kind::Session => format!("session · {elapsed} · {activity} · no timeout"),
+        Kind::Walkthrough => format!("{elapsed} · {activity} · no timeout"),
     }
 }
 

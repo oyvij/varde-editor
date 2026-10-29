@@ -588,6 +588,7 @@ struct Edge {
     hand: bool,
     analysed: Sender<(u64, Figures, Option<Figures>)>,
     tested: Sender<(bool, String)>,
+    ran: Sender<Option<i32>>,
     formatted: Sender<(String, PathBuf, u64, format::Answer)>,
     released: Sender<Option<String>>,
     replaced: Sender<Result<(), ReplaceFailed>>,
@@ -679,6 +680,7 @@ fn run(
 
     let (analysed_tx, analysed_rx) = channel();
     let (tested_tx, tested_rx) = channel();
+    let (ran_tx, ran_rx) = channel();
     let (formatted_tx, formatted_rx) = channel();
     let (released_tx, released_rx) = channel();
     let (replaced_tx, replaced_rx) = channel();
@@ -747,6 +749,7 @@ fn run(
         area: ratatui::layout::Rect::new(0, 0, size.width, size.height),
         analysed: analysed_tx,
         tested: tested_tx,
+        ran: ran_tx,
         formatted: formatted_tx,
         released: released_tx,
         replaced: replaced_tx,
@@ -820,6 +823,9 @@ fn run(
             &listed_rx,
             &mut queue,
         );
+        while let Ok(status) = ran_rx.try_recv() {
+            queue.push_back(Event::WalkthroughCommandExited(status));
+        }
         dirty |= queue.len() != before;
         dirty |= resize_panes(&mut terminal, &state, &mut edge, &mut queue);
 
@@ -1689,7 +1695,10 @@ fn render(terminal: &mut Screen, state: &State, edge: &mut Edge) -> Result<()> {
     terminal.draw(|frame| {
         edge.area = frame.area();
         let (status, tone) = if edge.status.text.is_empty() {
-            (hint(state.opened).to_string(), ui::Tone::Hint)
+            (
+                varde::walkthrough_spinner(state).unwrap_or_else(|| hint(state.opened).to_string()),
+                ui::Tone::Hint,
+            )
         } else {
             (edge.status.text.clone(), edge.status.tone)
         };
@@ -2982,6 +2991,13 @@ fn perform_jobs(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>) {
                 let _ = answer.send(outcome);
             });
         }
+        Effect::RunWalkthroughCommand { command, stdin } => {
+            let answer = edge.ran.clone();
+            let root = edge.root.clone();
+            std::thread::spawn(move || {
+                let _ = answer.send(run_walkthrough_command(&command, &root, &stdin));
+            });
+        }
         Effect::RunTests { command } => {
             let answer = edge.tested.clone();
             let root = edge.root.clone();
@@ -3074,6 +3090,40 @@ fn download(url: &str) -> Option<Vec<u8>> {
         }
         Err(error) => {
             eprintln!("varde: update failed: curl: {error}");
+            None
+        }
+    }
+}
+
+fn run_walkthrough_command(command: &str, root: &Path, stdin: &str) -> Option<i32> {
+    let words = shlex::split(command).unwrap_or_default();
+    let Some((program, arguments)) = words.split_first() else {
+        eprintln!("varde: walkthrough.command {command:?} is not a command");
+        return None;
+    };
+    let child = std::process::Command::new(program)
+        .args(arguments)
+        .current_dir(root)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+    let mut child = match child {
+        Ok(child) => child,
+        Err(error) => {
+            eprintln!("varde: walkthrough.command {command:?}: {error}");
+            return None;
+        }
+    };
+    if let Some(mut input) = child.stdin.take() {
+        if let Err(error) = std::io::Write::write_all(&mut input, stdin.as_bytes()) {
+            eprintln!("varde: walkthrough.command {command:?}: stdin: {error}");
+        }
+    }
+    match child.wait() {
+        Ok(status) => status.code(),
+        Err(error) => {
+            eprintln!("varde: walkthrough.command {command:?}: {error}");
             None
         }
     }
@@ -3784,6 +3834,11 @@ fn diff_lines(root: &Path, path: &Path) -> Diff {
 }
 
 const NOTICES: &[(&str, &str, ui::Tone)] = &[
+    (
+        "walkthrough-command-failed",
+        "The walkthrough command failed",
+        ui::Tone::Warning,
+    ),
     (
         "walkthrough-invalid",
         "Walkthrough plan not loaded — still walking the last one that worked",

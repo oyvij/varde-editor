@@ -6,6 +6,8 @@ pub const FILE: &str = "walkthrough.json";
 
 pub const VERSION: u32 = 1;
 
+pub const SKILL: &str = "workflows/walkthrough/walkthrough";
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct Plan {
     pub version: u32,
@@ -63,6 +65,137 @@ pub enum Problem {
 pub struct Session {
     pub plan: Option<Plan>,
     pub failure: Option<Failure>,
+    pub queue: Queue,
+    pub fixes: u8,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Driver {
+    #[default]
+    Pane,
+    Background,
+}
+
+impl Driver {
+    pub fn named(name: &str) -> Driver {
+        match name {
+            "background" => Driver::Background,
+            _ => Driver::Pane,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Action {
+    Plan,
+    Evaluate,
+    Adjust,
+    Write,
+    Revert,
+    Fix,
+}
+
+impl Action {
+    pub fn slug(self) -> &'static str {
+        match self {
+            Action::Plan => "plan",
+            Action::Evaluate => "evaluate",
+            Action::Adjust => "adjust",
+            Action::Write => "write",
+            Action::Revert => "revert",
+            Action::Fix => "fix",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Request {
+    pub action: Action,
+    pub waypoint: Option<String>,
+    pub detail: String,
+}
+
+impl Request {
+    pub fn line(&self, skill: &Path, root: &Path, plan: &Path) -> String {
+        let mut line = format!(
+            "{} Action: {}. Plan file: {}.",
+            crate::skills::pointer(skill, root, None),
+            self.action.slug(),
+            plan.display()
+        );
+        if let Some(id) = &self.waypoint {
+            line.push_str(&format!(" Waypoint: {id}."));
+        }
+        if !self.detail.is_empty() {
+            line.push(' ');
+            line.push_str(&self.detail);
+        }
+        line.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Queue {
+    pub running: Option<Request>,
+    pub waiting: Vec<Request>,
+    pub wait: crate::wait::Wait,
+}
+
+impl Queue {
+    pub fn push(&mut self, request: Request) -> Option<Request> {
+        if self.running.is_none() {
+            self.running = Some(request.clone());
+            self.wait = crate::wait::Wait::default();
+            return Some(request);
+        }
+        let first_evaluation = self
+            .waiting
+            .iter()
+            .position(|waiting| waiting.action == Action::Evaluate);
+        match (request.action, first_evaluation) {
+            (Action::Evaluate, _) => {
+                self.waiting
+                    .retain(|waiting| waiting.action != Action::Evaluate);
+                self.waiting.push(request);
+            }
+            (Action::Adjust | Action::Revert, Some(at)) => self.waiting.insert(at, request),
+            _ => self.waiting.push(request),
+        }
+        None
+    }
+
+    pub fn finish(&mut self) -> Option<Request> {
+        self.running = None;
+        self.wait = crate::wait::Wait::default();
+        match self.waiting.is_empty() {
+            true => None,
+            false => {
+                let next = self.waiting.remove(0);
+                self.push(next)
+            }
+        }
+    }
+
+    pub fn spinner(&self) -> Option<String> {
+        let running = self.running.as_ref()?;
+        let mut line = format!("{} running", running.action.slug());
+        if !self.waiting.is_empty() {
+            let queued: Vec<&str> = self
+                .waiting
+                .iter()
+                .map(|request| request.action.slug())
+                .collect();
+            line.push_str(&format!(" · {} queued", queued.join(", ")));
+        }
+        Some(line)
+    }
+}
+
+pub fn current(session: &Session) -> Option<String> {
+    let plan = session.plan.as_ref()?;
+    plan.checkpoint
+        .clone()
+        .or_else(|| plan.waypoints.first().map(|waypoint| waypoint.id.clone()))
 }
 
 impl Failure {
@@ -290,6 +423,143 @@ mod tests {
         )))
         .expect("a plan");
         assert_eq!(files(&parsed), ["src/lib.rs", "src/plan.rs"]);
+    }
+
+    fn request(action: Action, waypoint: &str) -> Request {
+        Request {
+            action,
+            waypoint: Some(waypoint.to_string()),
+            detail: String::new(),
+        }
+    }
+
+    fn actions(queue: &Queue) -> Vec<(Action, Option<&str>)> {
+        queue
+            .waiting
+            .iter()
+            .map(|request| (request.action, request.waypoint.as_deref()))
+            .collect()
+    }
+
+    #[test]
+    fn a_request_with_nothing_in_flight_goes_at_once() {
+        let mut queue = Queue::default();
+        let adjust = request(Action::Adjust, "w1");
+        assert_eq!(queue.push(adjust.clone()), Some(adjust.clone()));
+        assert_eq!(queue.running, Some(adjust));
+        assert!(queue.waiting.is_empty());
+    }
+
+    #[test]
+    fn one_request_is_in_flight_and_the_rest_wait() {
+        let mut queue = Queue::default();
+        queue.push(request(Action::Evaluate, "w1"));
+        assert_eq!(queue.push(request(Action::Adjust, "w1")), None);
+        assert_eq!(
+            queue.running.as_ref().map(|r| r.action),
+            Some(Action::Evaluate)
+        );
+        assert_eq!(actions(&queue), [(Action::Adjust, Some("w1"))]);
+    }
+
+    #[test]
+    fn a_newer_evaluation_replaces_a_queued_one() {
+        let mut queue = Queue::default();
+        queue.push(request(Action::Adjust, "w1"));
+        queue.push(request(Action::Evaluate, "w1"));
+        queue.push(request(Action::Fix, "w1"));
+        queue.push(request(Action::Evaluate, "w2"));
+        assert_eq!(
+            actions(&queue),
+            [(Action::Fix, Some("w1")), (Action::Evaluate, Some("w2"))]
+        );
+    }
+
+    #[test]
+    fn adjust_and_revert_queue_ahead_of_evaluations() {
+        let mut queue = Queue::default();
+        queue.push(request(Action::Write, "w1"));
+        queue.push(request(Action::Evaluate, "w1"));
+        queue.push(request(Action::Adjust, "w1"));
+        queue.push(request(Action::Revert, "w1"));
+        assert_eq!(
+            actions(&queue),
+            [
+                (Action::Adjust, Some("w1")),
+                (Action::Revert, Some("w1")),
+                (Action::Evaluate, Some("w1")),
+            ]
+        );
+    }
+
+    #[test]
+    fn finishing_sends_the_next_request_in_line() {
+        let mut queue = Queue::default();
+        queue.push(request(Action::Adjust, "w1"));
+        queue.push(request(Action::Evaluate, "w1"));
+        let evaluate = request(Action::Evaluate, "w1");
+        assert_eq!(queue.finish(), Some(evaluate.clone()));
+        assert_eq!(queue.running, Some(evaluate));
+        assert_eq!(queue.finish(), None);
+        assert_eq!(queue, Queue::default());
+    }
+
+    #[test]
+    fn the_spinner_names_what_runs_and_what_waits() {
+        let mut queue = Queue::default();
+        assert_eq!(queue.spinner(), None);
+        queue.push(request(Action::Adjust, "w1"));
+        assert_eq!(queue.spinner().as_deref(), Some("adjust running"));
+        queue.push(request(Action::Revert, "w1"));
+        queue.push(request(Action::Evaluate, "w2"));
+        assert_eq!(
+            queue.spinner().as_deref(),
+            Some("adjust running · revert, evaluate queued")
+        );
+    }
+
+    #[test]
+    fn a_request_is_one_line_naming_the_skill_action_plan_and_waypoint() {
+        let request = Request {
+            action: Action::Adjust,
+            waypoint: Some("w2".to_string()),
+            detail: "The developer says: don't\nduplicate this".to_string(),
+        };
+        assert_eq!(
+            request.line(
+                Path::new("/home/me/.varde/ai/skills/workflows/walkthrough/walkthrough/SKILL.md"),
+                Path::new("/w"),
+                Path::new("/w/.varde/walkthrough.json"),
+            ),
+            "Follow the Skill in /home/me/.varde/ai/skills/workflows/walkthrough/walkthrough/SKILL.md \
+             for the workspace at /w. Action: adjust. Plan file: /w/.varde/walkthrough.json. \
+             Waypoint: w2. The developer says: don't duplicate this"
+        );
+    }
+
+    #[test]
+    fn a_request_before_any_waypoint_names_none() {
+        let request = Request {
+            action: Action::Plan,
+            waypoint: None,
+            detail: String::new(),
+        };
+        assert_eq!(
+            request.line(
+                Path::new("/s/SKILL.md"),
+                Path::new("/w"),
+                Path::new("/w/p.json")
+            ),
+            "Follow the Skill in /s/SKILL.md for the workspace at /w. Action: plan. \
+             Plan file: /w/p.json."
+        );
+    }
+
+    #[test]
+    fn the_driver_is_the_pane_unless_background_is_named() {
+        assert_eq!(Driver::named("background"), Driver::Background);
+        assert_eq!(Driver::named("pane"), Driver::Pane);
+        assert_eq!(Driver::named("anything"), Driver::Pane);
     }
 
     #[test]
