@@ -3631,7 +3631,7 @@ rewrite of the file by the agent replaces those positions.
 **R52.15** A Waypoint in a missing file opens an **unsaved buffer at its path**. `:w` creates its
 missing folders inside the workspace and refuses a path that resolves outside it — through a linked
 folder, since R52.3 already refuses a plan path that leaves the workspace — as `outside-workspace`,
-writing nothing.
+writing nothing. A hand-over's save (R52.9) of such a buffer goes the same way.
 **R52.16** In a project workspace a session **resumes on the last visited Waypoint** after a
 restart; a session ended by Finish or Revert does not resume, whatever the file says (Q71). In a
 Bare workspace it ends with Varde.

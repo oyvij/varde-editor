@@ -180,7 +180,7 @@ Feature: Starting and adjusting a Walkthrough
       Then an "adjust" walkthrough request was sent
       And the walkthrough request names Waypoint "w2"
       And the walkthrough request carries "move these functions to a new file"
-      And no file was written
+      And the walkthrough file was not written
 
     Scenario: The agent's rewritten plan lands on its checkpoint
       Given I adjusted the walkthrough with "don't duplicate this"

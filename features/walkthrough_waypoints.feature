@@ -19,7 +19,8 @@ Feature: Walking a Walkthrough's Waypoints in Edit view
   `[` and `]` step to the previous and next Waypoint, and so do the previous and next Chips on the
   editor's Transport. A verdict never blocks a step. Waypoint lines move with edits above them, the
   way a Breakpoint's do. A Waypoint in a file that does not exist yet opens an unsaved buffer at its
-  path, and `:w` creates its missing folders inside the workspace and refuses a path outside it.
+  path, and `:w` creates its missing folders inside the workspace and refuses a path outside it. A
+  hand-over's save of that buffer does the same.
 
   Background:
     Given the workspace root is "/home/me/projects/varde"
@@ -273,6 +274,20 @@ Feature: Walking a Walkthrough's Waypoints in Edit view
     Scenario: :w refuses a planned path that resolves outside the workspace
       Given "src/guide" links to the folder "/home/me/projects/elsewhere"
       When I run ":w"
+      Then the notice is "outside-workspace"
+      And no file was written
+      And no folder was created
+
+    Scenario: A hand-over saves the new file into its missing folders
+      Given an AI session is running
+      When I adjust the walkthrough with "split the parser"
+      Then the folder "src/guide" was created
+      And "src/guide/plan.rs" was saved before the request was sent
+
+    Scenario: A hand-over refuses a planned path that resolves outside the workspace
+      Given an AI session is running
+      And "src/guide" links to the folder "/home/me/projects/elsewhere"
+      When I adjust the walkthrough with "split the parser"
       Then the notice is "outside-workspace"
       And no file was written
       And no folder was created

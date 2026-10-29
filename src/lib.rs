@@ -5105,10 +5105,8 @@ fn on_editor_escape(state: &State, mut next: State, event: Event, wheeled: bool)
                     .is_some_and(|path| session.missing.contains(&relative(&state.root, path)))
             }) =>
         {
-            next.current_buffer
-                .clone()
-                .map(Effect::ResolveWrite)
-                .into_iter()
+            std::iter::once(Effect::ClearNotice)
+                .chain(next.current_buffer.clone().map(Effect::ResolveWrite))
                 .collect()
         }
 
@@ -6536,7 +6534,6 @@ fn on_walkthrough(state: &State, mut next: State, event: Event, wheeled: bool) -
                     vec![
                         Effect::EnsureDir(path.parent().unwrap_or(&next.root).to_path_buf()),
                         Effect::WriteFile { path, contents },
-                        Effect::ClearNotice,
                     ]
                 }
             }
@@ -6652,23 +6649,35 @@ fn send_to_agent(next: &mut State, request: Option<walkthrough::Request>) -> Vec
     let Some(request) = request else {
         return vec![];
     };
-    let files = next
+    let (files, missing) = next
         .walkthrough
         .as_ref()
-        .and_then(|session| session.plan.as_ref())
-        .map(walkthrough::files)
+        .map(|session| {
+            (
+                session
+                    .plan
+                    .as_ref()
+                    .map(walkthrough::files)
+                    .unwrap_or_default(),
+                session.missing.clone(),
+            )
+        })
         .unwrap_or_default();
     let mut effects = Vec::new();
     for file in files {
-        let path = next.root.join(file);
+        let path = next.root.join(&file);
         if let Some(buffer) = next
             .buffers
             .get_mut(&path)
             .filter(|buffer| buffer.is_dirty())
         {
-            effects.push(Effect::WriteFile {
-                contents: buffer.write(),
-                path,
+            effects.push(if missing.contains(&file) {
+                Effect::ResolveWrite(path)
+            } else {
+                Effect::WriteFile {
+                    contents: buffer.write(),
+                    path,
+                }
             });
         }
     }
