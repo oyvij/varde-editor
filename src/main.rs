@@ -2933,11 +2933,15 @@ fn perform_jobs(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>) {
             let lines = files
                 .into_iter()
                 .filter_map(|file| {
-                    let count = std::fs::read_to_string(root.join(&file))
-                        .ok()?
-                        .lines()
-                        .count();
-                    Some((file, count))
+                    let path = root.join(&file);
+                    match std::fs::read_to_string(&path) {
+                        Ok(text) => Some((file, text.lines().count())),
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+                        Err(error) => {
+                            eprintln!("varde: cannot read {}: {error}", path.display());
+                            None
+                        }
+                    }
                 })
                 .collect();
             queue.push_back(Event::WalkthroughFiles { plan, lines });
@@ -5204,6 +5208,35 @@ mod tests {
                 Event::WalkthroughChanged("{}".to_string()),
             ]
         );
+    }
+
+    #[test]
+    fn in_a_bare_workspace_the_walkthrough_file_is_the_sidecars() {
+        let folder = tempfile::tempdir().expect("a temp directory");
+        let sidecar = tempfile::tempdir().expect("a temp directory");
+        fs::create_dir(folder.path().join(".varde")).expect("the fixture folder");
+        let in_folder = folder.path().join(".varde").join(varde::walkthrough::FILE);
+        let in_sidecar = sidecar.path().join(varde::walkthrough::FILE);
+        fs::write(&in_folder, "folder").expect("the fixture file");
+        fs::write(&in_sidecar, "sidecar").expect("the fixture file");
+        let mut state = State::default();
+        state.root = folder.path().to_path_buf();
+        state.sidecar = Some(sidecar.path().to_path_buf());
+        let mut queue = VecDeque::new();
+
+        for path in [in_folder, in_sidecar] {
+            watched_path(
+                &notify::EventKind::Modify(ModifyKind::Data(DataChange::Any)),
+                path,
+                &state,
+                &folder.path().join(".git"),
+                &sidecar.path().join("stories"),
+                &mut queue,
+            );
+        }
+
+        assert!(queue.contains(&Event::WalkthroughChanged("sidecar".to_string())));
+        assert!(!queue.contains(&Event::WalkthroughChanged("folder".to_string())));
     }
 
     #[test]

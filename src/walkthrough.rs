@@ -130,13 +130,15 @@ pub fn check(plan: &Plan, lines: &BTreeMap<String, usize>) -> Result<(), Failure
         .waypoints
         .iter()
         .filter_map(|waypoint| {
-            let problem = match lines.get(&waypoint.file) {
-                _ if !inside_workspace(&waypoint.file) => Problem::OutsideWorkspace,
-                Some(&count) if waypoint.line == 0 || waypoint.line > count.max(1) => {
-                    Problem::LineOutOfRange
-                }
-                None if waypoint.line == 0 => Problem::LineOutOfRange,
-                _ => return None,
+            let last = lines
+                .get(&waypoint.file)
+                .map_or(usize::MAX, |&count| count.max(1));
+            let problem = if !inside_workspace(&waypoint.file) {
+                Problem::OutsideWorkspace
+            } else if !(1..=last).contains(&waypoint.line) {
+                Problem::LineOutOfRange
+            } else {
+                return None;
             };
             Some((waypoint.id.clone(), problem))
         })

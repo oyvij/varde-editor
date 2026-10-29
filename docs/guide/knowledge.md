@@ -72,7 +72,7 @@ them:
 | `maintain-vault` | Renames, moves, merges or splits Notes, Kinds and Topics. Answer "check" for a check of broken links and missing indexes. |
 
 Varde also ships the Workflow `walkthrough`. Its one Skill holds the agent's instructions for a
-Walkthrough, and `:guide` hands it over for you.
+Walkthrough, and Varde hands it over itself.
 
 A session learns where the Vault is only from a Skill you picked. Starting the AI on its own tells
 it nothing about the Vault.
