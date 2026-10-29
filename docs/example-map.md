@@ -966,7 +966,7 @@ a paste that reaches the open buffer is **one edit, in whatever mode the buffer 
 line endings are line breaks however the source spelled them. Insert mode used to be the condition,
 which left a paste in normal mode replayed as keystrokes — read as commands until an `i`, `a` or `o`
 turned the rest into typing, one auto-indenting Enter per line, so three indented lines came back as
-a staircase. A read-only surface still takes none of it: a diff, a walkthrough and a Preview answer
+a staircase. A read-only surface still takes none of it: a diff, a Story being walked and a Preview answer
 the editor's keys ahead of the buffer.
 **R16.5** **Ctrl and Command are aliases** on copy and on paste. Command+V pasted long before
 Ctrl+V did, because the host terminal answers it and sends the text on as a paste — which made one
@@ -1092,7 +1092,7 @@ beside `ConfirmSubmit`. Authoring clears whatever the CLI is showing, exactly as
 swallowing git errors into `None` is defensible for a status poll and wrong for an explicit command.
 **R22.6** `:story` on an already-authored range **loads it**; `:story!` **re-authors** (Q57). Loading
 is instant and offline; re-authoring costs minutes, clears the CLI's prompt and discards the
-Walkthrough, so it takes the bang.
+Story position, so it takes the bang.
 **R22.7** While authoring, the spine reads `authoring`, with **no timeout**. A guessed timeout is
 wrong on a slow run and slow on a fast one — the same reasoning that made `Event::AiSpoke` replace a
 fixed delay. A CLI that dies is detected by `AiExited`, which every site that stops holding a pane
@@ -1245,7 +1245,7 @@ narrates, still opens, still takes a comment — a stale step is often exactly w
 base moves under it.
 **R24.10** A comment **records its story and step** alongside file, line, type and revision, so a
 submitted review says which *claim* the reviewer rejected.
-**R24.11** A Walkthrough is **not remembered**: entering a Story starts at its first Step every time,
+**R24.11** A Story position is **not remembered**: entering a Story starts at its first Step every time,
 and nothing survives a restart (Q62).
 
 - ✅ Entering a story puts the cursor on the first step's site
@@ -1287,11 +1287,11 @@ read around it cannot review it. Rejected: `j` steps and `Ctrl+d` scrolls — a 
 per view is precisely the difference the cheatsheet sweep exists to close, and F22 has just given the
 cheatsheet a view dimension.
 
-**Q62 — Is a Walkthrough remembered when a Story is left, or across a restart? Resolved: no.** A
-Walkthrough is disposable (`CONTEXT.md`), and stepping a Story again from the top costs a few keys.
+**Q62 — Is a Story position remembered when a Story is left, or across a restart? Resolved: no.** A
+Story position is disposable (`CONTEXT.md`), and stepping a Story again from the top costs a few keys.
 Rejected: remembering the position per Story, persisted, and discarded with a notice when the Story is
 re-authored — specified and never missed in daily use, so it would be storage and a staleness rule
-paying no rent (issue #7, `.out-of-scope/walkthrough-memory.md`).
+paying no rent (issue #7, `.out-of-scope/story-position-memory.md`).
 
 ## F25 — Predictions — **DEFINED**
 
@@ -1303,7 +1303,7 @@ and steps on, which is what makes it non-blocking (Q64).
 **R25.3** A **wrong pick shows that choice's feedback and leaves the choices up**. You may pick again
 as often as you like.
 **R25.4** **Only a correct pick replaces the choices** with its feedback.
-**R25.5** The Walkthrough records **that a Prediction was put, never which choice** was picked.
+**R25.5** The Story position records **that a Prediction was put, never which choice** was picked.
 **R25.6** A Prediction already put is **not asked again**; re-authoring puts it afresh.
 **R25.7** A Prediction may ask **any *why* about the step**, not only about the next hop — the
 questions the CLIs actually wrote were better than the definition was.
@@ -1314,7 +1314,7 @@ questions the CLIs actually wrote were better than the definition was.
 - ✅ A wrong pick may be followed by another
 - ✅ A correct pick replaces the choices with its feedback
 - ✅ Answering never blocks the walk
-- ✅ The walkthrough never records which choice was picked
+- ✅ The story position never records which choice was picked
 - ✅ A prediction already put is not asked again
 - ✅ A prediction skipped is not asked again either
 - ✅ A prediction re-authored is put afresh
@@ -3575,7 +3575,7 @@ Q41, Q42, Q53, Q54, Q55, Q56, Q57, Q58, Q59, Q60, Q63, Q64, Q65.
 
 Per `AGENTS.md`, implementation begins now that the spec is complete — not before.
 
-**F22–F25 (stories and walkthroughs) are specified and not implemented.** Their route was charted on
+**F22–F25 (stories and walking them) are specified and not implemented.** Their route was charted on
 `.scratch/story-walkthrough/map.md`, and the eleven tickets under it hold the measurements behind
 every answered question above — three real authoring runs, 21 prior-art sources, and a 30-commit
 coverage census. Two decisions were hard enough to reverse that they became ADRs:

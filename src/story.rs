@@ -235,12 +235,12 @@ pub fn decide(force: bool, authored: bool, spelling: String, out: String) -> Res
     }
 }
 
-const AUTHORING_PROMPT: &str = r#"Write a guided walkthrough of the changes in `{RANGE}` as JSON (protocolVersion 2), to the file `{OUT}`.
+const AUTHORING_PROMPT: &str = r#"Write a Story set narrating the changes in `{RANGE}` as JSON (protocolVersion 2), to the file `{OUT}`.
 
 You are writing for a developer who did not make this change and will walk it step by step, one
 screen at a time, to build a mental model of it. Follow how the code runs, not how the files are
 arranged: start where control enters, and go where it goes — into unchanged code when the flow
-goes there. A file-by-file summary is not a walkthrough.
+goes there. A file-by-file summary is not a Story.
 
 `{CONTEXT}` already holds everything Varde knows about this change: the two oids the range resolved
 to, its diff, and every changed file's contents with line numbers down the side. Read it once rather
@@ -397,7 +397,7 @@ certain, mark it `"invented"` and drop the `cite`.
 there is nothing further to say — a nudge restating the claim wastes the one line it gets.
 
 **`prediction`** is optional and rare — at most one or two per story, at a step where the reasoning is
-genuinely worth stopping for. Omit it everywhere else; a walkthrough is not a quiz.
+genuinely worth stopping for. Omit it everywhere else; a Story is not a quiz.
 
 When present it must offer **exactly three choices** — a set with a prediction of any other size is
 refused whole, and nothing in it is walkable. Exactly one choice is `correct`. Ask **why**, never
@@ -427,13 +427,13 @@ pub fn prompt(spelling: &str, out: &str, context: &str) -> String {
         .replace("{CONTEXT}", context)
 }
 
-const INQUIRY_PROMPT: &str = r#"Write a guided walkthrough of this repository's code as JSON (protocolVersion 3), to the file `{OUT}`, answering what the developer asked below.
+const INQUIRY_PROMPT: &str = r#"Write a Story set narrating this repository's code as JSON (protocolVersion 3), to the file `{OUT}`, answering what the developer asked below.
 
 You are writing for a developer who will walk it step by step, one screen at a time, to build a
 mental model of the code. Nothing has changed: describe the code as it stands on disk now, working
 tree included, and read the files themselves rather than asking git about them. Follow how the code
 runs, not how the files are arranged: start where control enters, and go where it goes. A
-file-by-file summary is not a walkthrough.
+file-by-file summary is not a Story.
 
 ## What the developer asked
 
@@ -1021,7 +1021,7 @@ const FIX_PROMPT: &str = r#"Varde checked the story set you wrote to `{OUT}` and
 
 Rewrite only those steps. Keep the set's `title`, its stories and every other step exactly as they
 are, and write the whole set back to `{OUT}` — the same path, replacing what is there. Do not
-re-author the walkthrough and do not renumber or drop the steps that were fine.{KEEP_RANGE}
+re-author the set and do not renumber or drop the steps that were fine.{KEEP_RANGE}
 
 Write only the JSON file. Do not summarise it back."#;
 

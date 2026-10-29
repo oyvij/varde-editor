@@ -9724,8 +9724,8 @@ fn overlay_does_not_show_correct_choice(world: &mut VardeWorld) {
     );
 }
 
-#[then(expr = "the walkthrough records step {int} as put")]
-fn walkthrough_records_step_as_put(world: &mut VardeWorld, step_number: usize) {
+#[then(expr = "the story position records step {int} as put")]
+fn story_position_records_step_as_put(world: &mut VardeWorld, step_number: usize) {
     let Some(story::Walking::Story { story, .. }) = world.state.walking else {
         panic!("walking a story");
     };
@@ -9735,12 +9735,12 @@ fn walkthrough_records_step_as_put(world: &mut VardeWorld, step_number: usize) {
         .contains(&(story, step_number - 1)));
 }
 
-#[then(expr = "the walkthrough holds no choice")]
-fn walkthrough_holds_no_choice(world: &mut VardeWorld) {
+#[then(expr = "the story position holds no choice")]
+fn story_position_holds_no_choice(world: &mut VardeWorld) {
     let Some(story::Walking::Story { step, .. }) = world.state.walking else {
         panic!("walking a story");
     };
-    walkthrough_records_step_as_put(world, step + 1);
+    story_position_records_step_as_put(world, step + 1);
 }
 
 #[when(expr = "the story set is re-authored")]

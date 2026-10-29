@@ -21,7 +21,7 @@ Feature: Walking a story step by step
   to hold, and stops claiming to describe what is on screen. It is never quietly re-pointed at
   whatever moved into its place — that is how every tool in the prior art degraded silently.
 
-  A Walkthrough is one person's position in a Story. It is disposable and gitignored, and it is
+  A Story position is one person's place in a Story. It is disposable and gitignored, and it is
   discarded outright when the Story it belongs to is re-authored, because a position kept across a
   rewrite points at a different claim while claiming to be where you left off.
 

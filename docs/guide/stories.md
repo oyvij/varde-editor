@@ -13,7 +13,7 @@ file, waits for the file to appear, checks it, and walks it.
 
 - **Story set**: everything written for one Range, under a title that says what the whole change is
   for. One file, one Range, one title.
-- **Story**: one walkthrough of the change, with a name, a premise and an ordered chain of Steps.
+- **Story**: one narrative through the change, with a name, a premise and an ordered chain of Steps.
 - **Step**: one claim about one Site, with a why and what flows in and out. The cursor goes to a
   Step, and a comment is made against one.
 - **Site**: a file, a side of the change (old or new), a range of lines, and what those lines held

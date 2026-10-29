@@ -1,11 +1,12 @@
-# Walkthrough memory
+# Story position memory
 
 Varde does not remember where a reviewer was in a Story. Leaving a Story with Escape and entering it
-again starts at its first Step, and nothing about a Walkthrough survives a restart.
+again starts at its first Step, and nothing about a Story position survives a restart.
 
 ## Why this is out of scope
 
-`CONTEXT.md` already defines a Walkthrough as disposable: "started, stopped and restarted freely".
+`CONTEXT.md` already defined a Story position, then called a Walkthrough, as disposable: "started,
+stopped and restarted freely".
 Getting back to a Step is a few presses of `n`, so remembering it saves almost nothing, and it would
 cost:
 
@@ -20,5 +21,5 @@ A behaviour nobody misses is not worth that storage and that rule.
 
 ## Prior requests
 
-- #7: "There are 4 cucumber scenarios that fail." — the unbuilt walkthrough scenarios were removed
+- #7: "There are 4 cucumber scenarios that fail." — the unbuilt Story position scenarios were removed
   rather than implemented
