@@ -3606,7 +3606,9 @@ Nothing else is handed over: no index, language server or MCP server.
 defaults to `claude -p`. The pane driver pastes, starting the AI session on demand and holding the
 request until it is ready. The background driver runs the command once per request, off the loop,
 with the request on stdin; stdout is ignored and a non-zero exit is the notice
-`walkthrough-command-failed`. Resume flags are the user's to add to the command.
+`walkthrough-command-failed`; when that request was the first `plan`, no session is left, so the next
+`:guide` plans again. Resume flags are the user's to add to the command, and only the global config
+sets `[walkthrough]`, as only it sets `[ai]`.
 **R52.8** **One request in flight.** The next goes when the plan file changes or the background
 command exits. A queued evaluation is replaced by a newer one; `adjust` and `revert` queue ahead of
 evaluations. The spinner names the running and queued actions, on the fake clock.

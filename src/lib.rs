@@ -6359,7 +6359,15 @@ fn on_walkthrough(state: &State, mut next: State, event: Event, wheeled: bool) -
                     "no exit status".to_string(),
                 )],
             };
-            effects.extend(finish_hand_over(&mut next));
+            let unplanned = state.walkthrough.as_ref().is_some_and(|session| {
+                session.plan.is_none()
+                    && session.queue.running.as_ref().map(|request| request.action)
+                        == Some(walkthrough::Action::Plan)
+            });
+            match (status, unplanned) {
+                (Some(0), _) | (_, false) => effects.extend(finish_hand_over(&mut next)),
+                (_, true) => next.walkthrough = None,
+            }
             effects
         }
         (other, _) => return Err((next, other)),
@@ -6389,26 +6397,19 @@ fn refuse_walkthrough(next: &mut State, failure: walkthrough::Failure) -> Vec<Ef
 }
 
 pub fn hand_over(next: &mut State, request: walkthrough::Request) -> Vec<Effect> {
-    let Some(session) = &mut next.walkthrough else {
-        return vec![];
-    };
-    match session.queue.push(request) {
-        Some(request) => send_to_agent(next, request),
-        None => vec![],
-    }
+    let sending = (next.walkthrough.as_mut()).and_then(|session| session.queue.push(request));
+    send_to_agent(next, sending)
 }
 
 fn finish_hand_over(next: &mut State) -> Vec<Effect> {
-    let Some(session) = &mut next.walkthrough else {
-        return vec![];
-    };
-    match session.queue.finish() {
-        Some(request) => send_to_agent(next, request),
-        None => vec![],
-    }
+    let sending = (next.walkthrough.as_mut()).and_then(|session| session.queue.finish());
+    send_to_agent(next, sending)
 }
 
-fn send_to_agent(next: &mut State, request: walkthrough::Request) -> Vec<Effect> {
+fn send_to_agent(next: &mut State, request: Option<walkthrough::Request>) -> Vec<Effect> {
+    let Some(request) = request else {
+        return vec![];
+    };
     let files = next
         .walkthrough
         .as_ref()
@@ -8381,6 +8382,20 @@ const SPINNER: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '�
 
 pub fn spinner(tick: u64) -> char {
     SPINNER[(tick % SPINNER.len() as u64) as usize]
+}
+
+pub fn asking(state: &State) -> Option<&'static str> {
+    match (&state.modal, &state.walkthrough) {
+        (
+            Modal::Inquiry {
+                ask: Ask::Story(_), ..
+            },
+            _,
+        ) => Some("inquiry"),
+        (Modal::Inquiry { .. }, None) => Some("walkthrough"),
+        (Modal::Inquiry { .. }, Some(_)) => Some("adjust-walkthrough"),
+        _ => None,
+    }
 }
 
 pub fn walkthrough_spinner(state: &State) -> Option<String> {

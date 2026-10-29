@@ -93,7 +93,7 @@ binary and does not appear as TOML anywhere.
 
 | Key | Default | Type | Meaning |
 |---|---|---|---|
-| `driver` | `"pane"` | `"pane"` or `"background"` | How `:guide` hands each request to the agent. `"pane"` pastes it into the AI pane, starting the AI session first if none is running, so you can watch the agent and talk to it. `"background"` runs `command` once per request instead. Any other value reads as `"pane"`. |
+| `driver` | `"pane"` | `"pane"` or `"background"` | How `:guide` hands each request to the agent. `"pane"` pastes it into the AI pane, starting the AI session first if none is running, so you can watch the agent and talk to it. `"background"` runs `command` once per request instead. Any other value is refused, as a wrong type is. |
 | `command` | `"claude -p"` | string | What the background driver runs, from the workspace root, with the request on stdin. Varde never reads what it prints; a non-zero exit is shown in the footer. Each request names the plan file and the current Waypoint, so a fresh process needs nothing else; add your CLI's resume flags here if you want one conversation across requests. |
 
 Varde reads `[walkthrough]` only from `~/.varde/config.toml`: a project file that sets it is ignored,

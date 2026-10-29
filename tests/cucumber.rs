@@ -9702,14 +9702,7 @@ fn modal_is(world: &mut VardeWorld, expected: String) {
         Modal::Branches { .. } => "branches",
         Modal::Skills { .. } => "skills",
         Modal::SkillQuestion { .. } => "skill-question",
-        Modal::Inquiry {
-            ask: varde::Ask::Story(_),
-            ..
-        } => "inquiry",
-        Modal::Inquiry { .. } => match world.state.walkthrough {
-            None => "walkthrough",
-            Some(_) => "adjust-walkthrough",
-        },
+        Modal::Inquiry { .. } => varde::asking(&world.state).expect("an Inquiry box"),
         Modal::Comment => "comment",
         Modal::NameBox { .. } => "name-box",
         Modal::StepDetail => "step-detail",
@@ -19011,7 +19004,9 @@ fn background_command_exits(world: &mut VardeWorld, status: i32) {
 
 #[then("no walkthrough request is in flight")]
 fn no_request_in_flight(world: &mut VardeWorld) {
-    assert_eq!(walkthrough_session(world).queue.running, None);
+    let running =
+        (world.state.walkthrough.as_ref()).and_then(|session| session.queue.running.clone());
+    assert_eq!(running, None);
 }
 
 #[then(expr = "the walkthrough spinner names {string} as running")]

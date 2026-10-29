@@ -131,6 +131,12 @@ Feature: Starting and adjusting a Walkthrough
       Then the notice is "walkthrough-command-failed"
       And no walkthrough request is in flight
 
+    Scenario: A failed first plan leaves no session, so :guide plans again
+      Given the walkthrough driver is "background"
+      And I submitted the walkthrough "add a plan parser"
+      When the background command exits with status 1
+      Then no walkthrough is active
+
     Scenario: A zero exit raises no notice
       Given the walkthrough driver is "background"
       And I submitted the walkthrough "add a plan parser"

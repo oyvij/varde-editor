@@ -1226,6 +1226,12 @@ pub enum FactValue {
 }
 
 #[derive(Default, serde::Deserialize)]
+struct Walkthrough {
+    #[serde(default)]
+    driver: walkthrough::Driver,
+}
+
+#[derive(Default, serde::Deserialize)]
 struct Ai {
     #[serde(default)]
     env: Vec<String>,
@@ -1242,6 +1248,8 @@ struct Knowledge {
 struct Layer {
     #[serde(default)]
     ai: Ai,
+    #[serde(default)]
+    walkthrough: Walkthrough,
     #[serde(default)]
     knowledge: Knowledge,
     #[serde(default)]
@@ -1646,9 +1654,7 @@ fn configure(state: &mut State, config: &Config) {
             .and_then(|cap| cap.parse().ok())
             .unwrap_or(risk::DEFAULT_MAX_ITERATIONS),
         test_command: config.get("risk.test_command"),
-        walkthrough_driver: walkthrough::Driver::named(
-            &config.get("walkthrough.driver").unwrap_or_default(),
-        ),
+        walkthrough_driver: config.layer().walkthrough.driver,
         walkthrough_command: config.get("walkthrough.command").unwrap_or_default(),
         servers: config.servers(),
         formatters: config.formatters(),
@@ -2686,6 +2692,14 @@ mod tests {
             chosen.get("walkthrough.command").as_deref(),
             Some("claude -p --continue")
         );
+        assert_eq!(
+            chosen.layer().walkthrough.driver,
+            crate::walkthrough::Driver::Background
+        );
+        let misspelt = merged_config(Some("[walkthrough]\n\ndriver = \"backgound\"\n"), None)
+            .expect_err("an unknown driver is refused");
+        assert_eq!((misspelt.file.as_str(), misspelt.line), (GLOBAL_LABEL, 3));
+        assert!(matches!(misspelt.fault, ConfigFault::WrongType(_)));
     }
 
     #[test]

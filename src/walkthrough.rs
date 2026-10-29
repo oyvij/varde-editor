@@ -69,20 +69,12 @@ pub struct Session {
     pub fixes: u8,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Driver {
     #[default]
     Pane,
     Background,
-}
-
-impl Driver {
-    pub fn named(name: &str) -> Driver {
-        match name {
-            "background" => Driver::Background,
-            _ => Driver::Pane,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -553,13 +545,6 @@ mod tests {
             "Follow the Skill in /s/SKILL.md for the workspace at /w. Action: plan. \
              Plan file: /w/p.json."
         );
-    }
-
-    #[test]
-    fn the_driver_is_the_pane_unless_background_is_named() {
-        assert_eq!(Driver::named("background"), Driver::Background);
-        assert_eq!(Driver::named("pane"), Driver::Pane);
-        assert_eq!(Driver::named("anything"), Driver::Pane);
     }
 
     #[test]

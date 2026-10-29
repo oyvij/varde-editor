@@ -4081,11 +4081,12 @@ fn inquiry_box(frame: &mut Frame, state: &State, text: &varde::editor::Buffer, a
             Block::default()
                 .borders(Borders::ALL)
                 .border_type(BorderType::Thick)
-                .title(match (ask, &state.walkthrough) {
-                    (varde::Ask::Story(_), _) => "INQUIRY",
-                    (varde::Ask::Walkthrough, None) => "WALKTHROUGH",
-                    (varde::Ask::Walkthrough, Some(_)) => "ADJUST WALKTHROUGH",
-                }),
+                .title(
+                    varde::asking(state)
+                        .unwrap_or_default()
+                        .replace('-', " ")
+                        .to_uppercase(),
+                ),
         ),
         box_area,
     );
@@ -5066,10 +5067,10 @@ mod tests {
         state.speech.speed = 1.25;
         let chips = varde::editor_chips(&state);
         for (width, drawn) in [
-            (40, " \u{25b6} \u{2500} \u{25ba} \u{2500} \u{ab} \u{2500} \u{bb} \u{2500} \u{25a0} \u{2500} 1.25x \u{2500}"),
+            (40, " \u{25c6} \u{2500} \u{25b6} \u{2500} \u{25ba} \u{2500} \u{ab} \u{2500} \u{bb} \u{2500} \u{25a0} \u{2500} 1.25x \u{2500}"),
             (
-                120,
-                " \u{25b6} AI Inject :inject \u{2500} \u{25ba} :pause \u{2500} \u{ab} :prev \u{2500} \u{bb} :next \u{2500} \u{25a0} :stop \u{2500} 1.25x :speed \u{2500}",
+                150,
+                " \u{25c6} AI Guide :guide \u{2500} \u{25b6} AI Inject :inject \u{2500} \u{25ba} :pause \u{2500} \u{ab} :prev \u{2500} \u{bb} :next \u{2500} \u{25a0} :stop \u{2500} 1.25x :speed \u{2500}",
             ),
         ] {
             let area = ratatui::layout::Rect::new(0, 0, width, 4);
@@ -5259,7 +5260,7 @@ mod tests {
             &state,
             "a-very-long-document-name-indeed-and-then-some-more-of-it.md",
         );
-        assert!(top.contains("indeed-and-then"), "the name gave: {top:?}");
+        assert!(top.contains("indeed-and-th"), "the name gave: {top:?}");
         assert!(!top.contains("Ada"), "{top:?}");
         assert!(top.ends_with(" 1.00x \u{2500}\u{256e}"), "{top:?}");
     }
@@ -5270,7 +5271,7 @@ mod tests {
         let mut state = State::default();
         state.current_buffer = Some(std::path::PathBuf::from("/w/guide.md"));
         state.speech.speed = 1.0;
-        let area = ratatui::layout::Rect::new(0, 0, 44, 4);
+        let area = ratatui::layout::Rect::new(0, 0, 48, 4);
         let mut buffer = ratatui::buffer::Buffer::empty(area);
         let name = "a-very-long-document-name-indeed.md";
         Block::default()
@@ -5279,16 +5280,16 @@ mod tests {
                 name,
                 &varde::editor::Buffer::open("x", false, 4),
                 "normal",
-                title_room(&state, 44),
+                title_room(&state, 48),
             ))
-            .title(right_title(&state, 0, 44))
+            .title(right_title(&state, 0, 48))
             .render(area, &mut buffer);
-        let top: String = (0..44)
+        let top: String = (0..48)
             .map(|column| buffer[(column, 0)].symbol().to_string())
             .collect();
         assert!(top.contains('\u{2026}'), "the name was not cut: {top:?}");
         assert!(top.ends_with(" 1.00x \u{2500}\u{2510}"), "{top:?}");
-        assert!(top.contains("[normal]\u{2500} \u{25b6}"), "{top:?}");
+        assert!(top.contains("[normal]\u{2500} \u{25c6}"), "{top:?}");
     }
 
     #[test]
