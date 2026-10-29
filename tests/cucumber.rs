@@ -19697,6 +19697,7 @@ fn no_tree_row_carries_colour(world: &mut VardeWorld) {
 #[then(expr = "Waypoint {string} is selected in the Waypoint list")]
 fn waypoint_is_now_selected(world: &mut VardeWorld, id: String) {
     assert_eq!(walkthrough::selected(&world.state), Some(id));
+}
 
 #[then(expr = "the footer verdict is {string}")]
 fn footer_verdict_is(world: &mut VardeWorld, expected: String) {
