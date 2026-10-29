@@ -12,14 +12,15 @@ use varde::lsp;
 use varde::minimap;
 use varde::tree::Row;
 use varde::{
-    filter, keys, mark, palette_rows, reading, review, story, tools, tree, wait, FilterKeys, Mark,
-    Modal, Pane, Place, Selection, State, View,
+    filter, keys, mark, palette_rows, reading, review, story, tools, tree, wait, walkthrough,
+    FilterKeys, Mark, Modal, Pane, Place, Selection, State, View,
 };
 
 const DIRTY: Color = Color::LightYellow;
 
 const WARNING: Color = Color::Indexed(208);
 const READING: Color = Color::Cyan;
+const WALKTHROUGH: Color = Color::Magenta;
 const FAINT: Style = Style::new().fg(Color::Reset).add_modifier(Modifier::DIM);
 const FAINT_INK: u16 = 12;
 
@@ -223,6 +224,10 @@ pub fn draw(
             layout::Corner::Conflicts => {
                 frame.render_widget(conflicts_widget(state, areas.corner.width), areas.corner)
             }
+            layout::Corner::Waypoints => frame.render_widget(
+                waypoints_widget(state, areas.corner.width, areas.corner.height),
+                areas.corner,
+            ),
         }
     }
     let caret_is_free = state.modal == Modal::None && typing.is_none() && !finding;
@@ -1072,6 +1077,82 @@ fn conflicts_lines(state: &State, width: u16) -> Vec<Line<'static>> {
         .collect()
 }
 
+fn waypoints_widget(state: &State, width: u16, height: u16) -> Paragraph<'static> {
+    let inner = width.saturating_sub(2) as usize;
+    let selected = state
+        .walkthrough
+        .as_ref()
+        .map_or(0, |session| session.selected);
+    let texts: Vec<(String, String)> = state
+        .walkthrough
+        .iter()
+        .flat_map(|session| session.plan.iter())
+        .flat_map(|plan| plan.waypoints.iter())
+        .map(|waypoint| (waypoint.id.clone(), waypoint.text.clone()))
+        .collect();
+    let mut index = 0;
+    let mut selected_row = 0;
+    let lines: Vec<Line<'static>> = walkthrough::listed(state)
+        .into_iter()
+        .enumerate()
+        .map(|(row, listed)| match listed {
+            walkthrough::Listed::File(file) => Line::from(Span::styled(
+                truncate(
+                    &format!(
+                        " {}",
+                        file.replace(|character: char| character.is_control(), "")
+                    ),
+                    inner,
+                ),
+                Style::default()
+                    .fg(WALKTHROUGH)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            walkthrough::Listed::Waypoint { id, mark, ai, lit } => {
+                let chosen = index == selected && state.focus == Pane::Waypoints;
+                if index == selected {
+                    selected_row = row;
+                }
+                index += 1;
+                let (glyph, colour) = match mark {
+                    walkthrough::Mark::Lgtm => ("✓", Color::Green),
+                    walkthrough::Mark::Open => ("○", Color::DarkGray),
+                    walkthrough::Mark::Failing => ("✗", Color::Red),
+                    walkthrough::Mark::Context => ("i", Color::Blue),
+                    walkthrough::Mark::New => ("+", Color::Yellow),
+                };
+                let text = texts
+                    .iter()
+                    .find(|(held, _)| *held == id)
+                    .map_or(String::new(), |(_, text)| {
+                        text.replace(|character: char| character.is_control(), " ")
+                    });
+                let label = match ai {
+                    true => format!("{} AI", mark.slug()),
+                    false => mark.slug().to_string(),
+                };
+                let mut style = match lit {
+                    true => Style::default().fg(READING).add_modifier(Modifier::BOLD),
+                    false => Style::default(),
+                };
+                if chosen {
+                    style = style.add_modifier(Modifier::REVERSED);
+                }
+                let room = inner.saturating_sub(label.chars().count() + 6);
+                Line::from(vec![
+                    Span::styled(format!("  {glyph} "), style.fg(colour)),
+                    Span::styled(format!("{:<room$}", truncate(&text, room)), style),
+                    Span::styled(format!(" {label}"), style.fg(colour)),
+                ])
+            }
+        })
+        .collect();
+    let scroll = (selected_row + 1).saturating_sub(height.saturating_sub(2) as usize);
+    Paragraph::new(lines)
+        .scroll((scroll as u16, 0))
+        .block(pane_block("waypoints", state, Pane::Waypoints))
+}
+
 fn severity_labels(frame: &mut Frame, state: &State, showing: lsp::Severity, corner: Area) {
     let labels = varde::lsp::severity_labels(state, corner.width);
     let Some(mut x) = corner
@@ -1277,7 +1358,9 @@ fn tree_lines(state: &State, rows: &[Row], width: u16) -> Vec<Line<'static>> {
                 .unwrap_or_default();
             let (icon, kind) = varde::tree::icon(&name, row.is_dir, row.expanded);
             let (glyph, mark_colour) = glyph(mark(state, &row.path));
-            let mut style = if row.dimmed {
+            let mut style = if walkthrough::coloured(state, &row.path) {
+                Style::default().fg(WALKTHROUGH)
+            } else if row.dimmed {
                 Style::default().fg(Color::DarkGray)
             } else {
                 Style::default()

@@ -2351,6 +2351,7 @@ fn grid_lines(edge: &Edge, pane: Pane, split: usize, upto: usize) -> Option<Vec<
         | Pane::Frames
         | Pane::Diagnostics
         | Pane::Conflicts
+        | Pane::Waypoints
         | Pane::Variables
         | Pane::Cheatsheet => return None,
     };
@@ -2450,6 +2451,7 @@ fn perform_terminal(effect: Effect, split: usize, edge: &mut Edge) -> Option<Eff
             | Pane::Frames
             | Pane::Diagnostics
             | Pane::Conflicts
+            | Pane::Waypoints
             | Pane::Variables
             | Pane::Cheatsheet => {}
         },

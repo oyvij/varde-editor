@@ -410,6 +410,7 @@ impl VardeWorld {
             | Pane::Frames
             | Pane::Diagnostics
             | Pane::Conflicts
+            | Pane::Waypoints
             | Pane::Variables
             | Pane::Output
             | Pane::Cheatsheet
@@ -2739,7 +2740,8 @@ fn pointer_at(
         | Pane::Breakpoints
         | Pane::Frames
         | Pane::Diagnostics
-        | Pane::Conflicts => (panes.corner, 0, 0),
+        | Pane::Conflicts
+        | Pane::Waypoints => (panes.corner, 0, 0),
         Pane::Terminal | Pane::Variables => (panes.terminal, 0, 0),
         Pane::Evaluator => (panes.evaluator, 0, 0),
     };
@@ -6497,7 +6499,8 @@ fn drag_past(world: &mut VardeWorld, side: String, pane: String) {
         | Pane::Breakpoints
         | Pane::Frames
         | Pane::Diagnostics
-        | Pane::Conflicts => world.panes().corner,
+        | Pane::Conflicts
+        | Pane::Waypoints => world.panes().corner,
         Pane::Evaluator => world.panes().evaluator,
     };
     let (at_column, at_row) = world.pointer.drag_from.expect("a button is down");
@@ -19562,4 +19565,124 @@ fn links_to_folder(world: &mut VardeWorld, link: String, folder: String) {
 fn varde_restarts(world: &mut VardeWorld) {
     world.startup.walkthrough_json = world.files.get(&walkthrough_file(world)).cloned();
     starts_again_in_same_folder(world);
+}
+
+#[then("the Corner holds the Waypoint list")]
+fn corner_holds_waypoint_list(world: &mut VardeWorld) {
+    assert_eq!(world.state.corner, layout::Corner::Waypoints);
+}
+
+#[then("the Corner does not hold the Waypoint list")]
+fn corner_does_not_hold_waypoint_list(world: &mut VardeWorld) {
+    assert_ne!(world.state.corner, layout::Corner::Waypoints);
+}
+
+#[then("the Waypoint list shows, in order:")]
+fn waypoint_list_shows(world: &mut VardeWorld, step: &Step) {
+    let expected: Vec<(String, String)> = step
+        .table()
+        .expect("table")
+        .rows
+        .iter()
+        .skip(1)
+        .map(|row| (row[0].trim().to_string(), row[1].trim().to_string()))
+        .collect();
+    let listed: Vec<(String, String)> = walkthrough::listed(&world.state)
+        .into_iter()
+        .map(|row| match row {
+            walkthrough::Listed::File(file) => (file, String::new()),
+            walkthrough::Listed::Waypoint { id, .. } => (String::new(), id),
+        })
+        .collect();
+    assert_eq!(listed, expected);
+}
+
+fn listed_waypoint(world: &VardeWorld, wanted: &str) -> (walkthrough::Mark, bool, bool) {
+    walkthrough::listed(&world.state)
+        .into_iter()
+        .find_map(|row| match row {
+            walkthrough::Listed::Waypoint { id, mark, ai, lit } if id == wanted => {
+                Some((mark, ai, lit))
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("Waypoint {wanted} is not in the Waypoint list"))
+}
+
+fn waypoint_marked(world: &VardeWorld, id: &str, named: &str) -> bool {
+    let (mark, ai, _) = listed_waypoint(world, id);
+    match named {
+        "ai" => ai,
+        named => mark.slug() == named,
+    }
+}
+
+#[then(expr = "Waypoint {string} is marked {string} in the Waypoint list")]
+fn waypoint_is_marked(world: &mut VardeWorld, id: String, mark: String) {
+    assert!(waypoint_marked(world, &id, &mark));
+}
+
+#[then(expr = "Waypoint {string} is not marked {string} in the Waypoint list")]
+fn waypoint_is_not_marked(world: &mut VardeWorld, id: String, mark: String) {
+    assert!(!waypoint_marked(world, &id, &mark));
+}
+
+#[given(expr = "Waypoint {string} is lit in the Waypoint list")]
+#[then(expr = "Waypoint {string} is lit in the Waypoint list")]
+fn waypoint_is_lit(world: &mut VardeWorld, id: String) {
+    assert!(listed_waypoint(world, &id).2);
+}
+
+#[then(expr = "Waypoint {string} is not lit in the Waypoint list")]
+fn waypoint_is_not_lit(world: &mut VardeWorld, id: String) {
+    assert!(!listed_waypoint(world, &id).2);
+}
+
+#[given("the Waypoint list has focus")]
+fn waypoint_list_has_focus(world: &mut VardeWorld) {
+    world.state.focus = Pane::Waypoints;
+}
+
+#[given(expr = "Waypoint {string} is selected in the Waypoint list")]
+fn waypoint_is_selected(world: &mut VardeWorld, wanted: String) {
+    let at = walkthrough::listed_ids(&world.state)
+        .iter()
+        .position(|id| *id == wanted)
+        .expect("listed");
+    let moves = at.abs_diff(walkthrough_session(world).selected);
+    let direction = match at < walkthrough_session(world).selected {
+        true => Direction::Up,
+        false => Direction::Down,
+    };
+    for _ in 0..moves {
+        world.send(Event::MoveSelection(direction));
+    }
+    assert_eq!(walkthrough_session(world).selected, at);
+}
+
+#[then(expr = "the tree row {string} carries the walkthrough colour")]
+fn tree_row_carries_colour(world: &mut VardeWorld, path: String) {
+    assert!(walkthrough::coloured(&world.state, &abs(world, &path)));
+}
+
+#[then(expr = "the tree row {string} does not carry the walkthrough colour")]
+fn tree_row_does_not_carry_colour(world: &mut VardeWorld, path: String) {
+    assert!(!walkthrough::coloured(&world.state, &abs(world, &path)));
+}
+
+#[then("no tree row carries the walkthrough colour")]
+fn no_tree_row_carries_colour(world: &mut VardeWorld) {
+    let mut paths: Vec<PathBuf> = tree::visible_rows(&world.state)
+        .into_iter()
+        .map(|row| row.path)
+        .collect();
+    paths.extend(world.known_files.iter().cloned());
+    assert!(!paths.is_empty());
+    for path in paths {
+        assert!(
+            !walkthrough::coloured(&world.state, &path),
+            "{}",
+            path.display()
+        );
+    }
 }

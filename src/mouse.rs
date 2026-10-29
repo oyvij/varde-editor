@@ -804,6 +804,7 @@ fn dragged(
         | Pane::Frames
         | Pane::Diagnostics
         | Pane::Conflicts
+        | Pane::Waypoints
         | Pane::Variables
         | Pane::Cheatsheet => Outcome::default(),
         Pane::Evaluator => {
@@ -1082,6 +1083,7 @@ fn place_in(state: &State, panes: &Layout, pane: Pane, (column, row): (u16, u16)
         | Pane::Frames
         | Pane::Diagnostics
         | Pane::Conflicts
+        | Pane::Waypoints
         | Pane::Variables
         | Pane::Cheatsheet => (0, 0),
     };
@@ -1122,7 +1124,8 @@ fn text_area(state: &State, panes: &Layout, pane: Pane) -> Area {
         | Pane::Breakpoints
         | Pane::Frames
         | Pane::Diagnostics
-        | Pane::Conflicts => interior(panes.corner),
+        | Pane::Conflicts
+        | Pane::Waypoints => interior(panes.corner),
         Pane::Variables => interior(panes.terminal),
         Pane::Output => interior(panes.output),
         Pane::Evaluator => crate::layout::evaluator_split(panes.evaluator, snippet_rows(state)).0,

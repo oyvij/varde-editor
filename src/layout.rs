@@ -103,6 +103,7 @@ pub enum Corner {
     Frames,
     Diagnostics(crate::lsp::Severity),
     Conflicts,
+    Waypoints,
 }
 
 impl Corner {
@@ -116,6 +117,7 @@ impl Corner {
             Corner::Frames => Some(Pane::Frames),
             Corner::Diagnostics(_) => Some(Pane::Diagnostics),
             Corner::Conflicts => Some(Pane::Conflicts),
+            Corner::Waypoints => Some(Pane::Waypoints),
         }
     }
 }

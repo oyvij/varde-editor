@@ -919,6 +919,7 @@ fn child_owns_keys(state: &State, drafts: &Drafts) -> bool {
             | Pane::Frames
             | Pane::Diagnostics
             | Pane::Conflicts
+            | Pane::Waypoints
             | Pane::Variables
             | Pane::Cheatsheet => false,
         }
@@ -1550,6 +1551,7 @@ fn claims_colon(state: &State) -> bool {
         | Pane::Frames
         | Pane::Diagnostics
         | Pane::Conflicts
+        | Pane::Waypoints
         | Pane::Variables
         | Pane::Cheatsheet => true,
         Pane::Ai | Pane::Terminal | Pane::Output => false,
@@ -1577,6 +1579,7 @@ fn arrow_event(state: &State, event: KeyEvent, alt: bool, shift: bool) -> Option
             | Pane::Frames
             | Pane::Diagnostics
             | Pane::Conflicts
+            | Pane::Waypoints
             | Pane::Variables,
             false,
         ) => list_arrow(direction),
@@ -1585,6 +1588,7 @@ fn arrow_event(state: &State, event: KeyEvent, alt: bool, shift: bool) -> Option
             | Pane::Frames
             | Pane::Diagnostics
             | Pane::Conflicts
+            | Pane::Waypoints
             | Pane::Variables,
             true,
         ) => vec![],
@@ -1630,6 +1634,7 @@ fn pane_key(state: &State, event: KeyEvent) -> Vec<Event> {
         | Pane::Frames
         | Pane::Diagnostics
         | Pane::Conflicts
+        | Pane::Waypoints
         | Pane::Variables => list_pane_key(event),
         Pane::Cheatsheet => {
             let (direction, rows) = match (event.code, typed(event)) {

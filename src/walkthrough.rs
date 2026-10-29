@@ -72,6 +72,7 @@ pub struct Session {
     pub missing: BTreeSet<String>,
     pub opening: Option<String>,
     pub box_focus: Option<usize>,
+    pub selected: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
@@ -257,6 +258,106 @@ pub fn context_box(state: &crate::State) -> Option<ContextBox> {
             .and_then(|session| session.box_focus)
             .unwrap_or(0),
         rows,
+    })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mark {
+    Lgtm,
+    Open,
+    Failing,
+    Context,
+    New,
+}
+
+impl Mark {
+    pub fn slug(self) -> &'static str {
+        match self {
+            Mark::Lgtm => "lgtm",
+            Mark::Open => "open",
+            Mark::Failing => "failing",
+            Mark::Context => "context",
+            Mark::New => "new",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Listed {
+    File(String),
+    Waypoint {
+        id: String,
+        mark: Mark,
+        ai: bool,
+        lit: bool,
+    },
+}
+
+fn mark(waypoint: &Waypoint, missing: &BTreeSet<String>) -> Mark {
+    match (waypoint.kind, &waypoint.verdict) {
+        (Kind::Context, _) => Mark::Context,
+        _ if missing.contains(&waypoint.file) => Mark::New,
+        (Kind::Code, Some(Verdict::Lgtm)) => Mark::Lgtm,
+        (Kind::Code, Some(Verdict::Failing { .. })) => Mark::Failing,
+        (Kind::Code, None) => Mark::Open,
+    }
+}
+
+pub fn listed(state: &crate::State) -> Vec<Listed> {
+    let Some(Session {
+        plan: Some(plan),
+        current,
+        missing,
+        ..
+    }) = &state.walkthrough
+    else {
+        return Vec::new();
+    };
+    let mut files: Vec<&str> = Vec::new();
+    for waypoint in &plan.waypoints {
+        if !files.contains(&waypoint.file.as_str()) {
+            files.push(&waypoint.file);
+        }
+    }
+    files
+        .into_iter()
+        .flat_map(|file| {
+            let nested = plan
+                .waypoints
+                .iter()
+                .filter(move |waypoint| waypoint.file == file)
+                .map(|waypoint| Listed::Waypoint {
+                    id: waypoint.id.clone(),
+                    mark: mark(waypoint, missing),
+                    ai: waypoint.ai,
+                    lit: current.as_deref() == Some(waypoint.id.as_str()),
+                });
+            std::iter::once(Listed::File(file.to_string())).chain(nested)
+        })
+        .collect()
+}
+
+pub fn listed_ids(state: &crate::State) -> Vec<String> {
+    listed(state)
+        .into_iter()
+        .filter_map(|row| match row {
+            Listed::Waypoint { id, .. } => Some(id),
+            Listed::File(_) => None,
+        })
+        .collect()
+}
+
+pub fn coloured(state: &crate::State, path: &Path) -> bool {
+    let Some(Session {
+        plan: Some(plan),
+        missing,
+        ..
+    }) = &state.walkthrough
+    else {
+        return false;
+    };
+    plan.waypoints.iter().any(|waypoint| {
+        !missing.contains(&waypoint.file) && state.root.join(&waypoint.file) == path
     })
 }
 
@@ -777,6 +878,36 @@ mod tests {
         assert_eq!(followed(old, "a\nc\nd\ne"), [2, 3, 2]);
         assert_eq!(followed(old, "a\nb\nc\nd"), [2, 4, 2]);
         assert_eq!(followed(old, "a\nb\nc"), [2, 3, 2]);
+    }
+
+    #[test]
+    fn a_waypoint_is_marked_by_its_kind_then_its_file_then_its_verdict() {
+        let parsed = parse(
+            r#"{"version": 1, "status": "active", "checkpoint": null, "waypoints": [
+              {"id": "w1", "file": "new.rs", "line": 1, "kind": "context", "text": "Why", "verdict": null, "ai": false},
+              {"id": "w2", "file": "new.rs", "line": 1, "kind": "code", "text": "Do", "verdict": {"state": "lgtm"}, "ai": false},
+              {"id": "w3", "file": "a.rs", "line": 1, "kind": "code", "text": "Do", "verdict": {"state": "failing", "message": "No"}, "ai": false},
+              {"id": "w4", "file": "a.rs", "line": 1, "kind": "code", "text": "Do", "verdict": {"state": "lgtm"}, "ai": true},
+              {"id": "w5", "file": "a.rs", "line": 1, "kind": "code", "text": "Do", "verdict": null, "ai": false}
+            ]}"#,
+        )
+        .expect("a plan");
+        let missing = BTreeSet::from(["new.rs".to_string()]);
+        let marks: Vec<Mark> = parsed
+            .waypoints
+            .iter()
+            .map(|waypoint| mark(waypoint, &missing))
+            .collect();
+        assert_eq!(
+            marks,
+            [
+                Mark::Context,
+                Mark::New,
+                Mark::Failing,
+                Mark::Lgtm,
+                Mark::Open
+            ]
+        );
     }
 
     #[test]

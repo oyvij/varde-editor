@@ -71,6 +71,7 @@ pub enum Pane {
     Output,
     Diagnostics,
     Conflicts,
+    Waypoints,
     Evaluator,
     Cheatsheet,
 }
@@ -3058,8 +3059,10 @@ fn on_key_3(state: &State, next: State, event: Event, _wheeled: bool) -> Answere
         }
 
         Event::Key(key @ ('j' | 'k'))
-            if matches!(state.focus, Pane::Frames | Pane::Conflicts)
-                && state.modal == Modal::None =>
+            if matches!(
+                state.focus,
+                Pane::Frames | Pane::Conflicts | Pane::Waypoints
+            ) && state.modal == Modal::None =>
         {
             Ok(match key {
                 'j' => update(state, Event::MoveSelection(Direction::Down)),
@@ -3454,6 +3457,7 @@ fn on_submit_review(state: &State, mut next: State, event: Event, wheeled: bool)
             | Pane::Frames
             | Pane::Diagnostics
             | Pane::Conflicts
+            | Pane::Waypoints
             | Pane::Variables
             | Pane::Cheatsheet => vec![],
         },
@@ -3621,6 +3625,7 @@ fn on_scroll(state: &State, mut next: State, event: Event, wheeled: bool) -> Ans
                     | Pane::Frames
                     | Pane::Diagnostics
                     | Pane::Conflicts
+                    | Pane::Waypoints
                     | Pane::Variables
                     | Pane::Cheatsheet => {
                         vec![]
@@ -3723,7 +3728,7 @@ fn on_scroll(state: &State, mut next: State, event: Event, wheeled: bool) -> Ans
                     );
                     vec![]
                 }
-                Pane::Evaluator => vec![],
+                Pane::Evaluator | Pane::Waypoints => vec![],
                 Pane::Cheatsheet => {
                     next.cheatsheet_scroll = match direction {
                         Direction::Up => state.cheatsheet_scroll.saturating_sub(WHEEL_ROWS),
@@ -6456,6 +6461,9 @@ fn on_walkthrough(state: &State, mut next: State, event: Event, wheeled: bool) -
                         .into_iter()
                         .filter(|file| !lines.contains_key(file))
                         .collect();
+                    if session.plan.is_none() {
+                        next.corner = layout::Corner::Waypoints;
+                    }
                     if let Some(held) = &mut next.walkthrough {
                         held.plan = Some(plan);
                         held.failure = None;
@@ -6522,6 +6530,29 @@ fn on_walkthrough(state: &State, mut next: State, event: Event, wheeled: bool) -
             vec![]
         }
         (Event::StepWaypoint(_) | Event::ScrollContextBox(_), _) => vec![],
+        (Event::MoveSelection(direction), Some(session)) if state.focus == Pane::Waypoints => {
+            let last = walkthrough::listed_ids(state).len().saturating_sub(1);
+            if let Some(held) = &mut next.walkthrough {
+                held.selected = match direction {
+                    Direction::Down => (session.selected + 1).min(last),
+                    Direction::Up => session.selected.saturating_sub(1),
+                    _ => session.selected.min(last),
+                };
+            }
+            vec![]
+        }
+        (Event::Activate, Some(session)) if state.focus == Pane::Waypoints => {
+            match walkthrough::listed_ids(state).get(session.selected) {
+                Some(id) => land(&mut next, id),
+                None => vec![],
+            }
+        }
+        (Event::FileActivity(path), Some(_)) => {
+            if let Some(session) = &mut next.walkthrough {
+                session.missing.remove(&relative(&next.root, &path));
+            }
+            return Err((next, Event::FileActivity(path)));
+        }
         (Event::WriteResolved { path, folder, root }, _) => {
             match (folder.starts_with(&root), next.buffers.get_mut(&path)) {
                 (false, _) => vec![Effect::Notify("outside-workspace")],
@@ -7567,6 +7598,7 @@ fn on_bytes(state: &State, next: State, event: Event, wheeled: bool) -> Answered
             | Pane::Frames
             | Pane::Diagnostics
             | Pane::Conflicts
+            | Pane::Waypoints
             | Pane::Variables
             | Pane::Cheatsheet => vec![],
         },
@@ -7595,6 +7627,7 @@ fn on_pasted(state: &State, mut next: State, event: Event, wheeled: bool) -> Ans
                 | Pane::Frames
                 | Pane::Diagnostics
                 | Pane::Conflicts
+                | Pane::Waypoints
                 | Pane::Variables
                 | Pane::Cheatsheet => None,
             };
@@ -8363,6 +8396,7 @@ fn selected_row_actions(state: &State) -> Vec<&'static str> {
         | Pane::Output
         | Pane::Diagnostics
         | Pane::Conflicts
+        | Pane::Waypoints
         | Pane::Evaluator
         | Pane::Cheatsheet => Vec::new(),
     }
@@ -8383,6 +8417,7 @@ fn mouse_encoding(state: &State, pane: Pane) -> mouse::Encoding {
         | Pane::Frames
         | Pane::Diagnostics
         | Pane::Conflicts
+        | Pane::Waypoints
         | Pane::Variables
         | Pane::Cheatsheet => mouse::Encoding::None,
     }
