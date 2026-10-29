@@ -73,6 +73,7 @@ pub struct Session {
     pub opening: Option<String>,
     pub box_focus: Option<usize>,
     pub selected: usize,
+    pub scroll: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
@@ -287,6 +288,7 @@ pub enum Listed {
     File(String),
     Waypoint {
         id: String,
+        text: String,
         mark: Mark,
         ai: bool,
         lit: bool,
@@ -328,6 +330,7 @@ pub fn listed(state: &crate::State) -> Vec<Listed> {
                 .filter(move |waypoint| waypoint.file == file)
                 .map(|waypoint| Listed::Waypoint {
                     id: waypoint.id.clone(),
+                    text: waypoint.text.clone(),
                     mark: mark(waypoint, missing),
                     ai: waypoint.ai,
                     lit: current.as_deref() == Some(waypoint.id.as_str()),
@@ -345,6 +348,11 @@ pub fn listed_ids(state: &crate::State) -> Vec<String> {
             Listed::File(_) => None,
         })
         .collect()
+}
+
+pub fn selected(state: &crate::State) -> Option<String> {
+    let at = state.walkthrough.as_ref()?.selected;
+    listed_ids(state).into_iter().nth(at)
 }
 
 pub fn coloured(state: &crate::State, path: &Path) -> bool {

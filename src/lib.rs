@@ -1662,6 +1662,21 @@ fn settle(mut next: State, mut effects: Vec<Effect>, wheeled: bool) -> (State, V
             diagnostic_rows,
             corner_rows(&next),
         );
+        let waypoint_rows = walkthrough::listed(&next);
+        let waypoint_fits = corner_rows(&next);
+        if let Some(session) = &mut next.walkthrough {
+            let waypoints: Vec<usize> = (waypoint_rows.iter().enumerate())
+                .filter(|(_, row)| matches!(row, walkthrough::Listed::Waypoint { .. }))
+                .map(|(at, _)| at)
+                .collect();
+            session.selected = session.selected.min(waypoints.len().saturating_sub(1));
+            session.scroll = layout::viewport(
+                session.scroll,
+                waypoints.get(session.selected).copied().unwrap_or(0),
+                waypoint_rows.len(),
+                waypoint_fits,
+            );
+        }
         let conflict_rows = conflict::listed(&next).len();
         next.conflicts_selection = next
             .conflicts_selection
@@ -6531,19 +6546,18 @@ fn on_walkthrough(state: &State, mut next: State, event: Event, wheeled: bool) -
         }
         (Event::StepWaypoint(_) | Event::ScrollContextBox(_), _) => vec![],
         (Event::MoveSelection(direction), Some(session)) if state.focus == Pane::Waypoints => {
-            let last = walkthrough::listed_ids(state).len().saturating_sub(1);
             if let Some(held) = &mut next.walkthrough {
                 held.selected = match direction {
-                    Direction::Down => (session.selected + 1).min(last),
+                    Direction::Down => session.selected + 1,
                     Direction::Up => session.selected.saturating_sub(1),
-                    _ => session.selected.min(last),
+                    Direction::Left | Direction::Right => session.selected,
                 };
             }
             vec![]
         }
-        (Event::Activate, Some(session)) if state.focus == Pane::Waypoints => {
-            match walkthrough::listed_ids(state).get(session.selected) {
-                Some(id) => land(&mut next, id),
+        (Event::Activate, Some(_)) if state.focus == Pane::Waypoints => {
+            match walkthrough::selected(state) {
+                Some(id) => land(&mut next, &id),
                 None => vec![],
             }
         }
@@ -6590,6 +6604,12 @@ fn land(next: &mut State, id: &str) -> Vec<Effect> {
     session.box_focus = (waypoint.kind == walkthrough::Kind::Context).then_some(0);
     session.opening = None;
     let missing = session.missing.contains(&waypoint.file);
+    let selected = walkthrough::listed_ids(next)
+        .iter()
+        .position(|listed| *listed == waypoint.id);
+    if let (Some(session), Some(at)) = (next.walkthrough.as_mut(), selected) {
+        session.selected = at;
+    }
     let mut effects = vec![];
     if next.view != View::Edit {
         move_to_view(next, View::Edit);

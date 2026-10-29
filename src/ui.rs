@@ -224,10 +224,9 @@ pub fn draw(
             layout::Corner::Conflicts => {
                 frame.render_widget(conflicts_widget(state, areas.corner.width), areas.corner)
             }
-            layout::Corner::Waypoints => frame.render_widget(
-                waypoints_widget(state, areas.corner.width, areas.corner.height),
-                areas.corner,
-            ),
+            layout::Corner::Waypoints => {
+                frame.render_widget(waypoints_widget(state, areas.corner.width), areas.corner)
+            }
         }
     }
     let caret_is_free = state.modal == Modal::None && typing.is_none() && !finding;
@@ -1077,25 +1076,16 @@ fn conflicts_lines(state: &State, width: u16) -> Vec<Line<'static>> {
         .collect()
 }
 
-fn waypoints_widget(state: &State, width: u16, height: u16) -> Paragraph<'static> {
+fn waypoints_widget(state: &State, width: u16) -> Paragraph<'static> {
     let inner = width.saturating_sub(2) as usize;
-    let selected = state
+    let selected = walkthrough::selected(state).filter(|_| state.focus == Pane::Waypoints);
+    let scroll = state
         .walkthrough
         .as_ref()
-        .map_or(0, |session| session.selected);
-    let texts: Vec<(String, String)> = state
-        .walkthrough
-        .iter()
-        .flat_map(|session| session.plan.iter())
-        .flat_map(|plan| plan.waypoints.iter())
-        .map(|waypoint| (waypoint.id.clone(), waypoint.text.clone()))
-        .collect();
-    let mut index = 0;
-    let mut selected_row = 0;
+        .map_or(0, |session| session.scroll);
     let lines: Vec<Line<'static>> = walkthrough::listed(state)
         .into_iter()
-        .enumerate()
-        .map(|(row, listed)| match listed {
+        .map(|listed| match listed {
             walkthrough::Listed::File(file) => Line::from(Span::styled(
                 truncate(
                     &format!(
@@ -1108,12 +1098,13 @@ fn waypoints_widget(state: &State, width: u16, height: u16) -> Paragraph<'static
                     .fg(WALKTHROUGH)
                     .add_modifier(Modifier::BOLD),
             )),
-            walkthrough::Listed::Waypoint { id, mark, ai, lit } => {
-                let chosen = index == selected && state.focus == Pane::Waypoints;
-                if index == selected {
-                    selected_row = row;
-                }
-                index += 1;
+            walkthrough::Listed::Waypoint {
+                id,
+                text,
+                mark,
+                ai,
+                lit,
+            } => {
                 let (glyph, colour) = match mark {
                     walkthrough::Mark::Lgtm => ("✓", Color::Green),
                     walkthrough::Mark::Open => ("○", Color::DarkGray),
@@ -1121,12 +1112,7 @@ fn waypoints_widget(state: &State, width: u16, height: u16) -> Paragraph<'static
                     walkthrough::Mark::Context => ("i", Color::Blue),
                     walkthrough::Mark::New => ("+", Color::Yellow),
                 };
-                let text = texts
-                    .iter()
-                    .find(|(held, _)| *held == id)
-                    .map_or(String::new(), |(_, text)| {
-                        text.replace(|character: char| character.is_control(), " ")
-                    });
+                let text = text.replace(|character: char| character.is_control(), " ");
                 let label = match ai {
                     true => format!("{} AI", mark.slug()),
                     false => mark.slug().to_string(),
@@ -1135,7 +1121,7 @@ fn waypoints_widget(state: &State, width: u16, height: u16) -> Paragraph<'static
                     true => Style::default().fg(READING).add_modifier(Modifier::BOLD),
                     false => Style::default(),
                 };
-                if chosen {
+                if selected.as_deref() == Some(id.as_str()) {
                     style = style.add_modifier(Modifier::REVERSED);
                 }
                 let room = inner.saturating_sub(label.chars().count() + 6);
@@ -1147,7 +1133,6 @@ fn waypoints_widget(state: &State, width: u16, height: u16) -> Paragraph<'static
             }
         })
         .collect();
-    let scroll = (selected_row + 1).saturating_sub(height.saturating_sub(2) as usize);
     Paragraph::new(lines)
         .scroll((scroll as u16, 0))
         .block(pane_block("waypoints", state, Pane::Waypoints))

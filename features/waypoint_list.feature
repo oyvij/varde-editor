@@ -77,6 +77,7 @@ Feature: The Waypoint list and the Walkthrough's files in the tree
       When I press "]"
       Then Waypoint "w2" is lit in the Waypoint list
       And Waypoint "w1" is not lit in the Waypoint list
+      And Waypoint "w2" is selected in the Waypoint list
 
     Scenario: Enter on a Waypoint lands on its line
       Given the Waypoint list has focus

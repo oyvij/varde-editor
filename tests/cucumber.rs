@@ -19601,9 +19601,9 @@ fn listed_waypoint(world: &VardeWorld, wanted: &str) -> (walkthrough::Mark, bool
     walkthrough::listed(&world.state)
         .into_iter()
         .find_map(|row| match row {
-            walkthrough::Listed::Waypoint { id, mark, ai, lit } if id == wanted => {
-                Some((mark, ai, lit))
-            }
+            walkthrough::Listed::Waypoint {
+                id, mark, ai, lit, ..
+            } if id == wanted => Some((mark, ai, lit)),
             _ => None,
         })
         .unwrap_or_else(|| panic!("Waypoint {wanted} is not in the Waypoint list"))
@@ -19685,4 +19685,9 @@ fn no_tree_row_carries_colour(world: &mut VardeWorld) {
             path.display()
         );
     }
+}
+
+#[then(expr = "Waypoint {string} is selected in the Waypoint list")]
+fn waypoint_is_now_selected(world: &mut VardeWorld, id: String) {
+    assert_eq!(walkthrough::selected(&world.state), Some(id));
 }
