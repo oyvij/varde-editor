@@ -40,6 +40,8 @@ pub enum Tone {
     Hint,
     Notice,
     Warning,
+    Failing,
+    Lgtm,
 }
 
 pub struct Chrome<'a> {
@@ -254,6 +256,15 @@ pub fn draw(
             Rect::new(x, y, 1, 1),
         );
     }
+    if let Some((x, y)) = varde::walkthrough::write_chip(state, &areas.panes) {
+        frame.render_widget(
+            Paragraph::new(Span::styled(
+                varde::walkthrough::AI_WRITE,
+                Style::default().add_modifier(Modifier::REVERSED),
+            )),
+            Rect::new(x, y, varde::walkthrough::AI_WRITE.width() as u16, 1),
+        );
+    }
 
     hover(frame, state, &areas.panes);
     context_box(frame, state, &areas.panes);
@@ -388,6 +399,8 @@ fn status_line(
         Tone::Hint => Color::DarkGray,
         Tone::Notice => Color::Yellow,
         Tone::Warning => WARNING,
+        Tone::Failing => Color::Red,
+        Tone::Lgtm => Color::Green,
     });
     let Some(tag) = forms.into_iter().find(|tag| 2 * (tag.width() + 1) <= width) else {
         return Line::from(Span::styled(truncate(status, width), tone));

@@ -588,6 +588,7 @@ struct Edge {
     candidates_due: Option<Instant>,
     signature_due: Option<Instant>,
     hover_due: Option<Instant>,
+    notice_due: Option<Instant>,
     hand: bool,
     analysed: Sender<(u64, Figures, Option<Figures>)>,
     tested: Sender<(bool, String)>,
@@ -731,6 +732,7 @@ fn run(
         candidates_due: None,
         signature_due: None,
         hover_due: None,
+        notice_due: None,
         hand: false,
         servers: BTreeMap::new(),
         adapter: None,
@@ -1010,6 +1012,11 @@ fn queue_due_windows(edge: &mut Edge, queue: &mut VecDeque<Event>) -> bool {
     if edge.hover_due.is_some_and(|due| now >= due) {
         edge.hover_due = None;
         queue.push_back(Event::HoverDue);
+        fired = true;
+    }
+    if edge.notice_due.is_some_and(|due| now >= due) {
+        edge.notice_due = None;
+        edge.status.text.clear();
         fired = true;
     }
     fired
@@ -1697,11 +1704,19 @@ fn render(terminal: &mut Screen, state: &State, edge: &mut Edge) -> Result<()> {
     let rows = tree::visible_rows(state);
     terminal.draw(|frame| {
         edge.area = frame.area();
+        let verdict = || {
+            varde::walkthrough::verdict(state).map(|verdict| match verdict {
+                varde::walkthrough::Verdict::Lgtm => ("LGTM".to_string(), ui::Tone::Lgtm),
+                varde::walkthrough::Verdict::Failing { message } => {
+                    (message.clone(), ui::Tone::Failing)
+                }
+            })
+        };
         let (status, tone) = if edge.status.text.is_empty() {
-            (
-                varde::walkthrough_spinner(state).unwrap_or_else(|| hint(state.opened).to_string()),
-                ui::Tone::Hint,
-            )
+            varde::walkthrough_spinner(state)
+                .map(|spinner| (spinner, ui::Tone::Hint))
+                .or_else(verdict)
+                .unwrap_or_else(|| (hint(state.opened).to_string(), ui::Tone::Hint))
         } else {
             (edge.status.text.clone(), edge.status.tone)
         };
@@ -2691,6 +2706,7 @@ fn perform_session(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>)
         }
         Effect::Notify(notice) => {
             let (text, tone) = notice_text(notice);
+            edge.notice_due = None;
             edge.status = Status {
                 text: text.to_string(),
                 tone,
@@ -2698,18 +2714,23 @@ fn perform_session(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>)
         }
         Effect::NotifyAbout { slug, about } => {
             let (text, tone) = notice_text(slug);
+            edge.notice_due = None;
             edge.status = Status {
                 text: format!("{text}: {about}"),
                 tone,
             };
         }
         Effect::NotifySaying { text, .. } => {
+            edge.notice_due = None;
             edge.status = Status {
                 text,
                 tone: ui::Tone::Notice,
             };
         }
         Effect::ClearNotice => edge.status.text.clear(),
+        Effect::ExpireNotice(after_ms) => {
+            edge.notice_due = Some(Instant::now() + Duration::from_millis(after_ms));
+        }
         Effect::Exit => {
             edge.status = Status {
                 text: "quit".to_string(),

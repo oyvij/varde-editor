@@ -137,6 +137,7 @@ pub struct VardeWorld {
     candidates_armed: bool,
     signature_armed: bool,
     dwell_armed: Option<u64>,
+    notice_expiry: Option<u64>,
     reported: Vec<String>,
     hold_site_texts: bool,
     configs_unreadable: bool,
@@ -843,6 +844,7 @@ impl VardeWorld {
                 self.reported.push(slug.to_string());
             }
             Effect::ClearNotice => self.notices.clear(),
+            Effect::ExpireNotice(after_ms) => self.notice_expiry = Some(after_ms),
             Effect::RunProgram { argv, .. } => {
                 self.program.push(argv);
                 self.output_pty = Some((2, 1));
@@ -18872,7 +18874,11 @@ fn walkthrough_request_sent(world: &mut VardeWorld, action: String) {
 
 #[then(expr = "no {string} walkthrough request was sent")]
 fn no_such_walkthrough_request_sent(world: &mut VardeWorld, action: String) {
-    assert!(requests_for(world, &action).is_empty());
+    assert!(
+        requests_for(world, &action).is_empty(),
+        "{:?}",
+        walkthrough_requests(world)
+    );
 }
 
 #[then(expr = "exactly {int} walkthrough request was sent")]
@@ -18881,6 +18887,7 @@ fn exactly_requests_sent(world: &mut VardeWorld, count: usize) {
     assert_eq!(world.handed_over.len(), count, "{:?}", world.handed_over);
 }
 
+#[then(expr = "exactly {int} {string} walkthrough request was sent")]
 #[then(expr = "exactly {int} {string} walkthrough requests were sent")]
 fn exactly_such_requests_sent(world: &mut VardeWorld, count: usize, action: String) {
     assert_eq!(requests_for(world, &action).len(), count);
@@ -19690,4 +19697,93 @@ fn no_tree_row_carries_colour(world: &mut VardeWorld) {
 #[then(expr = "Waypoint {string} is selected in the Waypoint list")]
 fn waypoint_is_now_selected(world: &mut VardeWorld, id: String) {
     assert_eq!(walkthrough::selected(&world.state), Some(id));
+
+#[then(expr = "the footer verdict is {string}")]
+fn footer_verdict_is(world: &mut VardeWorld, expected: String) {
+    assert!(world.notices.is_empty(), "notices: {:?}", world.notices);
+    let shown = match walkthrough::verdict(&world.state) {
+        None => "none",
+        Some(walkthrough::Verdict::Lgtm) => "lgtm",
+        Some(walkthrough::Verdict::Failing { .. }) => "failing",
+    };
+    assert_eq!(shown, expected);
+}
+
+#[then("the footer verdict carries the agent's message")]
+fn footer_verdict_carries_message(world: &mut VardeWorld) {
+    assert!(matches!(
+        walkthrough::verdict(&world.state),
+        Some(walkthrough::Verdict::Failing { message }) if !message.is_empty()
+    ));
+}
+
+#[when("the notice times out")]
+fn notice_times_out(world: &mut VardeWorld) {
+    assert!(!world.notices.is_empty(), "no notice was shown");
+    assert!(
+        world.notice_expiry.take().is_some(),
+        "the notice never times out"
+    );
+    world.notices.clear();
+}
+
+fn ai_write_chip(world: &VardeWorld, name: &str) -> (u16, u16) {
+    assert_eq!(name, "AI Write", "unknown Waypoint Chip {name:?}");
+    walkthrough::write_chip(&world.state, &world.panes()).expect("the Chip on screen")
+}
+
+#[then(expr = "the {string} Chip is drawn on line {int} of {string}")]
+fn chip_drawn_on_line(world: &mut VardeWorld, name: String, line: usize, path: String) {
+    let (_, row) = ai_write_chip(world, &name);
+    assert_eq!(
+        world.state.current_buffer,
+        Some(world.state.root.join(path))
+    );
+    let editor = world.panes().editor;
+    assert_eq!(
+        (row - editor.y - 1) as usize + world.state.editor_scroll + 1,
+        line
+    );
+}
+
+#[then(expr = "the {string} Chip ends left of the minimap")]
+fn chip_ends_left_of_minimap(world: &mut VardeWorld, name: String) {
+    let (column, _) = ai_write_chip(world, &name);
+    let end = column + unicode_width::UnicodeWidthStr::width(walkthrough::AI_WRITE) as u16;
+    let minimap = varde::minimap::strip(&world.state, world.panes().editor);
+    assert!(minimap.width > 0, "no minimap");
+    assert!(
+        end <= minimap.x,
+        "the Chip ends at {end}, the minimap starts at {}",
+        minimap.x
+    );
+}
+
+#[when(expr = "I click the {string} Chip on the Waypoint's line")]
+fn click_waypoint_chip(world: &mut VardeWorld, name: String) {
+    let (column, row) = ai_write_chip(world, &name);
+    world.pointer = mouse::Pointer::default();
+    world.report(mouse::Kind::LeftDown, column, row);
+    world.report(mouse::Kind::LeftUp, column, row);
+}
+
+#[given(expr = "I asked the agent to write Waypoint {string}")]
+fn asked_agent_to_write(world: &mut VardeWorld, id: String) {
+    current_waypoint_is(world, id);
+    run_story_command(world, ":guide write".to_string());
+    assert_eq!(requests_for(world, "write").len(), 1);
+}
+
+#[given(expr = "the agent wrote {string} to line {int} of {string}")]
+fn agent_wrote_line(world: &mut VardeWorld, text: String, line: usize, path: String) {
+    let full = world.state.root.join(&path);
+    let disk = world.files.get(&full).cloned().expect("the file on disk");
+    let mut lines: Vec<&str> = disk.split('\n').collect();
+    lines[line - 1] = &text;
+    let contents = lines.join("\n");
+    world.files.insert(full.clone(), contents.clone());
+    world.send(Event::FileChanged {
+        path: full,
+        contents,
+    });
 }

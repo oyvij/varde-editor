@@ -20,7 +20,7 @@ pub struct CommandLine {
     pub pick: Option<usize>,
 }
 
-pub const COMMANDS: [(&str, &str, &[View], &[Event]); 38] = [
+pub const COMMANDS: [(&str, &str, &[View], &[Event]); 40] = [
     (
         "format",
         "lay the file out",
@@ -167,6 +167,18 @@ pub const COMMANDS: [(&str, &str, &[View], &[Event]); 38] = [
         "plan a change with the AI as your guide",
         &[View::Edit],
         &[Event::OpenGuide],
+    ),
+    (
+        "guide check",
+        "have the AI check the current Waypoint",
+        &[View::Edit],
+        &[Event::CheckWaypoint],
+    ),
+    (
+        "guide write",
+        "have the AI write the current Waypoint",
+        &[View::Edit],
+        &[Event::AiWrite],
     ),
     (
         "ai",

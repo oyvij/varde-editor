@@ -39,7 +39,7 @@ Feature: Evaluating a Waypoint, and AI Write
       And the walkthrough request names Waypoint "w1"
 
     Scenario: Saving an unrelated file sends no evaluation
-      Given I open "src/keys.rs" from the tree
+      Given "src/keys.rs" is open in the editor
       When I write the buffer
       Then no "evaluate" walkthrough request was sent
 
@@ -105,14 +105,15 @@ Feature: Evaluating a Waypoint, and AI Write
 
     Scenario: A notice shows over the verdict and then gives way back to it
       Given I pressed "]"
-      And I run ":nosuchcommand"
+      And I run ":ai claude"
       When the notice times out
       Then the footer verdict is "lgtm"
 
   Rule: AI Write has the agent write the snippet
 
     Background:
-      Given a walkthrough is active on the plan:
+      Given the screen is 160 columns by 40 rows
+      And a walkthrough is active on the plan:
         """
         {"version": 1, "status": "active", "checkpoint": "w1", "waypoints": [
           {"id": "w1", "file": "src/plan.rs", "line": 12, "kind": "code", "text": "Parse the plan", "verdict": null, "ai": false}
@@ -127,7 +128,7 @@ Feature: Evaluating a Waypoint, and AI Write
       When I click the "AI Write" Chip on the Waypoint's line
       Then exactly 1 "write" walkthrough request was sent
       And the walkthrough request names Waypoint "w1"
-      And no file was written
+      And the walkthrough file was not written
 
     Scenario: The AI Write key sends a write request
       When I run ":guide write"

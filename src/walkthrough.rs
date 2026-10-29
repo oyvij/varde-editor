@@ -192,6 +192,9 @@ impl Queue {
 
 pub const PREVIOUS: &str = "waypoint-previous";
 pub const NEXT: &str = "waypoint-next";
+pub const CHECK: &str = "waypoint-check";
+pub const AI_WRITE: &str = "\u{25b6} AI Write";
+pub const NOTICE_MS: u64 = 4_000;
 
 const BOX_COLUMNS: usize = 72;
 const BOX_ROWS: usize = 8;
@@ -232,6 +235,33 @@ pub fn current(state: &crate::State) -> Option<&Waypoint> {
         .waypoints
         .iter()
         .find(|waypoint| waypoint.id == id)
+}
+
+pub fn verdict(state: &crate::State) -> Option<&Verdict> {
+    current(state)?.verdict.as_ref()
+}
+
+pub fn current_code(state: &crate::State) -> Option<&Waypoint> {
+    current(state).filter(|waypoint| waypoint.kind == Kind::Code)
+}
+
+pub fn write_chip(state: &crate::State, panes: &crate::layout::Layout) -> Option<(u16, u16)> {
+    let waypoint = current_code(state)?;
+    if state.view != crate::View::Edit
+        || crate::previewing(state)
+        || state.current_buffer.as_deref() != Some(state.root.join(&waypoint.file).as_path())
+    {
+        return None;
+    }
+    let (_, rows, columns) = crate::fits_in(state, panes);
+    let row = crate::story::row_of(state, waypoint.line as u32)
+        .checked_sub(1 + state.editor_scroll)
+        .filter(|row| *row < rows)?;
+    let column = columns.checked_sub(unicode_width::UnicodeWidthStr::width(AI_WRITE))?;
+    Some((
+        panes.editor.x + 1 + crate::gutter(state) + column as u16,
+        panes.editor.y + 1 + row as u16,
+    ))
 }
 
 fn shown_context(state: &crate::State) -> Option<&Waypoint> {
@@ -386,6 +416,10 @@ pub fn transport(state: &crate::State) -> Vec<crate::Chip> {
     vec![
         chip(PREVIOUS, "previous", "\u{ab}", "["),
         chip(NEXT, "next", "\u{bb}", "]"),
+        Chip {
+            word: "AI Check",
+            ..chip(CHECK, "check", "\u{25ce}", ":guide check")
+        },
     ]
 }
 

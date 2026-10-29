@@ -609,6 +609,8 @@ pub enum Event {
     WalkthroughCommandExited(Option<i32>),
     OpenGuide,
     StepWaypoint(Direction),
+    CheckWaypoint,
+    AiWrite,
     ScrollContextBox(Direction),
     WriteResolved {
         path: PathBuf,
@@ -902,6 +904,7 @@ pub enum Effect {
         text: String,
     },
     ClearNotice,
+    ExpireNotice(u64),
     ReadFolder(PathBuf),
     OpenVault(PathBuf),
     Scrolled(Pane, Direction),
@@ -1905,6 +1908,16 @@ pub fn update(state: &State, event: Event) -> (State, Vec<Effect>) {
         effects.push(Effect::SaveState(state_json(&next)));
     }
     anchor_waypoints(state, &mut next);
+    if walkthrough::verdict(&next).is_some()
+        && effects.iter().any(|effect| {
+            matches!(
+                effect,
+                Effect::Notify(_) | Effect::NotifyAbout { .. } | Effect::NotifySaying { .. }
+            )
+        })
+    {
+        effects.push(Effect::ExpireNotice(walkthrough::NOTICE_MS));
+    }
     debug::forget_changed(&state.breakpoints, &mut next);
     if next.shown_root() != state.shown_root() && !next.filter.is_empty() {
         effects.extend(filter::reindex(&mut next));
@@ -5134,7 +5147,18 @@ fn on_editor_escape(state: &State, mut next: State, event: Event, wheeled: bool)
             (Some(path), Some(buffer)) => {
                 let contents = buffer.write();
                 risk::went_stale(&mut next.risk);
-                vec![Effect::WriteFile { contents, path }, Effect::ClearNotice]
+                let evaluate = walkthrough::current_code(state)
+                    .filter(|waypoint| state.root.join(&waypoint.file) == path)
+                    .map(|waypoint| walkthrough::Request {
+                        action: walkthrough::Action::Evaluate,
+                        waypoint: Some(waypoint.id.clone()),
+                        detail: String::new(),
+                    });
+                let mut effects = vec![Effect::WriteFile { contents, path }, Effect::ClearNotice];
+                if let Some(request) = evaluate {
+                    effects.extend(hand_over(&mut next, request));
+                }
+                effects
             }
             _ => vec![],
         },
@@ -6544,7 +6568,30 @@ fn on_walkthrough(state: &State, mut next: State, event: Event, wheeled: bool) -
             }
             vec![]
         }
-        (Event::StepWaypoint(_) | Event::ScrollContextBox(_), _) => vec![],
+        (asked @ (Event::CheckWaypoint | Event::AiWrite), Some(_)) => {
+            let action = match asked {
+                Event::CheckWaypoint => walkthrough::Action::Evaluate,
+                _ => walkthrough::Action::Write,
+            };
+            match walkthrough::current_code(state) {
+                Some(waypoint) => hand_over(
+                    &mut next,
+                    walkthrough::Request {
+                        action,
+                        waypoint: Some(waypoint.id.clone()),
+                        detail: String::new(),
+                    },
+                ),
+                None => vec![],
+            }
+        }
+        (
+            Event::StepWaypoint(_)
+            | Event::ScrollContextBox(_)
+            | Event::CheckWaypoint
+            | Event::AiWrite,
+            _,
+        ) => vec![],
         (Event::MoveSelection(direction), Some(session)) if state.focus == Pane::Waypoints => {
             if let Some(held) = &mut next.walkthrough {
                 held.selected = match direction {
@@ -6715,7 +6762,8 @@ fn send_to_agent(next: &mut State, request: Option<walkthrough::Request>) -> Vec
         })
         .unwrap_or_default();
     let mut effects = Vec::new();
-    for file in files {
+    let saving = request.action != walkthrough::Action::Evaluate;
+    for file in files.into_iter().filter(|_| saving) {
         let path = next.root.join(&file);
         if let Some(buffer) = next
             .buffers
@@ -7074,6 +7122,7 @@ fn on_pane_action(state: &State, mut next: State, event: Event, wheeled: bool) -
         Event::PaneAction(walkthrough::NEXT) => {
             return Ok(update(state, Event::StepWaypoint(Direction::Right)))
         }
+        Event::PaneAction(walkthrough::CHECK) => return Ok(update(state, Event::CheckWaypoint)),
         Event::PaneAction(reading::STOP) => return Ok(update(state, Event::StopReading)),
         Event::PaneAction(reading::SPEED) => {
             return Ok(update(
@@ -10676,6 +10725,35 @@ mod tests {
             buffers: [(path, buffer)].into_iter().collect(),
             ..State::default()
         }
+    }
+
+    #[test]
+    fn a_notice_times_out_only_over_a_verdict() {
+        let running = State {
+            ai_running: true,
+            ..State::default()
+        };
+        let start = Event::StartAi {
+            command: Some("claude".to_string()),
+            force: false,
+        };
+        let (_, effects) = update(&running, start.clone());
+        assert_eq!(effects, vec![Effect::Notify("ai-already-running")]);
+        let walking = State {
+            walkthrough: Some(walkthrough::Session {
+                plan: walkthrough::parse(
+                    r#"{"version": 1, "status": "active", "checkpoint": "w1", "waypoints": [
+                      {"id": "w1", "file": "a.rs", "line": 1, "kind": "code", "text": "Do", "verdict": {"state": "lgtm"}, "ai": false}
+                    ]}"#,
+                )
+                .ok(),
+                current: Some("w1".to_string()),
+                ..walkthrough::Session::default()
+            }),
+            ..running
+        };
+        let (_, effects) = update(&walking, start);
+        assert!(effects.contains(&Effect::ExpireNotice(walkthrough::NOTICE_MS)));
     }
 
     #[test]
