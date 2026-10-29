@@ -2676,6 +2676,37 @@ mod tests {
     }
 
     #[test]
+    fn ending_a_walkthrough_is_answered_rather_than_typed_through() {
+        use crate::walkthrough::Ending;
+        let confirming = State {
+            modal: Modal::ConfirmRevertWalkthrough,
+            ..State::default()
+        };
+        assert_eq!(
+            press(&confirming, plain('y')),
+            vec![Event::ConfirmRevert(Ending::Reverting)]
+        );
+        assert_eq!(press(&confirming, plain('n')), vec![Event::Cancel]);
+        let replacing = State {
+            modal: Modal::ReplaceWalkthrough,
+            ..State::default()
+        };
+        assert_eq!(
+            press(&replacing, plain('k')),
+            vec![Event::FinishWalkthrough, Event::OpenGuide]
+        );
+        assert_eq!(
+            press(&replacing, plain('r')),
+            vec![Event::ConfirmRevert(Ending::Replacing)]
+        );
+        assert_eq!(
+            press(&replacing, KeyEvent::new(KeyCode::Esc)),
+            vec![Event::Cancel]
+        );
+        assert_eq!(press(&replacing, plain('y')), vec![]);
+    }
+
+    #[test]
     fn the_submit_confirmation_is_answered_rather_than_typed_through() {
         let state = State {
             modal: Modal::ConfirmSubmit,

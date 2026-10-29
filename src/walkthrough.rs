@@ -564,7 +564,7 @@ pub fn with_comment(text: &str, line: usize, token: &str, comment: &str) -> Stri
     lines.join("\n")
 }
 
-pub fn without_comment(text: &str, line: usize, token: &str, comment: &str) -> String {
+pub fn without_comment(text: &str, line: usize, token: &str, comment: &str) -> Option<String> {
     let mut lines: Vec<&str> = text.split('\n').collect();
     let inserted = format!("{token} {comment}");
     let near = lines
@@ -572,11 +572,9 @@ pub fn without_comment(text: &str, line: usize, token: &str, comment: &str) -> S
         .enumerate()
         .filter(|(_, held)| held.trim() == inserted)
         .min_by_key(|(at, _)| at.abs_diff(line.saturating_sub(1)))
-        .map(|(at, _)| at);
-    if let Some(at) = near {
-        lines.remove(at);
-    }
-    lines.join("\n")
+        .map(|(at, _)| at)?;
+    lines.remove(near);
+    Some(lines.join("\n"))
 }
 
 pub fn follow(waypoints: &mut [Waypoint], file: &str, old: &str, new: &str) {
@@ -937,8 +935,8 @@ mod tests {
         let landed = with_comment("fn load() {\n    let text = 1;\n}", 2, "//", "Parse it");
         let written = landed.replace("    \n", "    let plan = parse(text);\n");
         assert_eq!(
-            without_comment(&written, 2, "//", "Parse it"),
-            "fn load() {\n    let plan = parse(text);\n    let text = 1;\n}"
+            without_comment(&written, 2, "//", "Parse it").as_deref(),
+            Some("fn load() {\n    let plan = parse(text);\n    let text = 1;\n}")
         );
     }
 
@@ -946,12 +944,12 @@ mod tests {
     fn finishing_finds_the_comment_after_lines_were_added_or_removed_around_it() {
         let text = "use a;\nuse b;\n\nfn load() {\n    # Parse it\n    let plan = 1;\n}";
         assert_eq!(
-            without_comment(text, 3, "#", "Parse it"),
-            "use a;\nuse b;\n\nfn load() {\n    let plan = 1;\n}"
+            without_comment(text, 3, "#", "Parse it").as_deref(),
+            Some("use a;\nuse b;\n\nfn load() {\n    let plan = 1;\n}")
         );
         assert_eq!(
-            without_comment(text, 9, "#", "Parse it"),
-            "use a;\nuse b;\n\nfn load() {\n    let plan = 1;\n}"
+            without_comment(text, 9, "#", "Parse it").as_deref(),
+            Some("use a;\nuse b;\n\nfn load() {\n    let plan = 1;\n}")
         );
     }
 
@@ -959,15 +957,15 @@ mod tests {
     fn finishing_removes_the_comment_nearest_its_waypoint_when_the_same_text_repeats() {
         let text = "// Parse it\na\nb\nc\n// Parse it\nd";
         assert_eq!(
-            without_comment(text, 5, "//", "Parse it"),
-            "// Parse it\na\nb\nc\nd"
+            without_comment(text, 5, "//", "Parse it").as_deref(),
+            Some("// Parse it\na\nb\nc\nd")
         );
     }
 
     #[test]
     fn finishing_leaves_a_comment_the_developer_rewrote() {
         let text = "fn load() {\n    // Parse it, then check the version\n    let plan = 1;\n}";
-        assert_eq!(without_comment(text, 2, "//", "Parse it"), text);
+        assert_eq!(without_comment(text, 2, "//", "Parse it"), None);
     }
 
     fn followed(old: &str, new: &str) -> Vec<usize> {

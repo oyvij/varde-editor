@@ -116,6 +116,13 @@ Feature: Finishing, reverting and replacing a Walkthrough
       Then no walkthrough is active
       And no tree row carries the walkthrough colour
 
+    Scenario: ended without a revert does not end the session
+      When the walkthrough file changes to:
+        """
+        {"version": 1, "status": "ended", "checkpoint": null, "waypoints": []}
+        """
+      Then the walkthrough state is "active"
+
     Scenario: Once the agent has reverted, the walkthrough's buffers show the files on disk
       Given I press "i" in the editor
       And I type "let plan = parse(text);" in the editor

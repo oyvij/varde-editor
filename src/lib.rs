@@ -6479,14 +6479,13 @@ fn on_walkthrough(state: &State, mut next: State, event: Event, wheeled: bool) -
             None,
         ) => vec![],
         (Event::WalkthroughChanged(contents), Some(session))
-            if walkthrough::parse(&contents)
-                .is_ok_and(|plan| plan.status == walkthrough::Status::Ended) =>
+            if session.ending != walkthrough::Ending::Walking
+                && walkthrough::parse(&contents)
+                    .is_ok_and(|plan| plan.status == walkthrough::Status::Ended) =>
         {
-            if session.ending != walkthrough::Ending::Walking {
-                for file in session.plan.iter().flat_map(walkthrough::files) {
-                    if let Some(buffer) = next.buffers.get_mut(&state.root.join(file)) {
-                        buffer.reload();
-                    }
+            for file in session.plan.iter().flat_map(walkthrough::files) {
+                if let Some(buffer) = next.buffers.get_mut(&state.root.join(file)) {
+                    buffer.reload();
                 }
             }
             let effects = end_walkthrough(&mut next);
@@ -6630,13 +6629,12 @@ fn on_walkthrough(state: &State, mut next: State, event: Event, wheeled: bool) -
                 {
                     let path = state.root.join(&waypoint.file);
                     if let Some(buffer) = next.buffers.get_mut(&path) {
-                        let removed = walkthrough::without_comment(
+                        if let Some(removed) = walkthrough::without_comment(
                             buffer.shown(),
                             waypoint.line,
                             walkthrough::comment_token(&waypoint.file),
                             &waypoint.text,
-                        );
-                        if removed != buffer.shown() {
+                        ) {
                             buffer.rewrite(&removed);
                         }
                     }
