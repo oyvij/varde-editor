@@ -256,20 +256,6 @@ pub fn draw(
             Rect::new(x, y, 1, 1),
         );
     }
-    if let Some(chip) = varde::walkthrough::write_chip(state, &areas.panes) {
-        frame.render_widget(
-            Paragraph::new(Span::styled(
-                varde::walkthrough::AI_WRITE,
-                match state.hovered_action == Some(varde::walkthrough::WRITE) {
-                    true => Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::REVERSED | Modifier::BOLD),
-                    false => Style::default().add_modifier(Modifier::REVERSED),
-                },
-            )),
-            Rect::new(chip.x, chip.y, chip.width, chip.height),
-        );
-    }
 
     hover(frame, state, &areas.panes);
     context_box(frame, state, &areas.panes);

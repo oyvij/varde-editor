@@ -202,8 +202,6 @@ impl Queue {
 pub const PREVIOUS: &str = "waypoint-previous";
 pub const NEXT: &str = "waypoint-next";
 pub const CHECK: &str = "waypoint-check";
-pub const WRITE: &str = "waypoint-write";
-pub const AI_WRITE: &str = "\u{25b6} AI Write";
 pub const NOTICE_MS: u64 = 4_000;
 pub const FALLBACK_MS: u64 = 180_000;
 pub const FINISH: &str = "walkthrough-finish";
@@ -256,41 +254,6 @@ pub fn verdict(state: &crate::State) -> Option<&Verdict> {
 
 pub fn current_code(state: &crate::State) -> Option<&Waypoint> {
     current(state).filter(|waypoint| waypoint.kind == Kind::Code)
-}
-
-pub fn write_chip(
-    state: &crate::State,
-    panes: &crate::layout::Layout,
-) -> Option<crate::layout::Area> {
-    let waypoint = current_code(state)?;
-    if state.view != crate::View::Edit
-        || crate::previewing(state)
-        || state.current_buffer.as_deref() != Some(state.root.join(&waypoint.file).as_path())
-    {
-        return None;
-    }
-    let buffer = crate::current_buffer(state)?;
-    let last = below_comment(buffer, waypoint.line, comment_token(&waypoint.file)) - 1;
-    let (_, rows, columns) = crate::fits_in(state, panes);
-    let row = crate::story::row_of(state, last as u32)
-        .checked_sub(1 + state.editor_scroll)
-        .filter(|row| *row < rows)?;
-    let width = unicode_width::UnicodeWidthStr::width(AI_WRITE);
-    let text = buffer.line_text(last).unwrap_or_default();
-    let text = text.replace('\t', &" ".repeat(state.tab_width));
-    let after = (unicode_width::UnicodeWidthStr::width(text.as_str()) + 1)
-        .checked_sub(state.editor_hscroll)
-        .filter(|after| after + width <= columns);
-    let column = match after {
-        Some(after) => after,
-        None => columns.checked_sub(width)?,
-    };
-    Some(crate::layout::Area {
-        x: panes.editor.x + 1 + crate::gutter(state) + column as u16,
-        y: panes.editor.y + 1 + row as u16,
-        width: width as u16,
-        height: 1,
-    })
 }
 
 fn shown_context(state: &crate::State) -> Option<&Waypoint> {

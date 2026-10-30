@@ -3645,7 +3645,7 @@ sends `evaluate` for that Waypoint; the Chip and command do not save. Typing sen
 **R52.20** The footer shows the **current Waypoint's latest verdict** — `failing` with the agent's
 message, `lgtm`, or none — for as long as it is current. Another notice shows over it and gives way
 back to it.
-**R52.21** `▶ AI Write` on the Waypoint's line, left of the minimap, and `:guide write` send `write`.
+**R52.21** `:guide write` sends `write`; there is no Chip for it.
 When the agent's update arrives, the buffer reloads, the cursor stays on the Waypoint and the
 Waypoint is marked `ai`.
 **R52.22** The Transport holds previous, next, check, `◆ AI Guide`, `✓ finish` and `↶ revert`,
@@ -3690,7 +3690,7 @@ agent's (ADR 0031) — and deleting it, which loses the plan the developer may w
 **⛔ Varde snapshots and restores files.** Recommended and rejected by the user: reverts belong to
 the agent (ADR 0031).
 **⛔ A standalone snippet-at-cursor command**, as #116 first asked. Writing a snippet survives only
-as a Waypoint's `▶ AI Write`.
+as a Waypoint's `:guide write`.
 
 ## Spec status
 
