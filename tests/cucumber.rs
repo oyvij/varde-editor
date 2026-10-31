@@ -12114,6 +12114,26 @@ fn gone_list_labels(world: &mut VardeWorld, step: &Step) {
     assert_eq!(shown, expected);
 }
 
+#[then(expr = "the Gone list header names:")]
+fn gone_list_header_names(world: &mut VardeWorld, step: &Step) {
+    gone_list_is_open(world);
+    let Modal::Gone { row } = world.state.modal else {
+        unreachable!()
+    };
+    let header: Vec<String> = varde::gone::list_lines(&world.state, row, 200, 200)
+        .into_iter()
+        .take_while(|(tone, _)| *tone == varde::Tone::Dimmed)
+        .map(|(_, line)| line)
+        .collect();
+    for file in &step.table().expect("a table").rows[1..] {
+        assert!(
+            header.iter().any(|line| line.contains(&file[0])),
+            "{:?} not named in {header:#?}",
+            file[0]
+        );
+    }
+}
+
 #[then(expr = "the Gone rows are:")]
 fn gone_rows_are(world: &mut VardeWorld, step: &Step) {
     let expected: Vec<Vec<String>> = step.table().expect("a table").rows[1..].to_vec();

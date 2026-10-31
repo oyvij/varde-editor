@@ -341,6 +341,10 @@ pub const OPEN: &str = "gone";
 
 const LABEL_COLUMN: usize = "signature changed".len() + 2;
 
+const SIDE_BY_SIDE: usize = 30;
+
+const GUTTER: usize = 2;
+
 fn plain(text: &str) -> String {
     anstream::adapter::strip_str(text)
         .to_string()
@@ -365,11 +369,64 @@ fn row_lines(row: &Row, width: usize) -> Vec<String> {
     );
     let label = format!("{:LABEL_COLUMN$}", row.label.as_str());
     let under = " ".repeat(LABEL_COLUMN);
+    let mut lines = wrapped(&text, width, &label, &under);
+    if let (Label::Gone, Some(now)) = (row.label, &row.now) {
+        let second = format!(
+            "same name now in {} {}; its body differs",
+            plain(&now.file),
+            named(now)
+        );
+        lines.extend(wrapped(&second, width, &under, &under));
+    }
+    if let (Label::SignatureChanged, Some(now)) = (row.label, &row.now) {
+        let column = width.saturating_sub(LABEL_COLUMN + GUTTER) / 2;
+        let [was, now] =
+            [("was: ", &row.item.signature), ("now: ", &now.signature)].map(|(said, signature)| {
+                match column >= SIDE_BY_SIDE {
+                    true => wrapped(&plain(signature), column, said, "     "),
+                    false => wrapped(
+                        &plain(signature),
+                        width,
+                        &format!("{under}{said}"),
+                        &format!("{under}     "),
+                    ),
+                }
+            });
+        match column >= SIDE_BY_SIDE {
+            true => lines.extend((0..was.len().max(now.len())).map(|at| {
+                let left = was.get(at).map_or("", String::as_str);
+                let right = now.get(at).map_or("", String::as_str);
+                let pad = " ".repeat(column - left.width() + GUTTER);
+                format!("{under}{left}{pad}{right}").trim_end().to_string()
+            })),
+            false => lines.extend(was.into_iter().chain(now)),
+        }
+    }
+    lines
+}
+
+fn header_lines(unmeasured: &[Unmeasured], width: usize) -> Vec<String> {
+    let label = format!("{:LABEL_COLUMN$}", "not measured");
+    let under = " ".repeat(LABEL_COLUMN);
+    unmeasured
+        .iter()
+        .flat_map(|file| {
+            let named = format!("{} ({})", plain(&file.file), plain(&file.language));
+            let text = match file.uncovered {
+                Uncovered::File => named,
+                Uncovered::PrototypesAndMacros => format!("{named}: prototypes and macros"),
+            };
+            wrapped(&text, width, &label, &under)
+        })
+        .collect()
+}
+
+fn wrapped(text: &str, width: usize, first: &str, rest: &str) -> Vec<String> {
     textwrap::wrap(
-        &text,
+        text,
         preview::wrap_options(width)
-            .initial_indent(&label)
-            .subsequent_indent(&under),
+            .initial_indent(first)
+            .subsequent_indent(rest),
     )
     .into_iter()
     .map(|line| line.into_owned())
@@ -392,6 +449,13 @@ pub fn list_lines(
         .into_iter()
         .map(|said| (Tone::Dimmed, said.to_string()))
         .collect();
+    if let Some(comparison) = comparison(state) {
+        lines.extend(
+            header_lines(&comparison.unmeasured, width)
+                .into_iter()
+                .map(|line| (Tone::Dimmed, line)),
+        );
+    }
     if comparison(state).is_some_and(|comparison| comparison.rows.is_empty()) {
         lines.push((Tone::Dimmed, "nothing named was removed".to_string()));
     }
@@ -848,8 +912,8 @@ mod tests {
             vec!["gone               src/keys.rs Router::spell: existed in HEAD, not in this file now"]
         );
         assert_eq!(
-            row_lines(&changed, 200),
-            vec!["signature changed  src/keys.rs route: still here; its parameters or return type changed"]
+            row_lines(&changed, 200)[0],
+            "signature changed  src/keys.rs route: still here; its parameters or return type changed"
         );
     }
 
@@ -911,6 +975,246 @@ mod tests {
             lines,
             vec!["moved              src/keys.rs Router::spell: same body now lives in src/ui.rs"]
         );
+    }
+
+    fn assert_boxed_under_the_row_text(lines: &[String], width: usize) {
+        for line in lines {
+            assert!(line.width() <= width, "{line:?} is wider than {width}");
+        }
+        for line in &lines[1..] {
+            assert!(line.starts_with(&" ".repeat(LABEL_COLUMN)), "{line:?}");
+        }
+    }
+
+    fn assert_starts_at(line: &str, column: usize) {
+        assert!(line.starts_with(&" ".repeat(column)), "{line:?}");
+        assert!(
+            !line[column..].starts_with(' '),
+            "{line:?} does not start at column {column}"
+        );
+    }
+
+    #[test]
+    fn a_moved_and_edited_row_names_where_its_namesake_lives_on_a_second_line() {
+        let edited = row(
+            Label::Gone,
+            item("src/keys.rs", "", "spell"),
+            Some(with(item("src/ui.rs", "Speller", "spell"), "()", 2, 30)),
+        );
+
+        assert_eq!(
+            row_lines(&edited, 200),
+            vec![
+                "gone               src/keys.rs spell: existed in HEAD, not in this file now",
+                "                   same name now in src/ui.rs Speller::spell; its body differs",
+            ]
+        );
+    }
+
+    #[test]
+    fn at_forty_columns_the_second_line_wraps_inside_its_box_under_the_row_text() {
+        let edited = row(
+            Label::Gone,
+            item("src/keys.rs", "", "spell"),
+            Some(item(
+                "src/a/rather/deeply/nested/module/ui.rs",
+                "AVeryLongContainerNameIndeed",
+                "spell",
+            )),
+        );
+
+        let lines = row_lines(&edited, 40);
+
+        assert!(lines.len() > 4, "{lines:#?}");
+        assert_boxed_under_the_row_text(&lines, 40);
+        for line in &lines[1..] {
+            assert_starts_at(line, LABEL_COLUMN);
+        }
+    }
+
+    fn signature_changed(was: &str, now: &str) -> Row {
+        row(
+            Label::SignatureChanged,
+            with(item("src/keys.rs", "", "route"), was, 1, 88),
+            Some(with(item("src/keys.rs", "", "route"), now, 1, 88)),
+        )
+    }
+
+    #[test]
+    fn on_a_narrow_list_the_old_signature_is_stacked_over_the_new() {
+        assert_eq!(
+            row_lines(&signature_changed("(key: Key)", "(key: &Key) -> Act"), 60),
+            vec![
+                "signature changed  src/keys.rs route: still here; its",
+                "                   parameters or return type changed",
+                "                   was: (key: Key)",
+                "                   now: (key: &Key) -> Act",
+            ]
+        );
+    }
+
+    #[test]
+    fn at_forty_columns_stacked_signatures_wrap_inside_their_box_under_the_row_text() {
+        let long = signature_changed(
+            "(key: Key, mode: Mode, layout: &Layout) -> Option<Action>",
+            "(key: &Key, mode: Mode, layout: &Layout, clock: &dyn Clock) -> Result<Action, Error>",
+        );
+
+        let lines = row_lines(&long, 40);
+
+        assert_boxed_under_the_row_text(&lines, 40);
+        let was = lines
+            .iter()
+            .position(|line| line.contains("was: "))
+            .unwrap();
+        let now = lines
+            .iter()
+            .position(|line| line.contains("now: "))
+            .unwrap();
+        assert!(now > was + 1, "{lines:#?}");
+        assert!(lines.len() > now + 1, "{lines:#?}");
+        for (at, line) in lines.iter().enumerate().skip(1) {
+            let column = match at <= was || at == now {
+                true => LABEL_COLUMN,
+                false => LABEL_COLUMN + "was: ".len(),
+            };
+            assert_starts_at(line, column);
+        }
+    }
+
+    #[test]
+    fn with_thirty_columns_each_the_signatures_sit_side_by_side_and_wrap_within_themselves() {
+        let long = signature_changed(
+            "(key: Key, mode: Mode, layout: &Layout) -> Option<Action>",
+            "(key: &Key, mode: Mode, clock: &dyn Clock) -> Result<Action, Error>",
+        );
+        let side_by_side = LABEL_COLUMN + 30 + 2 + 30;
+
+        let lines = row_lines(&long, side_by_side);
+
+        let first = lines
+            .iter()
+            .position(|line| line.contains("was: "))
+            .unwrap();
+        assert_eq!(
+            lines[first],
+            format!(
+                "{}{:32}{}",
+                " ".repeat(LABEL_COLUMN),
+                "was: (key: Key, mode: Mode,",
+                "now: (key: &Key, mode: Mode,"
+            )
+        );
+        assert!(lines.len() > first + 2, "{lines:#?}");
+        for line in &lines[first..] {
+            assert!(line.width() <= side_by_side, "{line:?}");
+            let (left, right) = line.split_at(LABEL_COLUMN + 32);
+            assert!(left[LABEL_COLUMN..].trim_end().width() <= 30, "{line:?}");
+            assert!(right.width() <= 30, "{line:?}");
+        }
+        for line in &lines[first + 1..] {
+            assert_starts_at(line, LABEL_COLUMN + "was: ".len());
+            assert_starts_at(&line[LABEL_COLUMN + 32..], "now: ".len());
+        }
+        assert!(lines[first + 1..]
+            .iter()
+            .all(|line| !line.contains("now: ")));
+    }
+
+    #[test]
+    fn one_column_short_of_thirty_each_the_signatures_are_stacked() {
+        let long = signature_changed(
+            "(key: Key, mode: Mode, layout: &Layout) -> Option<Action>",
+            "(key: &Key, mode: Mode, clock: &dyn Clock) -> Result<Action, Error>",
+        );
+
+        let lines = row_lines(&long, LABEL_COLUMN + 30 + 2 + 30 - 1);
+
+        assert!(
+            lines
+                .iter()
+                .all(|line| !(line.contains("was: ") && line.contains("now: "))),
+            "{lines:#?}"
+        );
+        assert!(
+            lines.iter().any(|line| line.contains("now: ")),
+            "{lines:#?}"
+        );
+    }
+
+    fn prototypes_and_macros(file: &str) -> Unmeasured {
+        Unmeasured {
+            file: file.to_string(),
+            language: "C/C++".to_string(),
+            uncovered: Uncovered::PrototypesAndMacros,
+        }
+    }
+
+    #[test]
+    fn the_header_names_each_unmeasured_file_its_language_and_what_was_not_measured() {
+        assert_eq!(
+            header_lines(
+                &[
+                    not_measured("scripts/build.go"),
+                    prototypes_and_macros("src/shape.h")
+                ],
+                200
+            ),
+            vec![
+                "not measured       scripts/build.go (Go)",
+                "not measured       src/shape.h (C/C++): prototypes and macros",
+            ]
+        );
+    }
+
+    #[test]
+    fn at_forty_columns_the_header_wraps_inside_its_box_under_the_row_text() {
+        let lines = header_lines(
+            &[prototypes_and_macros(
+                "src/a/rather/deeply/nested/module/with/a/long/path/shape.h",
+            )],
+            40,
+        );
+
+        assert!(lines.len() > 2, "{lines:#?}");
+        assert!(
+            lines[0].starts_with("not measured       src/"),
+            "{lines:#?}"
+        );
+        assert_boxed_under_the_row_text(&lines, 40);
+        for line in &lines[1..] {
+            assert_starts_at(line, LABEL_COLUMN);
+        }
+    }
+
+    #[test]
+    fn control_and_escape_sequences_in_an_unmeasured_file_are_stripped() {
+        let hostile = Unmeasured {
+            file: "scripts/\u{1b}[2Jbuild\r.go".to_string(),
+            language: "G\u{7}o".to_string(),
+            uncovered: Uncovered::File,
+        };
+
+        assert_eq!(
+            header_lines(&[hostile], 200),
+            vec!["not measured       scripts/build.go (Go)"]
+        );
+    }
+
+    #[test]
+    fn the_list_opens_with_its_header_above_the_rows() {
+        let state = with_unmeasured(reviewing(Found::Current), &["scripts/build.go"]);
+
+        let lines = listing(&state);
+
+        assert_eq!(
+            lines[0],
+            (
+                Tone::Dimmed,
+                "not measured       scripts/build.go (Go)".to_string()
+            )
+        );
+        assert!(lines[1].1.starts_with("gone "), "{lines:?}");
     }
 
     fn listing(state: &State) -> Vec<(Tone, String)> {

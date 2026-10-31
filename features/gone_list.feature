@@ -137,3 +137,18 @@ Feature: The Gone list
     And the cheatsheet lists ":gone" for "Gone list"
     And the cheatsheet lists "Esc" for "Gone list"
     And the cheatsheet lists "j" for "Gone list"
+
+  Scenario: The list header names the files Gone could not measure
+    Given I opened Review view
+    And Gone could not measure:
+      | file             | language | uncovered             |
+      | scripts/build.go | Go       | file                  |
+      | src/shape.h      | C/C++    | prototypes-and-macros |
+    And the Gone items arrive:
+      | file        | container | name  | kind     | signature    | body hash | line | revision |
+      | src/keys.rs |           | spell | function | (word: &str) | b2        | 120  | HEAD     |
+    When I run ":gone"
+    Then the Gone list header names:
+      | file             |
+      | scripts/build.go |
+      | src/shape.h      |
