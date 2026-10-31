@@ -163,7 +163,7 @@ fn walk(
 }
 
 pub fn compare(root: &Path, was: &[Item], now: &[Item]) -> Comparison {
-    let same = |old: &Item, new: &Item| {
+    let same_identity = |old: &Item, new: &Item| {
         new.file == old.file && new.container == old.container && new.name == old.name
     };
     let mut partners: Vec<Option<&Item>> = vec![None; was.len()];
@@ -175,7 +175,7 @@ pub fn compare(root: &Path, was: &[Item], now: &[Item]) -> Comparison {
             }
             let found = (0..now.len()).find(|&at| {
                 !taken[at]
-                    && same(old, &now[at])
+                    && same_identity(old, &now[at])
                     && (!by_body || now[at].body_hash == old.body_hash)
             });
             if let Some(at) = found {
@@ -184,33 +184,32 @@ pub fn compare(root: &Path, was: &[Item], now: &[Item]) -> Comparison {
             }
         }
     }
-    let rows = was
-        .iter()
-        .zip(partners)
-        .filter_map(|(old, partner)| match partner {
-            Some(new) => (new.signature != old.signature).then(|| Row {
-                label: Label::SignatureChanged,
-                item: old.clone(),
-                now: Some(new.clone()),
-            }),
-            None => {
-                let elsewhere = |new: &&Item| new.name == old.name && !same(old, new);
-                let (label, found) = match now
-                    .iter()
-                    .filter(elsewhere)
-                    .find(|new| new.body_hash == old.body_hash)
-                {
-                    Some(new) => (Label::Moved, Some(new)),
-                    None => (Label::Gone, now.iter().find(elsewhere)),
-                };
-                Some(Row {
-                    label,
-                    item: old.clone(),
-                    now: found.cloned(),
-                })
-            }
-        })
-        .collect();
+    let mut rows = Vec::new();
+    for (old, partner) in was.iter().zip(partners) {
+        let elsewhere = |new: &Item| new.name == old.name && !same_identity(old, new);
+        let (label, found) = match partner {
+            Some(new) if new.signature != old.signature => (Label::SignatureChanged, Some(new)),
+            Some(_) => continue,
+            None => match (0..now.len())
+                .find(|&at| !taken[at] && elsewhere(&now[at]) && now[at].body_hash == old.body_hash)
+            {
+                Some(at) => {
+                    taken[at] = true;
+                    (Label::Moved, Some(&now[at]))
+                }
+                None => (
+                    Label::Gone,
+                    now.iter()
+                        .find(|new| elsewhere(new) && new.body_hash != old.body_hash),
+                ),
+            },
+        };
+        rows.push(Row {
+            label,
+            item: old.clone(),
+            now: found.cloned(),
+        });
+    }
     Comparison {
         root: root.to_path_buf(),
         rows,
@@ -396,6 +395,41 @@ mod tests {
                 item("src/keys.rs", "Router", "spell"),
                 Some(item("src/keys.rs", "Speller", "spell")),
             )]
+        );
+    }
+
+    #[test]
+    fn a_deleted_copy_of_a_body_its_namesake_still_holds_is_gone() {
+        let was = [
+            item("src/keys.rs", "", "spell"),
+            item("src/ui.rs", "", "spell"),
+        ];
+        let now = [item("src/ui.rs", "", "spell")];
+
+        assert_eq!(
+            compare(Path::new("/repo"), &was, &now).rows,
+            vec![row(Label::Gone, item("src/keys.rs", "", "spell"), None)]
+        );
+    }
+
+    #[test]
+    fn two_items_cannot_move_into_one() {
+        let was = [
+            item("src/keys.rs", "", "spell"),
+            item("src/tree.rs", "", "spell"),
+        ];
+        let now = [item("src/ui.rs", "", "spell")];
+
+        assert_eq!(
+            compare(Path::new("/repo"), &was, &now).rows,
+            vec![
+                row(
+                    Label::Moved,
+                    item("src/keys.rs", "", "spell"),
+                    Some(item("src/ui.rs", "", "spell")),
+                ),
+                row(Label::Gone, item("src/tree.rs", "", "spell"), None),
+            ]
         );
     }
 
