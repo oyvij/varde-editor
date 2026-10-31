@@ -380,26 +380,27 @@ fn row_lines(row: &Row, width: usize) -> Vec<String> {
     }
     if let (Label::SignatureChanged, Some(now)) = (row.label, &row.now) {
         let column = width.saturating_sub(LABEL_COLUMN + GUTTER) / 2;
-        let [was, now] =
-            [("was: ", &row.item.signature), ("now: ", &now.signature)].map(|(said, signature)| {
-                match column >= SIDE_BY_SIDE {
-                    true => wrapped(&plain(signature), column, said, "     "),
-                    false => wrapped(
-                        &plain(signature),
-                        width,
-                        &format!("{under}{said}"),
-                        &format!("{under}     "),
-                    ),
-                }
-            });
+        let hanging = " ".repeat("was: ".len());
+        let signatures = [("was: ", &row.item.signature), ("now: ", &now.signature)];
         match column >= SIDE_BY_SIDE {
-            true => lines.extend((0..was.len().max(now.len())).map(|at| {
-                let left = was.get(at).map_or("", String::as_str);
-                let right = now.get(at).map_or("", String::as_str);
-                let pad = " ".repeat(column - left.width() + GUTTER);
-                format!("{under}{left}{pad}{right}").trim_end().to_string()
+            true => {
+                let [was, now] = signatures
+                    .map(|(said, signature)| wrapped(&plain(signature), column, said, &hanging));
+                lines.extend((0..was.len().max(now.len())).map(|at| {
+                    let left = was.get(at).map_or("", String::as_str);
+                    let right = now.get(at).map_or("", String::as_str);
+                    let pad = " ".repeat(column - left.width() + GUTTER);
+                    format!("{under}{left}{pad}{right}").trim_end().to_string()
+                }));
+            }
+            false => lines.extend(signatures.into_iter().flat_map(|(said, signature)| {
+                wrapped(
+                    &plain(signature),
+                    width,
+                    &format!("{under}{said}"),
+                    &format!("{under}{hanging}"),
+                )
             })),
-            false => lines.extend(was.into_iter().chain(now)),
         }
     }
     lines
@@ -455,9 +456,9 @@ pub fn list_lines(
                 .into_iter()
                 .map(|line| (Tone::Dimmed, line)),
         );
-    }
-    if comparison(state).is_some_and(|comparison| comparison.rows.is_empty()) {
-        lines.push((Tone::Dimmed, "nothing named was removed".to_string()));
+        if comparison.rows.is_empty() {
+            lines.push((Tone::Dimmed, "nothing named was removed".to_string()));
+        }
     }
     for (at, row) in rows(state).iter().enumerate() {
         let tone = match at == selected {
@@ -1119,6 +1120,19 @@ mod tests {
         assert!(lines[first + 1..]
             .iter()
             .all(|line| !line.contains("now: ")));
+    }
+
+    #[test]
+    fn a_quoted_stretch_wider_than_its_column_still_sits_inside_the_box() {
+        let quoted = signature_changed(
+            "(label: &'static str = \"default\"(far_wider_than_thirty_columns_by_a_long_way))",
+            "()",
+        );
+        let side_by_side = LABEL_COLUMN + 30 + 2 + 30;
+
+        for line in row_lines(&quoted, side_by_side) {
+            assert!(line.width() <= side_by_side, "{line:?}");
+        }
     }
 
     #[test]
