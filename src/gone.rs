@@ -4,7 +4,7 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::{Path, PathBuf};
 use unicode_width::UnicodeWidthStr;
 
-pub const GLYPH: &str = "\u{25cc}";
+const GLYPH: &str = "\u{25cc}";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
@@ -51,7 +51,7 @@ pub struct Row {
     pub now: Option<Item>,
 }
 
-pub fn sentence(row: &Row) -> String {
+fn sentence(row: &Row) -> String {
     match (row.label, &row.now) {
         (Label::Moved, Some(now)) => format!("same body now lives in {}", plain(&now.file)),
         (Label::SignatureChanged, _) => {
