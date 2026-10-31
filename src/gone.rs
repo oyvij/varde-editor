@@ -29,12 +29,16 @@ pub struct Item {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Label {
     Gone,
+    Moved,
+    SignatureChanged,
 }
 
 impl Label {
     pub fn as_str(self) -> &'static str {
         match self {
             Label::Gone => "gone",
+            Label::Moved => "moved",
+            Label::SignatureChanged => "signature changed",
         }
     }
 }
@@ -43,6 +47,19 @@ impl Label {
 pub struct Row {
     pub label: Label,
     pub item: Item,
+    pub now: Option<Item>,
+}
+
+pub fn sentence(row: &Row) -> String {
+    match (row.label, &row.now) {
+        (Label::Moved, Some(now)) => format!("same body now lives in {}", now.file),
+        (Label::SignatureChanged, _) => {
+            "still here; its parameters or return type changed".to_string()
+        }
+        (Label::Gone, _) | (Label::Moved, None) => {
+            "existed in HEAD, not in this file now".to_string()
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,14 +71,14 @@ pub struct Comparison {
 impl Comparison {
     pub fn per_file(&self) -> BTreeMap<&str, usize> {
         let mut counts = BTreeMap::new();
-        for row in &self.rows {
+        for row in self.rows.iter().filter(|row| row.label == Label::Gone) {
             *counts.entry(row.item.file.as_str()).or_insert(0) += 1;
         }
         counts
     }
 
     pub fn per_root(&self) -> BTreeMap<&Path, usize> {
-        BTreeMap::from([(self.root.as_path(), self.rows.len())])
+        BTreeMap::from([(self.root.as_path(), self.per_file().values().sum())])
     }
 }
 
@@ -146,16 +163,52 @@ fn walk(
 }
 
 pub fn compare(root: &Path, was: &[Item], now: &[Item]) -> Comparison {
+    let same = |old: &Item, new: &Item| {
+        new.file == old.file && new.container == old.container && new.name == old.name
+    };
+    let mut partners: Vec<Option<&Item>> = vec![None; was.len()];
+    let mut taken = vec![false; now.len()];
+    for by_body in [true, false] {
+        for (old, partner) in was.iter().zip(partners.iter_mut()) {
+            if partner.is_some() {
+                continue;
+            }
+            let found = (0..now.len()).find(|&at| {
+                !taken[at]
+                    && same(old, &now[at])
+                    && (!by_body || now[at].body_hash == old.body_hash)
+            });
+            if let Some(at) = found {
+                taken[at] = true;
+                *partner = Some(&now[at]);
+            }
+        }
+    }
     let rows = was
         .iter()
-        .filter(|old| {
-            !now.iter().any(|new| {
-                new.file == old.file && new.container == old.container && new.name == old.name
-            })
-        })
-        .map(|old| Row {
-            label: Label::Gone,
-            item: old.clone(),
+        .zip(partners)
+        .filter_map(|(old, partner)| match partner {
+            Some(new) => (new.signature != old.signature).then(|| Row {
+                label: Label::SignatureChanged,
+                item: old.clone(),
+                now: Some(new.clone()),
+            }),
+            None => {
+                let elsewhere = |new: &&Item| new.name == old.name && !same(old, new);
+                let (label, found) = match now
+                    .iter()
+                    .filter(elsewhere)
+                    .find(|new| new.body_hash == old.body_hash)
+                {
+                    Some(new) => (Label::Moved, Some(new)),
+                    None => (Label::Gone, now.iter().find(elsewhere)),
+                };
+                Some(Row {
+                    label,
+                    item: old.clone(),
+                    now: found.cloned(),
+                })
+            }
         })
         .collect();
     Comparison {
@@ -215,7 +268,10 @@ pub fn rows(state: &State) -> &[Row] {
 }
 
 pub fn shown(state: &State) -> Option<usize> {
-    let count = rows(state).len();
+    let count = rows(state)
+        .iter()
+        .filter(|row| row.label == Label::Gone)
+        .count();
     (state.view == View::Review && !computing(state) && count > 0).then_some(count)
 }
 
@@ -250,10 +306,7 @@ mod tests {
             item("src/keys.rs", "", "route"),
             item("src/keys.rs", "Router", "spell"),
         ];
-        let now = [
-            item("src/keys.rs", "", "route"),
-            item("src/keys.rs", "", "spell"),
-        ];
+        let now = [item("src/keys.rs", "", "route")];
 
         let compared = compare(Path::new("/repo"), &was, &now);
 
@@ -262,6 +315,7 @@ mod tests {
             vec![Row {
                 label: Label::Gone,
                 item: item("src/keys.rs", "Router", "spell"),
+                now: None,
             }]
         );
     }
@@ -285,6 +339,188 @@ mod tests {
         assert_eq!(
             compared.per_root(),
             BTreeMap::from([(Path::new("/repo"), 3)])
+        );
+    }
+
+    fn with(item: Item, signature: &str, body_hash: u64, line: usize) -> Item {
+        Item {
+            signature: signature.to_string(),
+            body_hash,
+            line,
+            ..item
+        }
+    }
+
+    fn row(label: Label, item: Item, now: Option<Item>) -> Row {
+        Row { label, item, now }
+    }
+
+    #[test]
+    fn an_unchanged_item_and_one_whose_body_alone_changed_are_not_listed() {
+        let was = [
+            item("src/keys.rs", "", "route"),
+            item("src/keys.rs", "", "spell"),
+        ];
+        let now = [
+            item("src/keys.rs", "", "route"),
+            with(item("src/keys.rs", "", "spell"), "()", 2, 9),
+        ];
+
+        assert_eq!(compare(Path::new("/repo"), &was, &now).rows, vec![]);
+    }
+
+    #[test]
+    fn an_item_whose_body_now_lives_in_another_file_is_moved() {
+        let was = [item("src/keys.rs", "", "spell")];
+        let now = [item("src/ui.rs", "", "spell")];
+
+        assert_eq!(
+            compare(Path::new("/repo"), &was, &now).rows,
+            vec![row(
+                Label::Moved,
+                item("src/keys.rs", "", "spell"),
+                Some(item("src/ui.rs", "", "spell")),
+            )]
+        );
+    }
+
+    #[test]
+    fn an_item_whose_body_now_lives_in_another_container_is_moved() {
+        let was = [item("src/keys.rs", "Router", "spell")];
+        let now = [item("src/keys.rs", "Speller", "spell")];
+
+        assert_eq!(
+            compare(Path::new("/repo"), &was, &now).rows,
+            vec![row(
+                Label::Moved,
+                item("src/keys.rs", "Router", "spell"),
+                Some(item("src/keys.rs", "Speller", "spell")),
+            )]
+        );
+    }
+
+    #[test]
+    fn an_item_moved_and_edited_is_gone_and_names_where_its_namesake_lives() {
+        let was = [item("src/keys.rs", "", "spell")];
+        let elsewhere = with(item("src/ui.rs", "", "spell"), "()", 2, 30);
+
+        assert_eq!(
+            compare(Path::new("/repo"), &was, std::slice::from_ref(&elsewhere)).rows,
+            vec![row(
+                Label::Gone,
+                item("src/keys.rs", "", "spell"),
+                Some(elsewhere),
+            )]
+        );
+    }
+
+    #[test]
+    fn an_item_whose_parameters_changed_is_signature_changed() {
+        let was = [item("src/keys.rs", "", "spell")];
+        let changed = with(item("src/keys.rs", "", "spell"), "(word: &str)", 2, 1);
+
+        assert_eq!(
+            compare(Path::new("/repo"), &was, std::slice::from_ref(&changed)).rows,
+            vec![row(
+                Label::SignatureChanged,
+                item("src/keys.rs", "", "spell"),
+                Some(changed),
+            )]
+        );
+    }
+
+    #[test]
+    fn overloads_pair_by_body_before_source_order() {
+        let first = with(item("src/shape.cpp", "Shape", "area"), "(int)", 1, 10);
+        let second = with(item("src/shape.cpp", "Shape", "area"), "(double)", 2, 20);
+        let now = [
+            with(item("src/shape.cpp", "Shape", "area"), "(double)", 2, 10),
+            with(item("src/shape.cpp", "Shape", "area"), "(int)", 1, 20),
+        ];
+
+        assert_eq!(
+            compare(Path::new("/repo"), &[first, second], &now).rows,
+            vec![]
+        );
+    }
+
+    #[test]
+    fn overloads_whose_bodies_changed_pair_in_source_order() {
+        let first = with(item("src/shape.cpp", "Shape", "area"), "(int)", 1, 10);
+        let second = with(item("src/shape.cpp", "Shape", "area"), "(double)", 2, 20);
+        let now = [
+            with(item("src/shape.cpp", "Shape", "area"), "(int)", 3, 10),
+            with(item("src/shape.cpp", "Shape", "area"), "(float)", 4, 20),
+        ];
+
+        assert_eq!(
+            compare(Path::new("/repo"), &[first, second.clone()], &now).rows,
+            vec![row(Label::SignatureChanged, second, Some(now[1].clone()))]
+        );
+    }
+
+    #[test]
+    fn an_old_overload_left_unpaired_is_gone() {
+        let first = with(item("src/shape.cpp", "Shape", "area"), "(int)", 1, 10);
+        let second = with(item("src/shape.cpp", "Shape", "area"), "(double)", 2, 20);
+        let now = [with(
+            item("src/shape.cpp", "Shape", "area"),
+            "(double)",
+            2,
+            10,
+        )];
+
+        assert_eq!(
+            compare(Path::new("/repo"), &[first.clone(), second], &now).rows,
+            vec![row(Label::Gone, first, None)]
+        );
+    }
+
+    #[test]
+    fn only_gone_rows_are_counted() {
+        let was = [
+            item("src/keys.rs", "", "spell"),
+            item("src/keys.rs", "", "route"),
+            item("src/ui.rs", "", "draw"),
+        ];
+        let now = [
+            item("src/tree.rs", "", "spell"),
+            with(item("src/keys.rs", "", "route"), "(key: Key)", 1, 1),
+        ];
+
+        let compared = compare(Path::new("/repo"), &was, &now);
+
+        assert_eq!(compared.rows.len(), 3);
+        assert_eq!(compared.per_file(), BTreeMap::from([("src/ui.rs", 1)]));
+        assert_eq!(
+            compared.per_root(),
+            BTreeMap::from([(Path::new("/repo"), 1)])
+        );
+    }
+
+    #[test]
+    fn each_label_has_its_word() {
+        assert_eq!(Label::Gone.as_str(), "gone");
+        assert_eq!(Label::Moved.as_str(), "moved");
+        assert_eq!(Label::SignatureChanged.as_str(), "signature changed");
+    }
+
+    #[test]
+    fn each_label_has_its_sentence() {
+        let was = item("src/keys.rs", "", "spell");
+        let now = item("src/ui.rs", "", "spell");
+
+        assert_eq!(
+            sentence(&row(Label::Gone, was.clone(), None)),
+            "existed in HEAD, not in this file now"
+        );
+        assert_eq!(
+            sentence(&row(Label::Moved, was.clone(), Some(now.clone()))),
+            "same body now lives in src/ui.rs"
+        );
+        assert_eq!(
+            sentence(&row(Label::SignatureChanged, was, Some(now))),
+            "still here; its parameters or return type changed"
         );
     }
 

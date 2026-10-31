@@ -50,6 +50,17 @@ Feature: Gone
       | src/ui.rs   |           | draw  | function | (frame: &Frame)   | c3        | 17   | working tree |
     Then no Gone Chip is shown
 
+  Scenario: An item whose exact body moved to another file is moved, not gone
+    Given I opened Review view
+    When the Gone items arrive:
+      | file        | container | name  | kind     | signature    | body hash | line | revision     |
+      | src/keys.rs |           | spell | function | (word: &str) | b2        | 120  | HEAD         |
+      | src/ui.rs   |           | spell | function | (word: &str) | b2        | 30   | working tree |
+    Then no Gone Chip is shown
+    And the Gone rows are:
+      | label | file        | name  |
+      | moved | src/keys.rs | spell |
+
   Scenario: No Gone Chip while the analysis is on its way
     When I open Review view
     Then the Gone state is "computing"
