@@ -662,6 +662,7 @@ pub enum Event {
         generation: u64,
         was: Vec<gone::Item>,
         now: Vec<gone::Item>,
+        unmeasured: Vec<gone::Unmeasured>,
     },
     StartRefactorLoop(risk::Scope),
     StopRefactorLoop,
@@ -7187,8 +7188,9 @@ fn on_story_file_written(state: &State, mut next: State, event: Event, wheeled: 
             generation,
             was,
             now,
+            unmeasured,
         } => {
-            gone::arrived(&mut next, generation, was, now);
+            gone::arrived(&mut next, generation, was, now, unmeasured);
             Vec::new()
         }
 

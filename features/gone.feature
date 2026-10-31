@@ -61,6 +61,28 @@ Feature: Gone
       | label | file        | name  |
       | moved | src/keys.rs | spell |
 
+  Scenario: Removed items and files Gone could not measure are both counted on the Chip
+    Given I opened Review view
+    And Gone could not measure:
+      | file             | language | uncovered              |
+      | scripts/build.go | Go       | file                   |
+      | src/shape.h      | C++      | prototypes-and-macros  |
+    When the Gone items arrive:
+      | file        | container | name  | kind     | signature    | body hash | line | revision |
+      | src/keys.rs |           | spell | function | (word: &str) | b2        | 120  | HEAD     |
+    Then the Gone Chip shows 1 gone and 2 not measured
+
+  Scenario: Files Gone could not measure show the Chip even when nothing measured was removed
+    Given I opened Review view
+    And Gone could not measure:
+      | file             | language | uncovered |
+      | scripts/build.go | Go       | file      |
+    When the Gone items arrive:
+      | file        | container | name  | kind     | signature         | body hash | line | revision     |
+      | src/keys.rs |           | route | function | (key: Key) -> Act | a1        | 88   | HEAD         |
+      | src/keys.rs |           | route | function | (key: Key) -> Act | a1        | 88   | working tree |
+    Then the Gone Chip shows 0 gone and 1 not measured
+
   Scenario: No Gone Chip while the analysis is on its way
     When I open Review view
     Then the Gone state is "computing"

@@ -2,6 +2,7 @@ use crate::{risk, State, Tone, View};
 use std::collections::BTreeMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::{Path, PathBuf};
+use unicode_width::UnicodeWidthStr;
 
 pub const GLYPH: &str = "\u{25cc}";
 
@@ -62,10 +63,24 @@ pub fn sentence(row: &Row) -> String {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Uncovered {
+    File,
+    PrototypesAndMacros,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Unmeasured {
+    pub file: String,
+    pub language: String,
+    pub uncovered: Uncovered,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Comparison {
     pub root: PathBuf,
     pub rows: Vec<Row>,
+    pub unmeasured: Vec<Unmeasured>,
 }
 
 impl Comparison {
@@ -213,6 +228,7 @@ pub fn compare(root: &Path, was: &[Item], now: &[Item]) -> Comparison {
     Comparison {
         root: root.to_path_buf(),
         rows,
+        unmeasured: Vec::new(),
     }
 }
 
@@ -230,12 +246,21 @@ pub struct Gone {
     pub answered: u64,
 }
 
-pub fn arrived(state: &mut State, generation: u64, was: Vec<Item>, now: Vec<Item>) {
+pub fn arrived(
+    state: &mut State,
+    generation: u64,
+    was: Vec<Item>,
+    now: Vec<Item>,
+    unmeasured: Vec<Unmeasured>,
+) {
     if generation != state.risk.asked || state.risk.scope != risk::Scope::Review {
         return;
     }
     state.gone.answered = generation;
-    state.gone.found = Found::Current(compare(state.repo_root(), &was, &now));
+    state.gone.found = Found::Current(Comparison {
+        unmeasured,
+        ..compare(state.repo_root(), &was, &now)
+    });
 }
 
 pub fn went_stale(gone: &mut Gone) {
@@ -259,28 +284,53 @@ pub fn view_state(state: &State) -> &'static str {
     }
 }
 
-pub fn rows(state: &State) -> &[Row] {
+fn comparison(state: &State) -> Option<&Comparison> {
     match &state.gone.found {
-        Found::None => &[],
-        Found::Current(comparison) | Found::Stale(comparison) => &comparison.rows,
+        Found::None => None,
+        Found::Current(comparison) | Found::Stale(comparison) => Some(comparison),
     }
 }
 
-pub fn shown(state: &State) -> Option<usize> {
-    let count = rows(state)
+pub fn rows(state: &State) -> &[Row] {
+    comparison(state).map_or(&[], |comparison| &comparison.rows)
+}
+
+pub fn shown(state: &State) -> Option<(usize, usize)> {
+    let removed = rows(state)
         .iter()
         .filter(|row| row.label == Label::Gone)
         .count();
-    (state.view == View::Review && !computing(state) && count > 0).then_some(count)
+    let unmeasured = comparison(state).map_or(0, |comparison| comparison.unmeasured.len());
+    (state.view == View::Review && !computing(state) && removed + unmeasured > 0)
+        .then_some((removed, unmeasured))
 }
 
-pub fn chip(state: &State) -> Option<(Tone, String)> {
-    let count = shown(state)?;
-    let (tone, said) = match state.gone.found {
-        Found::Stale(_) => (Tone::Dimmed, format!("gone {count} stale")),
-        Found::Current(_) | Found::None => (Tone::Plain, format!("gone {count}")),
+pub fn chip(state: &State, room: usize) -> Option<(Tone, String)> {
+    let (removed, unmeasured) = shown(state)?;
+    let count = match removed {
+        0 => "gone".to_string(),
+        removed => format!("gone {removed}"),
     };
-    Some((tone, format!(" {GLYPH} {said} \u{b7} x :gone ")))
+    let (tone, said) = match state.gone.found {
+        Found::Stale(_) => (Tone::Dimmed, format!("{count} stale")),
+        Found::Current(_) | Found::None => (Tone::Plain, count.clone()),
+    };
+    let (said, narrow) = match unmeasured {
+        0 => (said, count),
+        unmeasured => (
+            format!("{said} \u{b7} {unmeasured} not measured"),
+            format!("{count} \u{b7} {unmeasured}?"),
+        ),
+    };
+    [
+        format!(" {GLYPH} {said} \u{b7} x :gone "),
+        format!(" {GLYPH} {said} "),
+        format!(" {GLYPH} {narrow} "),
+        format!(" {GLYPH} "),
+    ]
+    .into_iter()
+    .find(|text| text.width() <= room)
+    .map(|text| (tone, text))
 }
 
 #[cfg(test)]
@@ -572,10 +622,35 @@ mod tests {
         state
     }
 
+    fn not_measured(file: &str) -> Unmeasured {
+        Unmeasured {
+            file: file.to_string(),
+            language: "Go".to_string(),
+            uncovered: Uncovered::File,
+        }
+    }
+
+    fn with_unmeasured(mut state: State, files: &[&str]) -> State {
+        if let Found::Current(comparison) | Found::Stale(comparison) = &mut state.gone.found {
+            comparison.unmeasured = files.iter().map(|file| not_measured(file)).collect();
+        }
+        state
+    }
+
+    fn nothing_removed(files: &[&str]) -> State {
+        let mut state = reviewing(Found::Current);
+        state.gone.found = Found::Current(compare(Path::new("/repo"), &[], &[]));
+        with_unmeasured(state, files)
+    }
+
+    fn said(state: &State, room: usize) -> Option<String> {
+        chip(state, room).map(|(_, text)| text)
+    }
+
     #[test]
     fn the_chip_names_the_count_and_its_keys() {
         assert_eq!(
-            chip(&reviewing(Found::Current)),
+            chip(&reviewing(Found::Current), 80),
             Some((Tone::Plain, " \u{25cc} gone 1 \u{b7} x :gone ".to_string()))
         );
     }
@@ -583,11 +658,78 @@ mod tests {
     #[test]
     fn a_stale_chip_says_so_and_is_dimmed() {
         assert_eq!(
-            chip(&reviewing(Found::Stale)),
+            chip(&reviewing(Found::Stale), 80),
             Some((
                 Tone::Dimmed,
                 " \u{25cc} gone 1 stale \u{b7} x :gone ".to_string()
             ))
         );
+    }
+
+    #[test]
+    fn the_chip_counts_the_files_it_could_not_measure() {
+        let state = with_unmeasured(reviewing(Found::Current), &["a.go", "b.go"]);
+
+        assert_eq!(
+            said(&state, 80).as_deref(),
+            Some(" \u{25cc} gone 1 \u{b7} 2 not measured \u{b7} x :gone ")
+        );
+    }
+
+    #[test]
+    fn with_nothing_measured_removed_the_chip_still_counts_what_it_could_not_measure() {
+        assert_eq!(
+            said(&nothing_removed(&["a.go"]), 80).as_deref(),
+            Some(" \u{25cc} gone \u{b7} 1 not measured \u{b7} x :gone ")
+        );
+    }
+
+    #[test]
+    fn with_no_rows_and_every_file_measured_there_is_no_chip() {
+        assert_eq!(said(&nothing_removed(&[]), 80), None);
+    }
+
+    #[test]
+    fn short_of_room_the_chip_sheds_its_keys_first() {
+        let state = with_unmeasured(reviewing(Found::Current), &["a.go", "b.go"]);
+
+        assert_eq!(
+            said(&state, 30).as_deref(),
+            Some(" \u{25cc} gone 1 \u{b7} 2 not measured ")
+        );
+    }
+
+    #[test]
+    fn on_a_narrow_border_the_chip_shrinks_to_its_counts() {
+        let state = with_unmeasured(reviewing(Found::Current), &["a.go", "b.go"]);
+
+        assert_eq!(
+            said(&state, 20).as_deref(),
+            Some(" \u{25cc} gone 1 \u{b7} 2? ")
+        );
+        assert_eq!(
+            said(&nothing_removed(&["a.go"]), 20).as_deref(),
+            Some(" \u{25cc} gone \u{b7} 1? ")
+        );
+    }
+
+    #[test]
+    fn the_chip_is_never_cut_mid_word_at_any_width() {
+        let state = with_unmeasured(reviewing(Found::Current), &["a.go", "b.go"]);
+        let whole = [
+            " \u{25cc} gone 1 \u{b7} 2 not measured \u{b7} x :gone ",
+            " \u{25cc} gone 1 \u{b7} 2 not measured ",
+            " \u{25cc} gone 1 \u{b7} 2? ",
+            " \u{25cc} ",
+        ];
+
+        for room in 0..60 {
+            if let Some(text) = said(&state, room) {
+                assert!(whole.contains(&text.as_str()), "{text:?} at {room}");
+                assert!(text.chars().count() <= room, "{text:?} at {room}");
+            }
+        }
+        assert_eq!(said(&state, 2), None);
+        assert_eq!(said(&state, 3).as_deref(), Some(" \u{25cc} "));
     }
 }

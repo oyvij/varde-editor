@@ -1106,11 +1106,12 @@ fn collect_job_events(
             figures,
             before,
         });
-        let (was, now) = items;
+        let (was, now, unmeasured) = items;
         queue.push_back(Event::GoneItems {
             generation,
             was,
             now,
+            unmeasured,
         });
     }
     while let Ok((passed, output)) = tested.try_recv() {
@@ -3241,7 +3242,7 @@ type Analysed = (
     u64,
     Figures,
     Option<Figures>,
-    (Vec<gone::Item>, Vec<gone::Item>),
+    (Vec<gone::Item>, Vec<gone::Item>, Vec<gone::Unmeasured>),
 );
 
 fn answer_figures(
@@ -3257,6 +3258,7 @@ fn answer_figures(
     let items = (
         gone::items(was.as_deref().unwrap_or_default()),
         gone::items(&now),
+        unmeasured(&files),
     );
     let _ = answer.send((
         generation,
@@ -3679,6 +3681,31 @@ fn measured_at(root: &Path, files: &[String], base: &str) -> Vec<(String, Option
                 .ok()
                 .and_then(|entry| repository.find_blob(entry.id()).ok())?;
             Some((name.clone(), spaces(&path, blob.content().to_vec())))
+        })
+        .collect()
+}
+
+fn unmeasured(files: &[String]) -> Vec<gone::Unmeasured> {
+    files
+        .iter()
+        .filter_map(|file| {
+            let path = Path::new(file);
+            let extension = path.extension()?.to_string_lossy().to_lowercase();
+            let (language, uncovered) = match language(path) {
+                Some(_) if matches!(extension.as_str(), "h" | "hh" | "hpp" | "hxx" | "h++") => {
+                    ("C/C++", gone::Uncovered::PrototypesAndMacros)
+                }
+                Some(_) => return None,
+                None => (
+                    varde::highlight::code_language(file)?,
+                    gone::Uncovered::File,
+                ),
+            };
+            Some(gone::Unmeasured {
+                file: file.clone(),
+                language: language.to_string(),
+                uncovered,
+            })
         })
         .collect()
 }
@@ -4961,6 +4988,58 @@ mod tests {
         assert_ne!(body("area"), body("new"));
         assert_ne!(body("top"), body("zero"));
     }
+
+    const HEADER: &str = "#ifndef SHAPE_H\n#define SHAPE_H\n#define AREA(w, h) ((w) * (h))\nint area(int w, int h);\nstatic inline int square(int side) {\n    return side * side;\n}\n#endif\n";
+
+    #[test]
+    fn a_bodied_function_in_a_c_header_is_an_item() {
+        let analysed = super::spaces(Path::new("src/shape.h"), HEADER.as_bytes().to_vec());
+        let items = super::gone::items(&[("src/shape.h".to_string(), analysed)]);
+
+        let named: Vec<(&str, &str, &str, usize)> = items
+            .iter()
+            .map(|item| {
+                (
+                    item.container.as_str(),
+                    item.name.as_str(),
+                    item.signature.as_str(),
+                    item.line,
+                )
+            })
+            .collect();
+        assert_eq!(named, [("", "square", "(int side)", 5)]);
+    }
+
+    #[test]
+    fn a_changed_header_and_a_file_in_a_language_the_analyser_cannot_parse_are_not_measured() {
+        use varde::gone::{Uncovered, Unmeasured};
+        let files = [
+            "src/shape.h",
+            "src/shape.c",
+            "scripts/build.go",
+            "src/keys.rs",
+            "README.md",
+            "Cargo.toml",
+        ]
+        .map(str::to_string);
+
+        assert_eq!(
+            super::unmeasured(&files),
+            [
+                Unmeasured {
+                    file: "src/shape.h".to_string(),
+                    language: "C/C++".to_string(),
+                    uncovered: Uncovered::PrototypesAndMacros,
+                },
+                Unmeasured {
+                    file: "scripts/build.go".to_string(),
+                    language: "Go".to_string(),
+                    uncovered: Uncovered::File,
+                },
+            ]
+        );
+    }
+
     #[test]
     fn a_path_that_is_gone_is_a_removal_whatever_the_kind_says() {
         let root = tempfile::tempdir().expect("a temp directory");

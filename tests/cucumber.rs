@@ -107,6 +107,7 @@ pub struct VardeWorld {
     probes: BTreeSet<String>,
     resolved_oids: BTreeMap<String, (String, String)>,
     analyses: Vec<Analysis>,
+    unmeasured: Vec<varde::gone::Unmeasured>,
     head: Option<String>,
     last_authored_range: Option<(String, String)>,
     branch_refs: Vec<story::BranchRef>,
@@ -11954,7 +11955,25 @@ fn gone_items_arrive(world: &mut VardeWorld, step: &Step) {
         generation: world.state.risk.asked,
         was,
         now,
+        unmeasured: world.unmeasured.clone(),
     });
+}
+
+#[given(expr = "Gone could not measure:")]
+fn gone_could_not_measure(world: &mut VardeWorld, step: &Step) {
+    let table = step.table().expect("a table");
+    world.unmeasured = table.rows[1..]
+        .iter()
+        .map(|row| varde::gone::Unmeasured {
+            file: row[0].clone(),
+            language: row[1].clone(),
+            uncovered: match row[2].as_str() {
+                "file" => varde::gone::Uncovered::File,
+                "prototypes-and-macros" => varde::gone::Uncovered::PrototypesAndMacros,
+                other => panic!("unknown uncovered {other:?}"),
+            },
+        })
+        .collect();
 }
 
 #[when(expr = "the Gone items for the earlier analysis arrive:")]
@@ -11970,19 +11989,32 @@ fn earlier_gone_items_arrive(world: &mut VardeWorld, step: &Step) {
         generation,
         was,
         now,
+        unmeasured: Vec::new(),
     });
 }
 
 #[then(expr = "the Gone Chip shows {int}")]
 fn gone_chip_shows(world: &mut VardeWorld, expected: usize) {
-    assert_eq!(varde::gone::shown(&world.state), Some(expected));
-    assert!(varde::gone::chip(&world.state).is_some(), "no Chip drawn");
+    assert_eq!(varde::gone::shown(&world.state), Some((expected, 0)));
+    assert!(
+        varde::gone::chip(&world.state, 80).is_some(),
+        "no Chip drawn"
+    );
+}
+
+#[then(expr = "the Gone Chip shows {int} gone and {int} not measured")]
+fn gone_chip_shows_not_measured(world: &mut VardeWorld, gone: usize, unmeasured: usize) {
+    assert_eq!(varde::gone::shown(&world.state), Some((gone, unmeasured)));
+    assert!(
+        varde::gone::chip(&world.state, 80).is_some(),
+        "no Chip drawn"
+    );
 }
 
 #[then(expr = "no Gone Chip is shown")]
 fn no_gone_chip(world: &mut VardeWorld) {
     assert_eq!(varde::gone::shown(&world.state), None);
-    assert_eq!(varde::gone::chip(&world.state), None);
+    assert_eq!(varde::gone::chip(&world.state, 80), None);
 }
 
 #[then(expr = "the Gone state is {string}")]

@@ -652,7 +652,7 @@ fn border_colour(state: &State, pane: Pane) -> Color {
     }
 }
 
-fn tree_title(state: &State) -> Line<'static> {
+fn tree_title(state: &State, room: usize) -> Line<'static> {
     let mut spans = vec![Span::raw(varde::tree::title(state))];
     for (severity, label) in varde::lsp::nudge(state) {
         spans.push(Span::styled(
@@ -660,7 +660,8 @@ fn tree_title(state: &State) -> Line<'static> {
             Style::default().fg(severity_colour(severity)),
         ));
     }
-    if let Some((tone, chip)) = varde::gone::chip(state) {
+    let taken: usize = spans.iter().map(Span::width).sum();
+    if let Some((tone, chip)) = varde::gone::chip(state, room.saturating_sub(taken)) {
         let colour = match tone {
             varde::Tone::Dimmed => Color::DarkGray,
             _ => Color::Reset,
@@ -1336,7 +1337,8 @@ fn tree_block(state: &State, width: u16) -> Block<'static> {
     let chips = varde::tree_actions::transport(state);
     let labels = varde::tree_actions::transport_labels(state, width);
     let spans = transport_spans(state, Pane::Tree, &chips, labels);
-    pane_block(tree_title(state), state, Pane::Tree).title(Line::from(spans).right_aligned())
+    let room = (width as usize).saturating_sub(2 + spans.iter().map(Span::width).sum::<usize>());
+    pane_block(tree_title(state, room), state, Pane::Tree).title(Line::from(spans).right_aligned())
 }
 
 fn transport_spans(
@@ -4702,7 +4704,7 @@ mod tests {
             &[],
         ));
         let chip = |state: &State| {
-            super::tree_title(state)
+            super::tree_title(state, 80)
                 .spans
                 .into_iter()
                 .find(|span| span.content.contains("gone 1"))
@@ -4711,6 +4713,38 @@ mod tests {
         assert_eq!(chip(&state).style.fg, Some(Color::Reset));
         varde::gone::went_stale(&mut state.gone);
         assert_eq!(chip(&state).style.fg, Some(Color::DarkGray));
+    }
+
+    #[test]
+    fn the_gone_chip_fits_the_room_the_tree_border_leaves_it() {
+        use ratatui::widgets::Widget;
+        let mut state = State::default();
+        state.view = varde::View::Review;
+        state.risk.scope = varde::risk::Scope::Review;
+        let mut comparison = varde::gone::compare(std::path::Path::new("/repo"), &[], &[]);
+        comparison.unmeasured = ["scripts/build.go", "tools/gen.go"]
+            .into_iter()
+            .map(|file| varde::gone::Unmeasured {
+                file: file.to_string(),
+                language: "Go".to_string(),
+                uncovered: varde::gone::Uncovered::File,
+            })
+            .collect();
+        state.gone.found = varde::gone::Found::Current(comparison);
+        for (width, drawn) in [
+            (60, " \u{25cc} gone \u{b7} 2 not measured \u{b7} x :gone "),
+            (40, " \u{25cc} gone \u{b7} 2 not measured "),
+            (28, " \u{25cc} gone \u{b7} 2? "),
+            (18, " \u{25cc} \u{2500}"),
+        ] {
+            let area = ratatui::layout::Rect::new(0, 0, width, 4);
+            let mut buffer = ratatui::buffer::Buffer::empty(area);
+            super::tree_block(&state, width).render(area, &mut buffer);
+            let top: String = (0..width)
+                .map(|column| buffer[(column, 0)].symbol().to_string())
+                .collect();
+            assert!(top.contains(drawn), "{width}: {top:?}");
+        }
     }
 
     #[test]
