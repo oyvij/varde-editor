@@ -182,6 +182,8 @@ pub const PALETTE: [(&str, &[(char, &str)]); 5] = [
 
 const SINGLE_FILE_PALETTE: [char; 3] = ['h', 'v', 'q'];
 
+const REVIEW_PALETTE: [char; 1] = ['x'];
+
 fn palette(
     state: &State,
 ) -> impl Iterator<Item = (&'static str, Vec<&'static (char, &'static str)>)> + '_ {
@@ -193,7 +195,7 @@ fn palette(
                 .filter(|(key, _)| {
                     state.opened == Opened::Workspace || SINGLE_FILE_PALETTE.contains(key)
                 })
-                .filter(|(_, entry)| *entry != "Gone" || state.view == View::Review)
+                .filter(|(key, _)| state.view == View::Review || !REVIEW_PALETTE.contains(key))
                 .collect::<Vec<_>>();
             (*heading, offered)
         })

@@ -283,25 +283,22 @@ pub fn draw(
 }
 
 fn gone_list(frame: &mut Frame, state: &State, selected: usize, area: Rect) {
-    let lines = varde::gone::list_lines(state, selected, area.width.saturating_sub(2) as usize);
-    let lit = lines
-        .iter()
-        .rposition(|(tone, _)| *tone == varde::Tone::Lit)
-        .unwrap_or(0);
-    let scroll = (lit + 1).saturating_sub(area.height.saturating_sub(2) as usize);
-    let lines: Vec<Line> = lines
-        .into_iter()
-        .map(|(tone, text)| match tone {
-            varde::Tone::Lit => {
-                Line::styled(text, Style::default().add_modifier(Modifier::REVERSED))
-            }
-            varde::Tone::Dimmed => Line::styled(text, Style::default().fg(Color::DarkGray)),
-            varde::Tone::Plain | varde::Tone::Marked => Line::from(text),
-        })
-        .collect();
+    let lines: Vec<Line> = varde::gone::list_lines(
+        state,
+        selected,
+        area.width.saturating_sub(2) as usize,
+        area.height.saturating_sub(2) as usize,
+    )
+    .into_iter()
+    .map(|(tone, text)| match tone {
+        varde::Tone::Lit => Line::styled(text, Style::default().add_modifier(Modifier::REVERSED)),
+        varde::Tone::Dimmed => Line::styled(text, Style::default().fg(Color::DarkGray)),
+        varde::Tone::Plain | varde::Tone::Marked => Line::from(text),
+    })
+    .collect();
     frame.render_widget(Clear, area);
     frame.render_widget(
-        Paragraph::new(lines).scroll((scroll as u16, 0)).block(
+        Paragraph::new(lines).block(
             Block::default()
                 .borders(Borders::ALL)
                 .border_type(BorderType::Thick)
@@ -693,7 +690,7 @@ fn tree_title(state: &State, room: usize) -> Line<'static> {
             Style::default().fg(severity_colour(severity)),
         ));
     }
-    let taken: usize = spans.iter().map(Span::width).sum();
+    let taken = varde::tree_actions::title_width(state);
     if let Some((tone, chip)) = varde::gone::chip(state, room.saturating_sub(taken)) {
         let colour = match tone {
             varde::Tone::Dimmed => Color::DarkGray,

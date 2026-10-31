@@ -261,6 +261,10 @@ pub fn arrived(
         unmeasured,
         ..compare(state.repo_root(), &was, &now)
     });
+    let last = rows(state).len().saturating_sub(1);
+    if let crate::Modal::Gone { row } = &mut state.modal {
+        *row = (*row).min(last);
+    }
 }
 
 pub fn went_stale(gone: &mut Gone) {
@@ -335,7 +339,7 @@ pub fn chip(state: &State, room: usize) -> Option<(Tone, String)> {
 
 pub const OPEN: &str = "gone";
 
-pub const LABEL_COLUMN: usize = "signature changed".len() + 2;
+const LABEL_COLUMN: usize = "signature changed".len() + 2;
 
 fn plain(text: &str) -> String {
     anstream::adapter::strip_str(text)
@@ -352,7 +356,7 @@ fn named(item: &Item) -> String {
     }
 }
 
-pub fn row_lines(row: &Row, width: usize) -> Vec<String> {
+fn row_lines(row: &Row, width: usize) -> Vec<String> {
     let text = format!(
         "{} {}: {}",
         plain(&row.item.file),
@@ -372,7 +376,12 @@ pub fn row_lines(row: &Row, width: usize) -> Vec<String> {
     .collect()
 }
 
-pub fn list_lines(state: &State, selected: usize, width: usize) -> Vec<(Tone, String)> {
+pub fn list_lines(
+    state: &State,
+    selected: usize,
+    width: usize,
+    height: usize,
+) -> Vec<(Tone, String)> {
     let said = match (computing(state), &state.gone.found) {
         (true, _) => Some("computing"),
         (false, Found::Stale(_)) => Some("stale"),
@@ -393,7 +402,12 @@ pub fn list_lines(state: &State, selected: usize, width: usize) -> Vec<(Tone, St
         };
         lines.extend(row_lines(row, width).into_iter().map(|line| (tone, line)));
     }
-    lines
+    let lit = lines
+        .iter()
+        .rposition(|(tone, _)| *tone == Tone::Lit)
+        .unwrap_or(0);
+    let hidden = (lit + 1).saturating_sub(height);
+    lines.into_iter().skip(hidden).take(height).collect()
 }
 
 #[cfg(test)]
@@ -900,7 +914,7 @@ mod tests {
     }
 
     fn listing(state: &State) -> Vec<(Tone, String)> {
-        list_lines(state, 0, 200)
+        list_lines(state, 0, 200, 50)
     }
 
     #[test]
@@ -915,12 +929,52 @@ mod tests {
             &[],
         ));
 
-        let tones: Vec<Tone> = list_lines(&state, 1, 200)
+        let tones: Vec<Tone> = list_lines(&state, 1, 200, 50)
             .into_iter()
             .map(|(tone, _)| tone)
             .collect();
 
         assert_eq!(tones, vec![Tone::Plain, Tone::Lit]);
+    }
+
+    fn three_gone() -> State {
+        let mut state = reviewing(Found::Current);
+        state.gone.found = Found::Current(compare(
+            Path::new("/repo"),
+            &[
+                item("src/keys.rs", "", "spell"),
+                item("src/ui.rs", "", "draw"),
+                item("src/tree.rs", "", "icon"),
+            ],
+            &[],
+        ));
+        state
+    }
+
+    #[test]
+    fn a_selected_row_below_the_box_scrolls_into_view() {
+        let shown = list_lines(&three_gone(), 2, 200, 2);
+
+        assert_eq!(shown.len(), 2);
+        assert!(shown[0].1.contains("draw"), "{shown:?}");
+        assert_eq!(shown[1].0, Tone::Lit);
+        assert!(shown[1].1.contains("icon"), "{shown:?}");
+    }
+
+    #[test]
+    fn a_smaller_result_pulls_the_selection_onto_its_last_row() {
+        let mut state = three_gone();
+        state.modal = crate::Modal::Gone { row: 2 };
+
+        arrived(
+            &mut state,
+            0,
+            vec![item("src/keys.rs", "", "spell")],
+            vec![],
+            vec![],
+        );
+
+        assert_eq!(state.modal, crate::Modal::Gone { row: 0 });
     }
 
     #[test]
