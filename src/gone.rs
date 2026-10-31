@@ -22,7 +22,7 @@ pub struct Item {
     pub name: String,
     pub kind: Kind,
     pub signature: String,
-    pub body: u64,
+    pub body_hash: u64,
     pub line: usize,
 }
 
@@ -65,7 +65,7 @@ impl Comparison {
     }
 }
 
-pub fn cut(text: &str, name: &str) -> (String, u64) {
+pub fn signature_and_body_hash(text: &str, name: &str) -> (String, u64) {
     let word = |letter: char| letter.is_alphanumeric() || letter == '_';
     let after_name = text
         .match_indices(name)
@@ -129,7 +129,7 @@ fn walk(
             name: name.clone(),
             kind,
             signature: space.signature.clone(),
-            body: space.body,
+            body_hash: space.body_hash,
             line: space.line,
         });
     }
@@ -239,7 +239,7 @@ mod tests {
             name: name.to_string(),
             kind: Kind::Function,
             signature: "()".to_string(),
-            body: 1,
+            body_hash: 1,
             line: 1,
         }
     }
@@ -312,8 +312,12 @@ mod tests {
 
     #[test]
     fn a_stale_chip_says_so_and_is_dimmed() {
-        let (tone, text) = chip(&reviewing(Found::Stale)).expect("a chip");
-        assert_eq!(tone, Tone::Dimmed);
-        assert!(text.contains("gone 1 stale"), "{text}");
+        assert_eq!(
+            chip(&reviewing(Found::Stale)),
+            Some((
+                Tone::Dimmed,
+                " \u{25cc} gone 1 stale \u{b7} x :gone ".to_string()
+            ))
+        );
     }
 }

@@ -32,7 +32,7 @@ pub struct Space {
     pub line: usize,
     pub kind: Kind,
     pub signature: String,
-    pub body: u64,
+    pub body_hash: u64,
     pub metrics: Metrics,
     pub children: Vec<Space>,
 }
@@ -837,7 +837,7 @@ mod tests {
             line: 1,
             kind,
             signature: String::new(),
-            body: 0,
+            body_hash: 0,
             metrics: Metrics {
                 cyclomatic,
                 ..Metrics::default()

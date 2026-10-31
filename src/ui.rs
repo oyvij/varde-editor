@@ -4693,7 +4693,7 @@ mod tests {
             name: "spell".to_string(),
             kind: varde::gone::Kind::Function,
             signature: "()".to_string(),
-            body: 1,
+            body_hash: 1,
             line: 1,
         };
         state.gone.found = varde::gone::Found::Current(varde::gone::compare(

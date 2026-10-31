@@ -10550,7 +10550,7 @@ fn figures_from(step: &Step, unparsed: usize, prefix: &str) -> Figures {
             line: column(row, "line").parse().unwrap_or_default(),
             kind: Kind::Function,
             signature: String::new(),
-            body: 0,
+            body_hash: 0,
             metrics: Metrics {
                 cyclomatic: figure("cyclomatic"),
                 cognitive: figure("cognitive"),
@@ -10566,7 +10566,7 @@ fn figures_from(step: &Step, unparsed: usize, prefix: &str) -> Figures {
                 line: 1,
                 kind: Kind::Unit,
                 signature: String::new(),
-                body: 0,
+                body_hash: 0,
                 metrics: Metrics::default(),
                 children: vec![space],
             }),
@@ -11934,7 +11934,7 @@ fn gone_items(step: &Step) -> (Vec<varde::gone::Item>, Vec<varde::gone::Item>) {
                 other => panic!("unknown kind {other:?}"),
             },
             signature: column(row, "signature"),
-            body: u64::from_str_radix(&column(row, "body hash"), 16).expect("a hex body hash"),
+            body_hash: u64::from_str_radix(&column(row, "body hash"), 16).expect("a hex body hash"),
             line: column(row, "line").parse().expect("a line"),
         };
         match column(row, "revision").as_str() {

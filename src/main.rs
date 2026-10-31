@@ -1106,13 +1106,12 @@ fn collect_job_events(
             figures,
             before,
         });
-        if let Some((was, now)) = items {
-            queue.push_back(Event::GoneItems {
-                generation,
-                was,
-                now,
-            });
-        }
+        let (was, now) = items;
+        queue.push_back(Event::GoneItems {
+            generation,
+            was,
+            now,
+        });
     }
     while let Ok((passed, output)) = tested.try_recv() {
         queue.push_back(Event::TestsFinished { passed, output });
@@ -2902,7 +2901,7 @@ fn perform_jobs(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>) {
             }
         }
         Effect::AnalyseRisk {
-            scope,
+            scope: _,
             generation,
             files,
             base,
@@ -2910,7 +2909,7 @@ fn perform_jobs(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>) {
             let answer = edge.analysed.clone();
             let root = edge.root.clone();
             std::thread::spawn(move || {
-                answer_figures(scope, generation, files, base, &root, &answer);
+                answer_figures(generation, files, base, &root, &answer);
             });
         }
         Effect::ResolveStory {
@@ -3242,11 +3241,10 @@ type Analysed = (
     u64,
     Figures,
     Option<Figures>,
-    Option<(Vec<gone::Item>, Vec<gone::Item>)>,
+    (Vec<gone::Item>, Vec<gone::Item>),
 );
 
 fn answer_figures(
-    scope: risk::Scope,
     generation: u64,
     files: Option<Vec<String>>,
     base: Option<String>,
@@ -3256,12 +3254,10 @@ fn answer_figures(
     let files = files.unwrap_or_else(|| walk(root));
     let now = measure(root, &files);
     let was = base.map(|base| measured_at(root, &files, &base));
-    let items = (scope == risk::Scope::Review).then(|| {
-        (
-            gone::items(was.as_deref().unwrap_or_default()),
-            gone::items(&now),
-        )
-    });
+    let items = (
+        gone::items(was.as_deref().unwrap_or_default()),
+        gone::items(&now),
+    );
     let _ = answer.send((
         generation,
         risk::figures(now),
@@ -3709,12 +3705,13 @@ fn space(analysed: &rust_code_analysis::FuncSpace, lines: &[&str]) -> Space {
         .get(analysed.start_line.saturating_sub(1)..analysed.end_line.min(lines.len()))
         .unwrap_or_default()
         .join("\n");
-    let (signature, body) = gone::cut(&text, analysed.name.as_deref().unwrap_or_default());
+    let (signature, body_hash) =
+        gone::signature_and_body_hash(&text, analysed.name.as_deref().unwrap_or_default());
     Space {
         name: analysed.name.clone(),
         line: analysed.start_line,
         signature,
-        body,
+        body_hash,
         kind: match analysed.kind {
             rust_code_analysis::SpaceKind::Unknown => risk::Kind::Unknown,
             rust_code_analysis::SpaceKind::Function => risk::Kind::Function,
@@ -4958,7 +4955,7 @@ mod tests {
                 .iter()
                 .find(|item| item.name == name)
                 .expect("the item")
-                .body
+                .body_hash
         };
         assert_eq!(body("area"), body("zero"), "the same body, laid out apart");
         assert_ne!(body("area"), body("new"));
