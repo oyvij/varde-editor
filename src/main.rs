@@ -5008,6 +5008,16 @@ mod tests {
             })
             .collect();
         assert_eq!(named, [("", "square", "(int side)", 5)]);
+        let source = "#include \"shape.h\"\n\nint square(int side) {\n    return side * side;\n}\n";
+        let moved = super::gone::items(&[(
+            "src/shape.c".to_string(),
+            super::spaces(Path::new("src/shape.c"), source.as_bytes().to_vec()),
+        )]);
+        assert_eq!(
+            moved.iter().map(|item| item.body_hash).collect::<Vec<_>>(),
+            [items[0].body_hash],
+            "the body moved from the header to the source file hashes the same"
+        );
     }
 
     #[test]

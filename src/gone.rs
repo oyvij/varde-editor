@@ -307,19 +307,19 @@ pub fn shown(state: &State) -> Option<(usize, usize)> {
 
 pub fn chip(state: &State, room: usize) -> Option<(Tone, String)> {
     let (removed, unmeasured) = shown(state)?;
-    let count = match removed {
+    let head = match removed {
         0 => "gone".to_string(),
         removed => format!("gone {removed}"),
     };
     let (tone, said) = match state.gone.found {
-        Found::Stale(_) => (Tone::Dimmed, format!("{count} stale")),
-        Found::Current(_) | Found::None => (Tone::Plain, count.clone()),
+        Found::Stale(_) => (Tone::Dimmed, format!("{head} stale")),
+        Found::Current(_) | Found::None => (Tone::Plain, head.clone()),
     };
     let (said, narrow) = match unmeasured {
-        0 => (said, count),
+        0 => (said, head),
         unmeasured => (
             format!("{said} \u{b7} {unmeasured} not measured"),
-            format!("{count} \u{b7} {unmeasured}?"),
+            format!("{head} \u{b7} {unmeasured}?"),
         ),
     };
     [
@@ -715,21 +715,45 @@ mod tests {
 
     #[test]
     fn the_chip_is_never_cut_mid_word_at_any_width() {
-        let state = with_unmeasured(reviewing(Found::Current), &["a.go", "b.go"]);
-        let whole = [
-            " \u{25cc} gone 1 \u{b7} 2 not measured \u{b7} x :gone ",
-            " \u{25cc} gone 1 \u{b7} 2 not measured ",
-            " \u{25cc} gone 1 \u{b7} 2? ",
-            " \u{25cc} ",
+        let states = [
+            (
+                with_unmeasured(reviewing(Found::Current), &["a.go", "b.go"]),
+                [
+                    " \u{25cc} gone 1 \u{b7} 2 not measured \u{b7} x :gone ",
+                    " \u{25cc} gone 1 \u{b7} 2 not measured ",
+                    " \u{25cc} gone 1 \u{b7} 2? ",
+                ],
+            ),
+            (
+                nothing_removed(&["a.go"]),
+                [
+                    " \u{25cc} gone \u{b7} 1 not measured \u{b7} x :gone ",
+                    " \u{25cc} gone \u{b7} 1 not measured ",
+                    " \u{25cc} gone \u{b7} 1? ",
+                ],
+            ),
+            (
+                with_unmeasured(reviewing(Found::Stale), &["a.go"]),
+                [
+                    " \u{25cc} gone 1 stale \u{b7} 1 not measured \u{b7} x :gone ",
+                    " \u{25cc} gone 1 stale \u{b7} 1 not measured ",
+                    " \u{25cc} gone 1 \u{b7} 1? ",
+                ],
+            ),
         ];
 
-        for room in 0..60 {
-            if let Some(text) = said(&state, room) {
-                assert!(whole.contains(&text.as_str()), "{text:?} at {room}");
-                assert!(text.chars().count() <= room, "{text:?} at {room}");
+        for (state, whole) in &states {
+            for room in 0..70 {
+                if let Some(text) = said(state, room) {
+                    assert!(
+                        whole.contains(&text.as_str()) || text == " \u{25cc} ",
+                        "{text:?} at {room}"
+                    );
+                    assert!(text.width() <= room, "{text:?} at {room}");
+                }
             }
+            assert_eq!(said(state, 2), None);
+            assert_eq!(said(state, 3).as_deref(), Some(" \u{25cc} "));
         }
-        assert_eq!(said(&state, 2), None);
-        assert_eq!(said(&state, 3).as_deref(), Some(" \u{25cc} "));
     }
 }
