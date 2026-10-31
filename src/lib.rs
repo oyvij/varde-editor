@@ -9,6 +9,7 @@ pub mod editor;
 pub mod filter;
 pub mod fold;
 pub mod format;
+pub mod gone;
 pub mod highlight;
 pub mod history;
 pub mod keys;
@@ -657,6 +658,11 @@ pub enum Event {
         figures: risk::Figures,
         before: Option<risk::Figures>,
     },
+    GoneItems {
+        generation: u64,
+        was: Vec<gone::Item>,
+        now: Vec<gone::Item>,
+    },
     StartRefactorLoop(risk::Scope),
     StopRefactorLoop,
     TestsFinished {
@@ -1273,6 +1279,7 @@ pub struct State {
     pub file_hunks: std::sync::Arc<[story::FileHunks]>,
     pub story_sets: Vec<String>,
     pub risk: risk::Risk,
+    pub gone: gone::Gone,
     pub corner: layout::Corner,
     pub risk_all: bool,
     pub risk_selection: usize,
@@ -1540,6 +1547,7 @@ impl Default for State {
             story_sets: Vec::new(),
             predictions_put: BTreeSet::new(),
             risk: risk::Risk::default(),
+            gone: gone::Gone::default(),
             tick: 0,
             clock_ms: 0,
             watcher: wait::Watcher::Trusted,
@@ -5153,6 +5161,7 @@ fn on_editor_escape(state: &State, mut next: State, event: Event, wheeled: bool)
             (Some(path), Some(buffer)) => {
                 let contents = buffer.write();
                 risk::went_stale(&mut next.risk);
+                gone::went_stale(&mut next.gone);
                 let evaluate = walkthrough::current_code(state)
                     .filter(|waypoint| state.root.join(&waypoint.file) == path)
                     .map(|waypoint| walkthrough::Request {
@@ -7173,6 +7182,15 @@ fn on_story_file_written(state: &State, mut next: State, event: Event, wheeled: 
             figures,
             before,
         } => risk::figures_arrived(&mut next, generation, figures, before),
+
+        Event::GoneItems {
+            generation,
+            was,
+            now,
+        } => {
+            gone::arrived(&mut next, generation, was, now);
+            Vec::new()
+        }
 
         Event::RecomputeRisk => {
             if next.refactor.running.is_none() {

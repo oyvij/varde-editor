@@ -23,6 +23,7 @@ use terminput_crossterm::{to_terminput_key, to_terminput_mouse};
 use varde::authorship;
 use varde::editor;
 use varde::format;
+use varde::gone;
 use varde::keys::{self, Drafts};
 use varde::layout;
 use varde::mouse;
@@ -590,7 +591,7 @@ struct Edge {
     hover_due: Option<Instant>,
     notice_due: Option<Instant>,
     hand: bool,
-    analysed: Sender<(u64, Figures, Option<Figures>)>,
+    analysed: Sender<Analysed>,
     tested: Sender<(bool, String)>,
     ran: Sender<Option<i32>>,
     formatted: Sender<(String, PathBuf, u64, format::Answer)>,
@@ -1082,7 +1083,7 @@ fn leave_terminal(enhanced: bool, stderr: OwnedFd) {
 }
 
 fn collect_job_events(
-    analysed: &Receiver<(u64, Figures, Option<Figures>)>,
+    analysed: &Receiver<Analysed>,
     tested: &Receiver<(bool, String)>,
     formatted: &Receiver<(String, PathBuf, u64, format::Answer)>,
     released: &Receiver<Option<String>>,
@@ -1099,12 +1100,19 @@ fn collect_job_events(
     while let Ok(outcome) = replaced.try_recv() {
         queue.push_back(Event::BinaryReplaced(outcome));
     }
-    while let Ok((generation, figures, before)) = analysed.try_recv() {
+    while let Ok((generation, figures, before, items)) = analysed.try_recv() {
         queue.push_back(Event::RiskFigures {
             generation,
             figures,
             before,
         });
+        if let Some((was, now)) = items {
+            queue.push_back(Event::GoneItems {
+                generation,
+                was,
+                now,
+            });
+        }
     }
     while let Ok((passed, output)) = tested.try_recv() {
         queue.push_back(Event::TestsFinished { passed, output });
@@ -2894,7 +2902,7 @@ fn perform_jobs(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>) {
             }
         }
         Effect::AnalyseRisk {
-            scope: _,
+            scope,
             generation,
             files,
             base,
@@ -2902,7 +2910,7 @@ fn perform_jobs(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>) {
             let answer = edge.analysed.clone();
             let root = edge.root.clone();
             std::thread::spawn(move || {
-                answer_figures(generation, files, base, &root, &answer);
+                answer_figures(scope, generation, files, base, &root, &answer);
             });
         }
         Effect::ResolveStory {
@@ -3230,17 +3238,36 @@ fn answer_formatter(command: &str, args: &[String], root: &Path, text: &str) -> 
     }
 }
 
+type Analysed = (
+    u64,
+    Figures,
+    Option<Figures>,
+    Option<(Vec<gone::Item>, Vec<gone::Item>)>,
+);
+
 fn answer_figures(
+    scope: risk::Scope,
     generation: u64,
     files: Option<Vec<String>>,
     base: Option<String>,
     root: &Path,
-    answer: &Sender<(u64, Figures, Option<Figures>)>,
+    answer: &Sender<Analysed>,
 ) {
     let files = files.unwrap_or_else(|| walk(root));
-    let figures = measure(root, &files);
-    let before = base.map(|base| measured_at(root, &files, &base));
-    let _ = answer.send((generation, figures, before));
+    let now = measure(root, &files);
+    let was = base.map(|base| measured_at(root, &files, &base));
+    let items = (scope == risk::Scope::Review).then(|| {
+        (
+            gone::items(was.as_deref().unwrap_or_default()),
+            gone::items(&now),
+        )
+    });
+    let _ = answer.send((
+        generation,
+        risk::figures(now),
+        was.map(risk::figures),
+        items,
+    ));
 }
 
 fn snapshot_dir(root: &Path, sidecar: Option<&Path>, iteration: u32) -> PathBuf {
@@ -3621,8 +3648,8 @@ fn head_branch(root: &Path) -> Option<String> {
         .flatten()
 }
 
-fn measure(root: &Path, files: &[String]) -> Figures {
-    let analysed = files
+fn measure(root: &Path, files: &[String]) -> Vec<(String, Option<Space>)> {
+    files
         .iter()
         .filter_map(|name| {
             let path = root.join(name);
@@ -3632,22 +3659,21 @@ fn measure(root: &Path, files: &[String]) -> Figures {
                 .and_then(|source| spaces(&path, source));
             Some((name.clone(), space))
         })
-        .collect();
-    risk::figures(analysed)
+        .collect()
 }
 
-fn measured_at(root: &Path, files: &[String], base: &str) -> Figures {
+fn measured_at(root: &Path, files: &[String], base: &str) -> Vec<(String, Option<Space>)> {
     let Ok(repository) = git2::Repository::open(root) else {
-        return Figures::default();
+        return Vec::new();
     };
     let tree = git2::Oid::from_str(base)
         .ok()
         .and_then(|oid| repository.find_commit(oid).ok())
         .and_then(|commit| commit.tree().ok());
     let Some(tree) = tree else {
-        return Figures::default();
+        return Vec::new();
     };
-    let analysed = files
+    files
         .iter()
         .filter_map(|name| {
             let path = root.join(name);
@@ -3658,8 +3684,7 @@ fn measured_at(root: &Path, files: &[String], base: &str) -> Figures {
                 .and_then(|entry| repository.find_blob(entry.id()).ok())?;
             Some((name.clone(), spaces(&path, blob.content().to_vec())))
         })
-        .collect();
-    risk::figures(analysed)
+        .collect()
 }
 
 fn language(path: &Path) -> Option<rust_code_analysis::LANG> {
@@ -3673,14 +3698,23 @@ fn language(path: &Path) -> Option<rust_code_analysis::LANG> {
 
 fn spaces(path: &Path, source: Vec<u8>) -> Option<Space> {
     let language = language(path)?;
+    let text = String::from_utf8_lossy(&source).into_owned();
+    let lines: Vec<&str> = text.lines().collect();
     rust_code_analysis::get_function_spaces(&language, source, path, None)
-        .map(|analysed| space(&analysed))
+        .map(|analysed| space(&analysed, &lines))
 }
 
-fn space(analysed: &rust_code_analysis::FuncSpace) -> Space {
+fn space(analysed: &rust_code_analysis::FuncSpace, lines: &[&str]) -> Space {
+    let text = lines
+        .get(analysed.start_line.saturating_sub(1)..analysed.end_line.min(lines.len()))
+        .unwrap_or_default()
+        .join("\n");
+    let (signature, body) = gone::cut(&text, analysed.name.as_deref().unwrap_or_default());
     Space {
         name: analysed.name.clone(),
         line: analysed.start_line,
+        signature,
+        body,
         kind: match analysed.kind {
             rust_code_analysis::SpaceKind::Unknown => risk::Kind::Unknown,
             rust_code_analysis::SpaceKind::Function => risk::Kind::Function,
@@ -3698,7 +3732,11 @@ fn space(analysed: &rust_code_analysis::FuncSpace) -> Space {
             maintainability: analysed.metrics.mi.mi_visual_studio().max(0.0) as u32,
             lines: analysed.metrics.loc.sloc() as u32,
         },
-        children: analysed.spaces.iter().map(space).collect(),
+        children: analysed
+            .spaces
+            .iter()
+            .map(|child| space(child, lines))
+            .collect(),
     }
 }
 
@@ -4855,7 +4893,10 @@ mod tests {
             None,
         )
         .expect("the fixture parses");
-        let (functions, unparsed) = risk::functions("fixture.rs", &space(&analysed));
+        let (functions, unparsed) = risk::functions(
+            "fixture.rs",
+            &space(&analysed, &FIXTURE.lines().collect::<Vec<_>>()),
+        );
 
         assert_eq!(unparsed, 0);
         assert_eq!(
@@ -4877,6 +4918,51 @@ mod tests {
                     > analysed.spaces[0].metrics.cyclomatic.cyclomatic() as u32,
             "the parent's figure is more than its own space's"
         );
+    }
+
+    const ITEMS: &str = "pub struct Point {\n    x: i32,\n}\n\npub trait Shape {\n    fn area(&self) -> f64;\n    fn name(&self) -> String { String::new() }\n}\n\nimpl Shape for Point {\n    fn area(&self) -> f64 {\n        0.0\n    }\n}\n\nimpl Point {\n    pub fn new(x: i32) -> Self {\n        Point { x }\n    }\n}\n\nfn top(a: u8,\n       b: u8) -> u8 { a + b }\n\nfn zero() -> f64 { 0.0 }\n";
+
+    #[test]
+    fn the_named_items_carry_their_container_kind_signature_and_body() {
+        let analysed = super::spaces(Path::new("fixture.rs"), ITEMS.as_bytes().to_vec());
+        let items = super::gone::items(&[("fixture.rs".to_string(), analysed)]);
+
+        let named: Vec<(&str, &str, varde::gone::Kind, &str, usize)> = items
+            .iter()
+            .map(|item| {
+                (
+                    item.container.as_str(),
+                    item.name.as_str(),
+                    item.kind,
+                    item.signature.as_str(),
+                    item.line,
+                )
+            })
+            .collect();
+        use varde::gone::Kind::{Function, Method, Trait};
+        assert_eq!(
+            named,
+            [
+                ("", "Shape", Trait, "", 5),
+                ("Shape", "name", Method, "(&self) -> String", 7),
+                ("Point", "area", Method, "(&self) -> f64", 11),
+                ("Point", "new", Method, "(x: i32) -> Self", 17),
+                ("", "top", Function, "(a: u8, b: u8) -> u8", 22),
+                ("", "zero", Function, "() -> f64", 25),
+            ],
+            "a struct with no methods and a bodiless trait method are no space of their own"
+        );
+        assert!(items.iter().all(|item| item.file == "fixture.rs"));
+        let body = |name: &str| {
+            items
+                .iter()
+                .find(|item| item.name == name)
+                .expect("the item")
+                .body
+        };
+        assert_eq!(body("area"), body("zero"), "the same body, laid out apart");
+        assert_ne!(body("area"), body("new"));
+        assert_ne!(body("top"), body("zero"));
     }
     #[test]
     fn a_path_that_is_gone_is_a_removal_whatever_the_kind_says() {

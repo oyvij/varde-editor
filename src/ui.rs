@@ -660,6 +660,13 @@ fn tree_title(state: &State) -> Line<'static> {
             Style::default().fg(severity_colour(severity)),
         ));
     }
+    if let Some((tone, chip)) = varde::gone::chip(state) {
+        let colour = match tone {
+            varde::Tone::Dimmed => Color::DarkGray,
+            _ => Color::Reset,
+        };
+        spans.push(Span::styled(chip, Style::default().fg(colour)));
+    }
     Line::from(spans)
 }
 
@@ -4674,6 +4681,37 @@ mod tests {
         WARNING,
     };
     use varde::risk::{Figure, Figures, Function, Metrics};
+
+    #[test]
+    fn the_gone_chip_sits_on_the_tree_border_and_dims_while_stale() {
+        let mut state = State::default();
+        state.view = varde::View::Review;
+        state.risk.scope = varde::risk::Scope::Review;
+        let removed = varde::gone::Item {
+            file: "src/keys.rs".to_string(),
+            container: String::new(),
+            name: "spell".to_string(),
+            kind: varde::gone::Kind::Function,
+            signature: "()".to_string(),
+            body: 1,
+            line: 1,
+        };
+        state.gone.found = varde::gone::Found::Current(varde::gone::compare(
+            std::path::Path::new("/repo"),
+            &[removed],
+            &[],
+        ));
+        let chip = |state: &State| {
+            super::tree_title(state)
+                .spans
+                .into_iter()
+                .find(|span| span.content.contains("gone 1"))
+                .expect("a Gone Chip on the border")
+        };
+        assert_eq!(chip(&state).style.fg, Some(Color::Reset));
+        varde::gone::went_stale(&mut state.gone);
+        assert_eq!(chip(&state).style.fg, Some(Color::DarkGray));
+    }
 
     #[test]
     fn the_border_names_the_author_and_keeps_the_date_whole_when_it_is_cut() {

@@ -31,6 +31,8 @@ pub struct Space {
     pub name: Option<String>,
     pub line: usize,
     pub kind: Kind,
+    pub signature: String,
+    pub body: u64,
     pub metrics: Metrics,
     pub children: Vec<Space>,
 }
@@ -834,6 +836,8 @@ mod tests {
             name: name.map(str::to_string),
             line: 1,
             kind,
+            signature: String::new(),
+            body: 0,
             metrics: Metrics {
                 cyclomatic,
                 ..Metrics::default()
