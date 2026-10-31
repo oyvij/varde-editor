@@ -70,11 +70,15 @@ foreground, never in red.
 
 | Chip | What it means |
 |---|---|
-| no Chip | nothing named was removed and every changed file was measured, or Gone is still measuring |
+| no Chip | nothing named was removed and nothing changed went unmeasured, or Gone is still measuring |
 | `gone 2` | two named items were removed |
-| `gone 2 · 1 not measured` | two were removed, and one changed file could not be measured, so the count may be short |
-| `gone · 1 not measured` | nothing measured was removed, but one changed file could not be measured |
+| `gone 2 · 1 not measured` | two were removed, and one changed file was not fully measured, so the count may be short |
+| `gone · 1 not measured` | nothing measured was removed, but one changed file was not fully measured |
 | `gone 2 stale` | the last result, dimmed, because a file was saved since it was measured |
+
+The `not measured` count is every file in the list's `not measured` header. That includes each
+changed C or C++ header, for its prototypes and macros, so a change to a header alone shows
+`gone · 1 not measured`.
 
 Gone never shows `gone 0`. A zero would claim more than Gone knows when a file went unmeasured.
 
@@ -87,7 +91,7 @@ On a narrow terminal the Chip sheds its keys first, then shortens to `gone 2 · 
 ## The list
 
 Open the list with palette `x` (`Ctrl+Space x`, "Gone" under Views), with `:gone`, or by clicking
-the Chip. Both keys work only in Review view. The palette does not offer `x` anywhere else. The list
+the Chip. Palette `x` and `:gone` work only in Review view. The palette does not offer `x` anywhere else. The list
 opens over the centre diff, at the diff pane's full width.
 
 | Key | In the Gone list |

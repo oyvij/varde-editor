@@ -199,11 +199,11 @@ commits nothing, and touches no file outside the review. The same action in the 
 
 ## What was removed
 
-Entering Review view also lists the named items the change removed. When a function, method or
-type that was in `HEAD` is missing from the working tree, a ` ◌ gone 2 · x :gone ` Chip appears on
-the tree pane's top border beside the Risk delta. Palette `x` or `:gone` opens the list over the
-diff, and `Enter` on a row jumps to the item's removed lines. [Gone](gone.md) has the details,
-including what it does not cover.
+Entering Review view also lists the named items the change removed. When a function, method, class,
+trait, interface or C/C++ struct that was in `HEAD` is missing from the working tree, a
+` ◌ gone 2 · x :gone ` Chip appears on the tree pane's top border beside the Risk delta. Palette `x`
+or `:gone` opens the list over the diff, and `Enter` on a row jumps to the item's removed lines.
+[Gone](gone.md) has the details, including what it does not cover.
 
 ## What Review view does not do
 
