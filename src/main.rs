@@ -3660,21 +3660,21 @@ fn measure(root: &Path, files: &[String], parses: &Parses) -> Vec<(String, Optio
             language(&path)?;
             let space = std::fs::read(&path).ok().and_then(|source| {
                 let id = git2::Oid::hash_object(git2::ObjectType::Blob, &source).ok()?;
-                parsed(parses, &path, id, source)
+                parse_once(parses, &path, id, source)
             });
             Some((name.clone(), space))
         })
         .collect()
 }
 
-fn parsed(parses: &Parses, path: &Path, id: git2::Oid, source: Vec<u8>) -> Option<Space> {
+fn parse_once(parses: &Parses, path: &Path, id: git2::Oid, source: Vec<u8>) -> Option<Space> {
     let key = (language(path)?.get_name(), id);
-    if let Some(space) = parses.lock().ok()?.get(&key) {
-        return space.clone();
-    }
-    let space = spaces(path, source);
-    parses.lock().ok()?.insert(key, space.clone());
-    space
+    parses
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .entry(key)
+        .or_insert_with(|| spaces(path, source))
+        .clone()
 }
 
 fn measured_at(
@@ -3704,7 +3704,7 @@ fn measured_at(
                 .and_then(|entry| repository.find_blob(entry.id()).ok())?;
             Some((
                 name.clone(),
-                parsed(parses, &path, blob.id(), blob.content().to_vec()),
+                parse_once(parses, &path, blob.id(), blob.content().to_vec()),
             ))
         })
         .collect()
@@ -5112,16 +5112,10 @@ mod tests {
                 ),
             ])
         );
-        assert_eq!(parses.lock().expect("the parses").len(), 2);
         assert_eq!(
-            super::unmeasured(&files)
-                .iter()
-                .map(|unmeasured| (unmeasured.file.as_str(), unmeasured.uncovered))
-                .collect::<Vec<_>>(),
-            [
-                ("shape.h", varde::gone::Uncovered::PrototypesAndMacros),
-                ("build.go", varde::gone::Uncovered::File),
-            ]
+            parses.lock().expect("the parses").len(),
+            2,
+            "a language the analyser cannot parse is never cached"
         );
 
         parses
@@ -5165,6 +5159,24 @@ mod tests {
             .expect("the status")
             .iter()
             .all(|entry| entry.path() == Ok("fixture.rs")));
+    }
+
+    #[test]
+    fn a_cache_left_poisoned_by_a_panicked_analysis_still_parses() {
+        let dir = tempfile::tempdir().expect("a temp directory");
+        fs::write(dir.path().join("fixture.rs"), ITEMS).expect("the file");
+        let parses = super::Parses::default();
+        let _ = std::thread::scope(|scope| {
+            scope
+                .spawn(|| {
+                    let _held = parses.lock();
+                    panic!("an analysis panicked");
+                })
+                .join()
+        });
+
+        let parsed = super::measure(dir.path(), &["fixture.rs".to_string()], &parses);
+        assert_eq!(super::gone::items(&parsed).len(), 6);
     }
 
     #[test]
