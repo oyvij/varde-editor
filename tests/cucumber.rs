@@ -1037,14 +1037,17 @@ impl VardeWorld {
                     .unwrap_or(&path)
                     .to_string_lossy()
                     .into_owned();
-                let lines = (1..=3)
-                    .map(|number| varde::DiffLine {
-                        new_line: Some(number),
-                        old_line: None,
-                        removed: false,
-                        text: format!("line {number}"),
-                    })
-                    .collect();
+                let lines = match (self.held.get(&path), self.files.get(&path)) {
+                    (Some(held), Some(now)) if held != now => unified(&file, held, now),
+                    _ => (1..=3)
+                        .map(|number| varde::DiffLine {
+                            new_line: Some(number),
+                            old_line: None,
+                            removed: false,
+                            text: format!("line {number}"),
+                        })
+                        .collect(),
+                };
                 let (state, effects) = update(
                     &self.state,
                     Event::ShowDiff {
@@ -12067,6 +12070,24 @@ fn click_gone_chip(world: &mut VardeWorld) {
     let column = tree.x + 1 + tree::title(&world.state).width() as u16 + 1;
     world.report(mouse::Kind::LeftDown, column, tree.y);
     world.report(mouse::Kind::LeftUp, column, tree.y);
+}
+
+#[then(expr = "the diff cursor is on the {word} line {string}")]
+fn diff_cursor_on_line(world: &mut VardeWorld, side: String, text: String) {
+    let diff = world.state.diff.as_ref().expect("a diff on screen");
+    let line = &diff[world.state.diff_line - 1];
+    let removed = match side.as_str() {
+        "removed" => true,
+        "added" => false,
+        other => panic!("unknown side {other:?}"),
+    };
+    assert_eq!((line.removed, line.text.as_str()), (removed, text.as_str()));
+}
+
+#[then(expr = "the diff cursor is on screen")]
+fn diff_cursor_on_screen(world: &mut VardeWorld) {
+    let line = world.state.diff_line;
+    line_on_screen(world, line);
 }
 
 #[then(expr = "the Gone list is open")]

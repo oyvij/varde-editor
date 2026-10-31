@@ -673,6 +673,7 @@ pub enum Event {
     },
     OpenGone,
     MoveGoneRow(Direction),
+    JumpToGoneRow,
     StartRefactorLoop(risk::Scope),
     StopRefactorLoop,
     TestsFinished {
@@ -6401,6 +6402,7 @@ fn on_drag_row(state: &State, mut next: State, event: Event, wheeled: bool) -> A
             next.diff = Some(lines);
             next.diff_file = Some(file);
             next.diff_revision = Some(revision);
+            gone::land(&mut next);
             vec![]
         }
 
@@ -7222,6 +7224,8 @@ fn on_story_file_written(state: &State, mut next: State, event: Event, wheeled: 
             }
             Vec::new()
         }
+
+        Event::JumpToGoneRow => gone::jump(&mut next),
 
         Event::RecomputeRisk => {
             if next.refactor.running.is_none() {

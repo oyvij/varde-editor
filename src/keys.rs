@@ -406,7 +406,11 @@ pub const CHEATSHEET: [(&str, &str, &[View]); 50] = [
     ),
     ("u", "tree: undo the last delete", &[View::Edit]),
     ("C-space x :gone", "Gone list", &[View::Review]),
-    ("j k Up Down Esc", "Gone list: row, close", &[View::Review]),
+    (
+        "j k Up Down Enter Esc",
+        "Gone list: row, go, close",
+        &[View::Review],
+    ),
 ];
 
 pub const CHORDS: [(&str, &str, &[View]); 4] = [
@@ -753,6 +757,7 @@ fn modal_key(state: &State, drafts: &mut Drafts, event: KeyEvent, at_ms: u64) ->
             (KeyCode::Esc, _) => vec![Event::Cancel],
             (KeyCode::Up, _) | (_, Some('k')) => vec![Event::MoveGoneRow(Direction::Up)],
             (KeyCode::Down, _) | (_, Some('j')) => vec![Event::MoveGoneRow(Direction::Down)],
+            (KeyCode::Enter, _) => vec![Event::JumpToGoneRow],
             _ => vec![],
         },
         Modal::Branches { filter, .. } => match event.code {

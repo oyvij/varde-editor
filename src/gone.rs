@@ -1,4 +1,4 @@
-use crate::{preview, risk, State, Tone, View};
+use crate::{preview, risk, Effect, State, Tone, View};
 use std::collections::BTreeMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::{Path, PathBuf};
@@ -240,10 +240,53 @@ pub enum Found {
     Stale(Comparison),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Landing {
+    Was(usize),
+    Now(usize),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Gone {
     pub found: Found,
     pub answered: u64,
+    pub landing: Option<(String, Landing)>,
+}
+
+pub fn jump(state: &mut State) -> Vec<Effect> {
+    let crate::Modal::Gone { row } = state.modal else {
+        return Vec::new();
+    };
+    let Some(row) = rows(state).get(row) else {
+        return Vec::new();
+    };
+    let (file, landing) = match (row.label, &row.now) {
+        (Label::SignatureChanged, Some(now)) => (now.file.clone(), Landing::Now(now.line)),
+        _ => (row.item.file.clone(), Landing::Was(row.item.line)),
+    };
+    let path = state.repo_root().join(&file);
+    state.modal = crate::Modal::None;
+    state.focus = crate::Pane::Editor;
+    state.tree_selection = Some(path.clone());
+    state.gone.landing = Some((file, landing));
+    vec![Effect::ReadDiff(path)]
+}
+
+pub fn land(state: &mut State) {
+    let (Some(diff), Some((file, landing))) = (&state.diff, &state.gone.landing) else {
+        return;
+    };
+    if state.diff_file.as_ref() != Some(file) {
+        return;
+    }
+    let found = diff.iter().position(|line| match *landing {
+        Landing::Was(at) => line.removed && line.old_line.is_some_and(|old| old >= at),
+        Landing::Now(at) => line.old_line.is_none() && line.new_line.is_some_and(|new| new >= at),
+    });
+    if let Some(found) = found {
+        state.diff_line = found + 1;
+    }
+    state.gone.landing = None;
 }
 
 pub fn arrived(
