@@ -242,8 +242,8 @@ pub enum Found {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Landing {
-    Was(usize),
-    Now(usize),
+    Removed(usize),
+    Changed { was: usize, now: usize },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -261,8 +261,14 @@ pub fn jump(state: &mut State) -> Vec<Effect> {
         return Vec::new();
     };
     let (file, landing) = match (row.label, &row.now) {
-        (Label::SignatureChanged, Some(now)) => (now.file.clone(), Landing::Now(now.line)),
-        _ => (row.item.file.clone(), Landing::Was(row.item.line)),
+        (Label::SignatureChanged, Some(now)) => (
+            now.file.clone(),
+            Landing::Changed {
+                was: row.item.line,
+                now: now.line,
+            },
+        ),
+        _ => (row.item.file.clone(), Landing::Removed(row.item.line)),
     };
     let path = state.repo_root().join(&file);
     state.modal = crate::Modal::None;
@@ -273,20 +279,25 @@ pub fn jump(state: &mut State) -> Vec<Effect> {
 }
 
 pub fn land(state: &mut State) {
-    let (Some(diff), Some((file, landing))) = (&state.diff, &state.gone.landing) else {
+    let (Some(diff), Some((file, landing))) = (&state.diff, state.gone.landing.take()) else {
         return;
     };
-    if state.diff_file.as_ref() != Some(file) {
+    if state.diff_file.as_ref() != Some(&file) {
         return;
     }
-    let found = diff.iter().position(|line| match *landing {
-        Landing::Was(at) => line.removed && line.old_line.is_some_and(|old| old >= at),
-        Landing::Now(at) => line.old_line.is_none() && line.new_line.is_some_and(|new| new >= at),
+    let removed_from = |line: &crate::DiffLine, at: usize| {
+        line.removed && line.old_line.is_some_and(|old| old >= at)
+    };
+    let found = diff.iter().position(|line| match landing {
+        Landing::Removed(at) => removed_from(line, at),
+        Landing::Changed { was, now } => {
+            removed_from(line, was)
+                || (line.old_line.is_none() && line.new_line.is_some_and(|new| new >= now))
+        }
     });
     if let Some(found) = found {
         state.diff_line = found + 1;
     }
-    state.gone.landing = None;
 }
 
 pub fn arrived(
@@ -1368,6 +1379,74 @@ mod tests {
 
         assert_eq!(lines[0], (Tone::Dimmed, "computing".to_string()));
         assert!(lines[1].1.starts_with("gone "), "{lines:?}");
+    }
+
+    fn diff_line(old_line: Option<usize>, new_line: Option<usize>) -> crate::DiffLine {
+        crate::DiffLine {
+            new_line,
+            old_line,
+            removed: new_line.is_none(),
+            text: String::new(),
+        }
+    }
+
+    fn diff_arrives(state: &State, file: &str, lines: Vec<crate::DiffLine>) -> State {
+        crate::update(
+            state,
+            crate::Event::ShowDiff {
+                file: file.to_string(),
+                lines,
+                revision: "r".to_string(),
+            },
+        )
+        .0
+    }
+
+    #[test]
+    fn a_diff_of_another_file_arriving_first_drops_the_pending_landing() {
+        let mut state = reviewing(Found::Current);
+        state.modal = crate::Modal::Gone { row: 0 };
+        let (state, _) = crate::update(&state, crate::Event::JumpToGoneRow);
+
+        let state = diff_arrives(
+            &state,
+            "src/ui.rs",
+            vec![diff_line(Some(1), Some(1)), diff_line(Some(2), None)],
+        );
+        assert_eq!(state.diff_line, 1);
+        let state = diff_arrives(
+            &state,
+            "src/keys.rs",
+            vec![diff_line(Some(1), Some(1)), diff_line(Some(2), None)],
+        );
+
+        assert_eq!(state.diff_line, 1);
+    }
+
+    #[test]
+    fn a_signature_change_that_only_removed_a_line_lands_on_the_removed_line() {
+        let mut state = reviewing(Found::Current);
+        state.gone.found = Found::Current(compare(
+            Path::new("/repo"),
+            &[with(item("src/keys.rs", "", "route"), "(a, b)", 1, 10)],
+            &[with(item("src/keys.rs", "", "route"), "(a)", 1, 10)],
+        ));
+        state.modal = crate::Modal::Gone { row: 0 };
+        let (state, _) = crate::update(&state, crate::Event::JumpToGoneRow);
+
+        let state = diff_arrives(
+            &state,
+            "src/keys.rs",
+            vec![
+                diff_line(Some(10), Some(10)),
+                diff_line(Some(11), Some(11)),
+                diff_line(Some(12), None),
+                diff_line(Some(13), Some(12)),
+                diff_line(None, Some(30)),
+            ],
+        );
+
+        assert_eq!(state.diff_line, 3);
     }
 
     #[test]

@@ -83,7 +83,7 @@ Feature: Enter on a Gone row lands on the old text in the Review diff
     Then the Gone list is closed
     And the tree selection is "src/keys.rs"
     And the diff for "src/keys.rs" is shown
-    And the diff cursor is on the added line "fn route(key: &Key) {"
+    And the diff cursor is on the removed line "fn route(key: Key) {"
     And the editor pane has focus
 
   Scenario: The jump opens no buffer and runs no command

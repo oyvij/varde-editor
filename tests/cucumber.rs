@@ -12072,16 +12072,11 @@ fn click_gone_chip(world: &mut VardeWorld) {
     world.report(mouse::Kind::LeftUp, column, tree.y);
 }
 
-#[then(expr = "the diff cursor is on the {word} line {string}")]
-fn diff_cursor_on_line(world: &mut VardeWorld, side: String, text: String) {
+#[then(expr = "the diff cursor is on the removed line {string}")]
+fn diff_cursor_on_removed_line(world: &mut VardeWorld, text: String) {
     let diff = world.state.diff.as_ref().expect("a diff on screen");
     let line = &diff[world.state.diff_line - 1];
-    let removed = match side.as_str() {
-        "removed" => true,
-        "added" => false,
-        other => panic!("unknown side {other:?}"),
-    };
-    assert_eq!((line.removed, line.text.as_str()), (removed, text.as_str()));
+    assert_eq!((line.removed, line.text.as_str()), (true, text.as_str()));
 }
 
 #[then(expr = "the diff cursor is on screen")]
