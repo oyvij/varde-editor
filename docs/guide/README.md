@@ -12,6 +12,7 @@ not there and not in these pages, it does not exist.
 | [Review](review.md) | read a change as diffs, annotate it with ISSUE / NOTE / SUGGESTION / COMMENT, and `:submit` it to the AI |
 | [Stories](stories.md) | have the AI narrate a change as a Story set and walk its Spine and Steps, from a range, a branch, or a guest repo |
 | [Risk](risk.md) | see which functions are too complex, and run the Refactor loop behind the project's test Gate |
+| [Gone](gone.md) | see which named items a change removed, moved or re-signed in Review view, and what Gone does not cover |
 | [AI pane](ai-pane.md) | host an AI CLI beside the editor, pick it with `:ai`, and understand what reaches it |
 | [Debugging](debugging.md) | set Breakpoints, start a Launch configuration, see where the program paused and walk its Frames, continue and stop |
 | [Knowledge base](knowledge.md) | keep Notes in a Vault shared by every workspace, run Skills that write and search it, and read it in the Knowledge view |
