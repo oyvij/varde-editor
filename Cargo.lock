@@ -3719,6 +3719,7 @@ dependencies = [
 name = "varde"
 version = "0.226.0"
 dependencies = [
+ "anstream",
  "anyhow",
  "arboard",
  "chrono",

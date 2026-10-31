@@ -276,7 +276,39 @@ pub fn draw(
         search_screen(frame, state);
         return;
     }
+    if let Modal::Gone { row } = state.modal {
+        gone_list(frame, state, row, rect(areas.panes.editor));
+    }
     draw_modal(frame, state, &chrome);
+}
+
+fn gone_list(frame: &mut Frame, state: &State, selected: usize, area: Rect) {
+    let lines = varde::gone::list_lines(state, selected, area.width.saturating_sub(2) as usize);
+    let lit = lines
+        .iter()
+        .rposition(|(tone, _)| *tone == varde::Tone::Lit)
+        .unwrap_or(0);
+    let scroll = (lit + 1).saturating_sub(area.height.saturating_sub(2) as usize);
+    let lines: Vec<Line> = lines
+        .into_iter()
+        .map(|(tone, text)| match tone {
+            varde::Tone::Lit => {
+                Line::styled(text, Style::default().add_modifier(Modifier::REVERSED))
+            }
+            varde::Tone::Dimmed => Line::styled(text, Style::default().fg(Color::DarkGray)),
+            varde::Tone::Plain | varde::Tone::Marked => Line::from(text),
+        })
+        .collect();
+    frame.render_widget(Clear, area);
+    frame.render_widget(
+        Paragraph::new(lines).scroll((scroll as u16, 0)).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Thick)
+                .title("GONE"),
+        ),
+        area,
+    );
 }
 
 fn draw_list_pane(frame: &mut Frame, state: &State, rows: &[Row], areas: &Areas) {
@@ -528,6 +560,7 @@ fn draw_modal(frame: &mut Frame, state: &State, chrome: &Chrome) {
         Modal::StepDetail => overlay(frame, "STEP", step_detail_lines(state)),
         Modal::Prediction { .. } => overlay(frame, "PREDICTION", prediction_lines(state)),
         Modal::Candidates(_) => {}
+        Modal::Gone { .. } => {}
         Modal::None => {}
     }
 }
@@ -1337,7 +1370,7 @@ fn tree_block(state: &State, width: u16) -> Block<'static> {
     let chips = varde::tree_actions::transport(state);
     let labels = varde::tree_actions::transport_labels(state, width);
     let spans = transport_spans(state, Pane::Tree, &chips, labels);
-    let room = (width as usize).saturating_sub(2 + spans.iter().map(Span::width).sum::<usize>());
+    let room = varde::tree_actions::title_room(state, width);
     pane_block(tree_title(state, room), state, Pane::Tree).title(Line::from(spans).right_aligned())
 }
 

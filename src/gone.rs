@@ -1,4 +1,4 @@
-use crate::{risk, State, Tone, View};
+use crate::{preview, risk, State, Tone, View};
 use std::collections::BTreeMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::{Path, PathBuf};
@@ -53,7 +53,7 @@ pub struct Row {
 
 pub fn sentence(row: &Row) -> String {
     match (row.label, &row.now) {
-        (Label::Moved, Some(now)) => format!("same body now lives in {}", now.file),
+        (Label::Moved, Some(now)) => format!("same body now lives in {}", plain(&now.file)),
         (Label::SignatureChanged, _) => {
             "still here; its parameters or return type changed".to_string()
         }
@@ -331,6 +331,69 @@ pub fn chip(state: &State, room: usize) -> Option<(Tone, String)> {
     .into_iter()
     .find(|text| text.width() <= room)
     .map(|text| (tone, text))
+}
+
+pub const OPEN: &str = "gone";
+
+pub const LABEL_COLUMN: usize = "signature changed".len() + 2;
+
+fn plain(text: &str) -> String {
+    anstream::adapter::strip_str(text)
+        .to_string()
+        .chars()
+        .filter(|character| !character.is_control())
+        .collect()
+}
+
+fn named(item: &Item) -> String {
+    match item.container.as_str() {
+        "" => plain(&item.name),
+        container => format!("{}::{}", plain(container), plain(&item.name)),
+    }
+}
+
+pub fn row_lines(row: &Row, width: usize) -> Vec<String> {
+    let text = format!(
+        "{} {}: {}",
+        plain(&row.item.file),
+        named(&row.item),
+        sentence(row)
+    );
+    let label = format!("{:LABEL_COLUMN$}", row.label.as_str());
+    let under = " ".repeat(LABEL_COLUMN);
+    textwrap::wrap(
+        &text,
+        preview::wrap_options(width)
+            .initial_indent(&label)
+            .subsequent_indent(&under),
+    )
+    .into_iter()
+    .map(|line| line.into_owned())
+    .collect()
+}
+
+pub fn list_lines(state: &State, selected: usize, width: usize) -> Vec<(Tone, String)> {
+    let said = match (computing(state), &state.gone.found) {
+        (true, _) => Some("computing"),
+        (false, Found::Stale(_)) => Some("stale"),
+        (false, Found::None) => Some("nothing measured yet"),
+        (false, Found::Current(_)) => None,
+    };
+    let mut lines: Vec<(Tone, String)> = said
+        .into_iter()
+        .map(|said| (Tone::Dimmed, said.to_string()))
+        .collect();
+    if comparison(state).is_some_and(|comparison| comparison.rows.is_empty()) {
+        lines.push((Tone::Dimmed, "nothing named was removed".to_string()));
+    }
+    for (at, row) in rows(state).iter().enumerate() {
+        let tone = match at == selected {
+            true => Tone::Lit,
+            false => Tone::Plain,
+        };
+        lines.extend(row_lines(row, width).into_iter().map(|line| (tone, line)));
+    }
+    lines
 }
 
 #[cfg(test)]
@@ -755,5 +818,148 @@ mod tests {
             assert_eq!(said(state, 2), None);
             assert_eq!(said(state, 3).as_deref(), Some(" \u{25cc} "));
         }
+    }
+
+    #[test]
+    fn a_row_puts_its_label_in_a_fixed_column_before_what_and_why() {
+        let gone = row(Label::Gone, item("src/keys.rs", "Router", "spell"), None);
+        let changed = row(
+            Label::SignatureChanged,
+            item("src/keys.rs", "", "route"),
+            Some(item("src/keys.rs", "", "route")),
+        );
+
+        assert_eq!(
+            row_lines(&gone, 200),
+            vec!["gone               src/keys.rs Router::spell: existed in HEAD, not in this file now"]
+        );
+        assert_eq!(
+            row_lines(&changed, 200),
+            vec!["signature changed  src/keys.rs route: still here; its parameters or return type changed"]
+        );
+    }
+
+    #[test]
+    fn at_forty_columns_a_row_wraps_inside_its_box_under_the_row_text() {
+        let long = row(
+            Label::Moved,
+            item(
+                "src/a/rather/deeply/nested/module/with/a/long/path/keys.rs",
+                "AVeryLongContainerNameIndeed",
+                "spell_every_word_of_the_dictionary",
+            ),
+            Some(item("src/somewhere/else/entirely/ui.rs", "", "spell")),
+        );
+
+        let lines = row_lines(&long, 40);
+
+        assert!(lines.len() > 2, "{lines:#?}");
+        assert!(
+            lines[0].starts_with("moved              src/"),
+            "{lines:#?}"
+        );
+        for line in &lines {
+            assert!(line.width() <= 40, "{line:?} is wider than 40");
+        }
+        for line in &lines[1..] {
+            assert!(line.starts_with(&" ".repeat(LABEL_COLUMN)), "{line:?}");
+            assert!(
+                !line[LABEL_COLUMN..].starts_with(' '),
+                "{line:?} is not under the row text"
+            );
+        }
+        let text: String = lines
+            .iter()
+            .map(|line| line.trim())
+            .collect::<Vec<_>>()
+            .join("");
+        assert!(
+            text.contains("src/somewhere/else/entirely/ui.rs"),
+            "{text:?}"
+        );
+    }
+
+    #[test]
+    fn control_and_escape_sequences_in_a_file_derived_name_are_stripped() {
+        let hostile = row(
+            Label::Moved,
+            item(
+                "src/\u{1b}[31mkeys.rs",
+                "Rou\u{7}ter",
+                "spe\u{1b}[2Jll\r\u{1b}]0;title\u{7}",
+            ),
+            Some(item("src/ui\u{1b}[1A.rs", "", "spell")),
+        );
+
+        let lines = row_lines(&hostile, 200);
+
+        assert_eq!(
+            lines,
+            vec!["moved              src/keys.rs Router::spell: same body now lives in src/ui.rs"]
+        );
+    }
+
+    fn listing(state: &State) -> Vec<(Tone, String)> {
+        list_lines(state, 0, 200)
+    }
+
+    #[test]
+    fn the_selected_row_is_lit_and_the_others_plain() {
+        let mut state = reviewing(Found::Current);
+        state.gone.found = Found::Current(compare(
+            Path::new("/repo"),
+            &[
+                item("src/keys.rs", "", "spell"),
+                item("src/ui.rs", "", "draw"),
+            ],
+            &[],
+        ));
+
+        let tones: Vec<Tone> = list_lines(&state, 1, 200)
+            .into_iter()
+            .map(|(tone, _)| tone)
+            .collect();
+
+        assert_eq!(tones, vec![Tone::Plain, Tone::Lit]);
+    }
+
+    #[test]
+    fn while_a_result_is_on_its_way_the_list_says_computing() {
+        let mut state = reviewing(Found::Current);
+        state.gone.found = Found::None;
+        state.risk.asked = 1;
+
+        assert_eq!(
+            listing(&state),
+            vec![(Tone::Dimmed, "computing".to_string())]
+        );
+    }
+
+    #[test]
+    fn a_stale_result_stays_up_marked_stale() {
+        let lines = listing(&reviewing(Found::Stale));
+
+        assert_eq!(lines[0], (Tone::Dimmed, "stale".to_string()));
+        assert!(lines[1].1.starts_with("gone "), "{lines:?}");
+        assert_eq!(lines.len(), 2);
+    }
+
+    #[test]
+    fn a_stale_result_waiting_for_the_next_stays_up_while_computing() {
+        let mut state = reviewing(Found::Stale);
+        state.risk.asked = 1;
+
+        let lines = listing(&state);
+
+        assert_eq!(lines[0], (Tone::Dimmed, "computing".to_string()));
+        assert!(lines[1].1.starts_with("gone "), "{lines:?}");
+    }
+
+    #[test]
+    fn a_result_with_nothing_listed_says_so() {
+        assert_eq!(
+            listing(&nothing_removed(&[])),
+            vec![(Tone::Dimmed, "nothing named was removed".to_string())]
+        );
     }
 }

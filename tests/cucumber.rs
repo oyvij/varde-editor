@@ -108,6 +108,7 @@ pub struct VardeWorld {
     resolved_oids: BTreeMap<String, (String, String)>,
     analyses: Vec<Analysis>,
     unmeasured: Vec<varde::gone::Unmeasured>,
+    before_gone_list: Option<String>,
     head: Option<String>,
     last_authored_range: Option<(String, String)>,
     branch_refs: Vec<story::BranchRef>,
@@ -422,6 +423,11 @@ impl VardeWorld {
 
     fn send(&mut self, event: Event) {
         let (state, effects) = update(&self.state, event);
+        if matches!(state.modal, Modal::Gone { .. })
+            && !matches!(self.state.modal, Modal::Gone { .. })
+        {
+            self.before_gone_list = Some(where_the_diff_is(&self.state));
+        }
         self.state = state;
         self.apply(effects);
         self.tell_core();
@@ -3321,6 +3327,7 @@ fn parse_view(name: &str) -> View {
         "Edit" => View::Edit,
         "Review" => View::Review,
         "Story" => View::Story,
+        "Knowledge" => View::Knowledge,
         other => panic!("unknown view {other:?}"),
     }
 }
@@ -9741,6 +9748,7 @@ fn modal_is(world: &mut VardeWorld, expected: String) {
         Modal::RunMark { .. } => "run-mark",
         Modal::ConfirmRevertWalkthrough => "confirm-revert-walkthrough",
         Modal::ReplaceWalkthrough => "replace-walkthrough",
+        Modal::Gone { .. } => "gone",
     };
     assert_eq!(actual, expected);
 }
@@ -10844,6 +10852,22 @@ fn palette_offers_entry(world: &mut VardeWorld, entry: String, group: String, ke
         .map(|(_, label)| *label)
         .expect("the entry");
     assert_eq!(drawn, entry, "the entry is indented under another");
+    assert_eq!(
+        varde::palette_entry(&world.state, parse_char(&key)),
+        Some(entry.as_str()),
+        "not offered in this view"
+    );
+}
+
+#[then(expr = "the view palette does not offer {string}")]
+fn palette_does_not_offer(world: &mut VardeWorld, entry: String) {
+    assert_eq!(world.state.modal, Modal::Palette);
+    let offered: Vec<&str> = PALETTE
+        .iter()
+        .flat_map(|(_, entries)| entries.iter())
+        .filter_map(|(key, _)| varde::palette_entry(&world.state, *key))
+        .collect();
+    assert!(!offered.contains(&entry.as_str()), "{entry:?} is offered");
 }
 
 #[given(expr = "the Risk list is shown")]
@@ -12020,6 +12044,74 @@ fn no_gone_chip(world: &mut VardeWorld) {
 #[then(expr = "the Gone state is {string}")]
 fn gone_state_is(world: &mut VardeWorld, expected: String) {
     assert_eq!(varde::gone::view_state(&world.state), expected);
+}
+
+fn where_the_diff_is(state: &State) -> String {
+    format!(
+        "{:?}",
+        (
+            state.view,
+            state.focus,
+            &state.diff_file,
+            state.diff_line,
+            &state.diff,
+            state.editor_scroll,
+            &state.current_buffer,
+        )
+    )
+}
+
+#[when(expr = "I click the Gone Chip")]
+fn click_gone_chip(world: &mut VardeWorld) {
+    let tree = world.panes().tree;
+    let column = tree.x + 1 + tree::title(&world.state).width() as u16 + 1;
+    world.report(mouse::Kind::LeftDown, column, tree.y);
+    world.report(mouse::Kind::LeftUp, column, tree.y);
+}
+
+#[then(expr = "the Gone list is open")]
+fn gone_list_is_open(world: &mut VardeWorld) {
+    assert!(
+        matches!(world.state.modal, Modal::Gone { .. }),
+        "{:?}",
+        world.state.modal
+    );
+}
+
+#[then(expr = "the Gone list is closed")]
+fn gone_list_is_closed(world: &mut VardeWorld) {
+    assert_eq!(world.state.modal, Modal::None);
+}
+
+#[then(expr = "the Review diff is as it was before the Gone list opened")]
+fn diff_as_before_gone_list(world: &mut VardeWorld) {
+    let before = world
+        .before_gone_list
+        .clone()
+        .expect("the Gone list was opened");
+    assert_eq!(where_the_diff_is(&world.state), before);
+}
+
+#[then(expr = "the selected Gone row is {int}")]
+fn selected_gone_row(world: &mut VardeWorld, row: usize) {
+    assert_eq!(world.state.modal, Modal::Gone { row: row - 1 });
+}
+
+#[then(expr = "the Gone list is {string}")]
+fn gone_list_is(world: &mut VardeWorld, expected: String) {
+    gone_list_is_open(world);
+    assert_eq!(varde::gone::view_state(&world.state), expected);
+}
+
+#[then(expr = "the Gone list shows the labels:")]
+fn gone_list_labels(world: &mut VardeWorld, step: &Step) {
+    gone_list_is_open(world);
+    let expected: Vec<Vec<String>> = step.table().expect("a table").rows[1..].to_vec();
+    let shown: Vec<Vec<String>> = varde::gone::rows(&world.state)
+        .iter()
+        .map(|row| vec![row.label.as_str().replace(' ', "-"), row.item.name.clone()])
+        .collect();
+    assert_eq!(shown, expected);
 }
 
 #[then(expr = "the Gone rows are:")]

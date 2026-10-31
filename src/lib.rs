@@ -163,6 +163,7 @@ pub const PALETTE: [(&str, &[(char, &str)]); 5] = [
             ('r', "Review"),
             ('s', "Story"),
             ('w', "Knowledge"),
+            ('x', "Gone"),
         ],
     ),
     (
@@ -192,6 +193,7 @@ fn palette(
                 .filter(|(key, _)| {
                     state.opened == Opened::Workspace || SINGLE_FILE_PALETTE.contains(key)
                 })
+                .filter(|(_, entry)| *entry != "Gone" || state.view == View::Review)
                 .collect::<Vec<_>>();
             (*heading, offered)
         })
@@ -324,6 +326,9 @@ pub enum Modal {
     Diverged,
     Skills {
         skills: Vec<skills::Skill>,
+        row: usize,
+    },
+    Gone {
         row: usize,
     },
     SkillQuestion {
@@ -664,6 +669,8 @@ pub enum Event {
         now: Vec<gone::Item>,
         unmeasured: Vec<gone::Unmeasured>,
     },
+    OpenGone,
+    MoveGoneRow(Direction),
     StartRefactorLoop(risk::Scope),
     StopRefactorLoop,
     TestsFinished {
@@ -3232,6 +3239,7 @@ fn palette_command(next: State, entry: &str) -> Result<(State, Vec<Effect>), Sta
         "Keys" => Event::ToggleCheatsheet,
         "Knowledge" => Event::ToggleKnowledge,
         "Skills" => Event::OpenSkills,
+        "Gone" => Event::OpenGone,
         "Update" => Event::Rebuild,
         "Quit" => Event::Quit,
         _ => return Err(next),
@@ -7194,6 +7202,25 @@ fn on_story_file_written(state: &State, mut next: State, event: Event, wheeled: 
             Vec::new()
         }
 
+        Event::OpenGone => {
+            if next.view == View::Review {
+                next.modal = Modal::Gone { row: 0 };
+            }
+            Vec::new()
+        }
+
+        Event::MoveGoneRow(direction) => {
+            let last = gone::rows(&next).len().saturating_sub(1);
+            if let Modal::Gone { row } = &mut next.modal {
+                *row = match direction {
+                    Direction::Up => row.saturating_sub(1),
+                    Direction::Down => (*row + 1).min(last),
+                    Direction::Left | Direction::Right => *row,
+                };
+            }
+            Vec::new()
+        }
+
         Event::RecomputeRisk => {
             if next.refactor.running.is_none() {
                 next.refactor = risk::Refactor::default();
@@ -7219,6 +7246,7 @@ fn on_pane_action(state: &State, mut next: State, event: Event, wheeled: bool) -
         Event::PaneAction(WIDEN_PREVIEW) => return Ok(update(state, Event::TogglePreviewWidth)),
         Event::PaneAction(SKILLS) => return Ok(update(state, Event::OpenSkills)),
         Event::PaneAction(GUIDE) => return Ok(update(state, Event::OpenGuide)),
+        Event::PaneAction(gone::OPEN) => return Ok(update(state, Event::OpenGone)),
         Event::PaneAction(risk::RECOMPUTE) => return Ok(update(state, Event::RecomputeRisk)),
         Event::PaneAction(risk::START_LOOP) => {
             return Ok(update(
@@ -12826,8 +12854,12 @@ mod tests {
 
     #[test]
     fn the_palette_fits_the_screen_it_is_drawn_on() {
+        let reviewing = State {
+            view: View::Review,
+            ..State::default()
+        };
         for screen in [24u16, 26, 30, 40] {
-            let rows = palette_rows(&State::default(), screen);
+            let rows = palette_rows(&reviewing, screen);
             assert!(
                 rows.len() <= (screen - 2) as usize,
                 "{} rows in a box that draws {} at {screen}",
