@@ -13,11 +13,11 @@ use crossterm::event::{
 use crossterm::style::Print;
 use crossterm::{execute, terminal};
 use notify::{RecursiveMode, Watcher};
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::os::fd::{AsFd, AsRawFd, OwnedFd};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use terminput_crossterm::{to_terminput_key, to_terminput_mouse};
 use varde::authorship;
@@ -592,6 +592,7 @@ struct Edge {
     notice_due: Option<Instant>,
     hand: bool,
     analysed: Sender<Analysed>,
+    parses: Arc<Parses>,
     tested: Sender<(bool, String)>,
     ran: Sender<Option<i32>>,
     formatted: Sender<(String, PathBuf, u64, format::Answer)>,
@@ -754,6 +755,7 @@ fn run(
         asked: BTreeSet::new(),
         area: ratatui::layout::Rect::new(0, 0, size.width, size.height),
         analysed: analysed_tx,
+        parses: Arc::default(),
         tested: tested_tx,
         ran: ran_tx,
         formatted: formatted_tx,
@@ -2909,8 +2911,9 @@ fn perform_jobs(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>) {
         } => {
             let answer = edge.analysed.clone();
             let root = edge.root.clone();
+            let parses = edge.parses.clone();
             std::thread::spawn(move || {
-                answer_figures(generation, files, base, &root, &answer);
+                answer_figures(generation, files, base, &root, &parses, &answer);
             });
         }
         Effect::ResolveStory {
@@ -3250,11 +3253,12 @@ fn answer_figures(
     files: Option<Vec<String>>,
     base: Option<String>,
     root: &Path,
+    parses: &Parses,
     answer: &Sender<Analysed>,
 ) {
     let files = files.unwrap_or_else(|| walk(root));
-    let now = measure(root, &files);
-    let was = base.map(|base| measured_at(root, &files, &base));
+    let now = measure(root, &files, parses);
+    let was = base.map(|base| measured_at(root, &files, &base, parses));
     let items = (
         gone::items(was.as_deref().unwrap_or_default()),
         gone::items(&now),
@@ -3646,21 +3650,39 @@ fn head_branch(root: &Path) -> Option<String> {
         .flatten()
 }
 
-fn measure(root: &Path, files: &[String]) -> Vec<(String, Option<Space>)> {
+type Parses = Mutex<HashMap<(&'static str, git2::Oid), Option<Space>>>;
+
+fn measure(root: &Path, files: &[String], parses: &Parses) -> Vec<(String, Option<Space>)> {
     files
         .iter()
         .filter_map(|name| {
             let path = root.join(name);
             language(&path)?;
-            let space = std::fs::read(&path)
-                .ok()
-                .and_then(|source| spaces(&path, source));
+            let space = std::fs::read(&path).ok().and_then(|source| {
+                let id = git2::Oid::hash_object(git2::ObjectType::Blob, &source).ok()?;
+                parsed(parses, &path, id, source)
+            });
             Some((name.clone(), space))
         })
         .collect()
 }
 
-fn measured_at(root: &Path, files: &[String], base: &str) -> Vec<(String, Option<Space>)> {
+fn parsed(parses: &Parses, path: &Path, id: git2::Oid, source: Vec<u8>) -> Option<Space> {
+    let key = (language(path)?.get_name(), id);
+    if let Some(space) = parses.lock().ok()?.get(&key) {
+        return space.clone();
+    }
+    let space = spaces(path, source);
+    parses.lock().ok()?.insert(key, space.clone());
+    space
+}
+
+fn measured_at(
+    root: &Path,
+    files: &[String],
+    base: &str,
+    parses: &Parses,
+) -> Vec<(String, Option<Space>)> {
     let Ok(repository) = git2::Repository::open(root) else {
         return Vec::new();
     };
@@ -3680,7 +3702,10 @@ fn measured_at(root: &Path, files: &[String], base: &str) -> Vec<(String, Option
                 .get_path(Path::new(name))
                 .ok()
                 .and_then(|entry| repository.find_blob(entry.id()).ok())?;
-            Some((name.clone(), spaces(&path, blob.content().to_vec())))
+            Some((
+                name.clone(),
+                parsed(parses, &path, blob.id(), blob.content().to_vec()),
+            ))
         })
         .collect()
 }
@@ -5048,6 +5073,98 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn an_unchanged_blob_is_parsed_once_and_a_changed_one_again() {
+        let dir = tempfile::tempdir().expect("a temp directory");
+        let root = std::fs::canonicalize(dir.path()).expect("a canonical root");
+        let repository = git2::Repository::init(&root).expect("a repository");
+        let who = git2::Signature::now("t", "t@example.com").expect("a signature");
+        fs::write(root.join("fixture.rs"), ITEMS).expect("the file");
+        fs::write(root.join("shape.h"), HEADER).expect("the header");
+        fs::write(root.join("build.go"), "package main\n").expect("the go file");
+        let mut index = repository.index().expect("the index");
+        for name in ["fixture.rs", "shape.h", "build.go"] {
+            index.add_path(Path::new(name)).expect("staged");
+        }
+        let tree = repository
+            .find_tree(index.write_tree().expect("a tree"))
+            .expect("the tree");
+        let base = repository
+            .commit(Some("HEAD"), &who, &who, "init", &tree, &[])
+            .expect("a commit")
+            .to_string();
+        let files = ["fixture.rs", "shape.h", "build.go"].map(str::to_string);
+        let parses = super::Parses::default();
+
+        let parsed = super::measure(&root, &files, &parses);
+        assert_eq!(
+            super::gone::items(&parsed),
+            super::gone::items(&[
+                (
+                    "fixture.rs".to_string(),
+                    super::spaces(Path::new("fixture.rs"), ITEMS.as_bytes().to_vec())
+                ),
+                (
+                    "shape.h".to_string(),
+                    super::spaces(Path::new("shape.h"), HEADER.as_bytes().to_vec())
+                ),
+            ])
+        );
+        assert_eq!(parses.lock().expect("the parses").len(), 2);
+        assert_eq!(
+            super::unmeasured(&files)
+                .iter()
+                .map(|unmeasured| (unmeasured.file.as_str(), unmeasured.uncovered))
+                .collect::<Vec<_>>(),
+            [
+                ("shape.h", varde::gone::Uncovered::PrototypesAndMacros),
+                ("build.go", varde::gone::Uncovered::File),
+            ]
+        );
+
+        parses
+            .lock()
+            .expect("the parses")
+            .values_mut()
+            .for_each(|space| *space = None);
+        let unparsed = [
+            ("fixture.rs".to_string(), None),
+            ("shape.h".to_string(), None),
+        ];
+        assert_eq!(super::measure(&root, &files, &parses), unparsed);
+        assert_eq!(
+            super::measured_at(&root, &files, &base, &parses),
+            unparsed,
+            "HEAD holds the same blobs as the working tree"
+        );
+
+        let changed = format!("{ITEMS}\nfn more() {{}}\n");
+        fs::write(root.join("fixture.rs"), &changed).expect("the change");
+        let reparsed = super::measure(&root, &files, &parses);
+        assert_eq!(
+            super::gone::items(&reparsed[..1])
+                .iter()
+                .map(|item| item.name.as_str())
+                .collect::<Vec<_>>(),
+            ["Shape", "name", "area", "new", "top", "zero", "more"]
+        );
+        assert_eq!(parses.lock().expect("the parses").len(), 3);
+        let written = git2::Oid::hash_object(
+            git2::ObjectType::Blob,
+            &fs::read(root.join("fixture.rs")).expect("the file"),
+        )
+        .expect("an id");
+        assert!(
+            repository.find_blob(written).is_err(),
+            "the working-tree blob is not written to the object database"
+        );
+        assert!(repository
+            .statuses(None)
+            .expect("the status")
+            .iter()
+            .all(|entry| entry.path() == Ok("fixture.rs")));
     }
 
     #[test]
