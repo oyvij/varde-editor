@@ -270,5 +270,6 @@ project's decision, in your `.gitignore`.
 ## See also
 
 - [Review](review.md): where you judge the loop's output, and the delta on the border.
+- [Gone](gone.md): what a reviewed change removed, which the delta does not measure.
 - [AI pane](ai-pane.md): the session the loop drives.
 - [Configuration](configuration.md): `[risk] threshold`, `max_iterations`, `test_command`.

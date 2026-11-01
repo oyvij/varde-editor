@@ -66,6 +66,13 @@ pub fn highlight(name: &str, source: &str) -> Vec<Vec<Token>> {
     lines
 }
 
+pub fn code_language(name: &str) -> Option<&'static str> {
+    let syntax = syntaxes().find_syntax_by_extension(name.rsplit_once('.')?.1)?;
+    let scope = syntax.scope.build_string();
+    let data = ["source.json", "source.toml", "source.yaml", "source.ini"];
+    (scope.starts_with("source.") && !data.contains(&scope.as_str())).then_some(&syntax.name)
+}
+
 pub fn plain(source: &str) -> Vec<Vec<Token>> {
     source.split('\n').map(plain_line).collect()
 }

@@ -646,6 +646,35 @@ covered.
 _Avoid_: skipped, failed, ignored (that is what .gitignore does), unsupported (that is a language
 nobody promised)
 
+### Seeing what was removed
+
+**Gone**:
+What Review view says about the named items a change removed: the functions, methods, classes, C/C++
+structs, traits and interfaces in `HEAD` compared with the working tree, read from files and git alone.
+A fact about the change, never a verdict on it: removing something is often what the change was
+for. Its Chip counts the `gone` rows and says how many changed files it could not measure, because
+a count that omits what it never read claims more than Gone knows.
+_Avoid_: deleted, missing, lost, regression, broken
+
+**gone**:
+The row label for an item that existed in `HEAD` and has nothing matching it in the working tree.
+The only label the Chip counts. When the same name now lives elsewhere with a different body, the row
+says so on a second line rather than calling it moved, because a body that changed is not the same
+item.
+_Avoid_: deleted, removed (bare), missing
+
+**moved**:
+The row label for an item no longer at its file and container whose same name and same body now live
+in another file or container. Listed so a refactor is not read as a deletion, and not counted on the
+Chip, because nothing went missing.
+_Avoid_: renamed, relocated, refactored
+
+**signature changed**:
+The row label for an item still at the same file, container and name whose parameters or return type
+changed. Listed beside the old signature so an API change stands apart from a removal. An item whose
+body changed under the same signature is not listed at all.
+_Avoid_: modified, edited, broken API
+
 ### Knowing what the code means
 
 **Language server**:

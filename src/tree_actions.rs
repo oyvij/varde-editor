@@ -133,10 +133,18 @@ pub fn transport(state: &crate::State) -> Vec<crate::Chip> {
     }]
 }
 
-pub fn transport_labels(state: &crate::State, width: u16) -> Vec<String> {
-    let title: usize = std::iter::once(crate::tree::title(state))
+pub fn title_width(state: &crate::State) -> usize {
+    std::iter::once(crate::tree::title(state))
         .chain(crate::lsp::nudge(state).into_iter().map(|(_, label)| label))
         .map(|label| unicode_width::UnicodeWidthStr::width(label.as_str()))
-        .sum();
-    crate::layout::chip_labels(&transport(state), width, title as u16 + 2)
+        .sum()
+}
+
+pub fn transport_labels(state: &crate::State, width: u16) -> Vec<String> {
+    crate::layout::chip_labels(&transport(state), width, title_width(state) as u16 + 2)
+}
+
+pub fn title_room(state: &crate::State, width: u16) -> usize {
+    let transport = crate::layout::strip_width(&transport_labels(state, width));
+    (width as usize).saturating_sub(2 + transport as usize)
 }

@@ -477,6 +477,9 @@ fn pressed(
         if let Some(severity) = nudge_at(state, panes, input.column) {
             return vec![Event::ShowDiagnostics(severity)];
         }
+        if gone_chip_at(state, panes, input.column) {
+            return vec![Event::PaneAction(crate::gone::OPEN)];
+        }
     }
     let border = panes.tree.bottom().saturating_sub(1);
     let filter_box = border.saturating_sub(tree::filter_rows(state) as u16)..border;
@@ -769,6 +772,16 @@ fn nudge_at(state: &State, panes: &Layout, column: u16) -> Option<crate::lsp::Se
             at += width;
             hit.then_some(severity)
         })
+}
+
+fn gone_chip_at(state: &State, panes: &Layout, column: u16) -> bool {
+    let taken = crate::tree_actions::title_width(state);
+    let room = crate::tree_actions::title_room(state, panes.tree.width).saturating_sub(taken);
+    let Some((_, chip)) = crate::gone::chip(state, room) else {
+        return false;
+    };
+    let at = panes.tree.x + 1 + taken as u16;
+    (at..at + chip.width() as u16).contains(&column)
 }
 
 fn dragged(
@@ -2829,6 +2842,7 @@ mod tests {
     fn every_palette_entry_is_clickable_on_a_short_screen() {
         let state = State {
             modal: Modal::Palette,
+            view: crate::View::Review,
             ..workspace()
         };
         for height in [24, 26] {

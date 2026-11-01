@@ -46,6 +46,7 @@ Feature: The command palette
       | Views   | r   | Review          |
       | Views   | s   | Story           |
       | Views   | w   | Knowledge       |
+      | Views   | x   | Gone            |
       | Project | f   | Find            |
       | Project | v   | Tools           |
       | Project | n   | Launch          |

@@ -20,7 +20,7 @@ pub struct CommandLine {
     pub pick: Option<usize>,
 }
 
-pub const COMMANDS: [(&str, &str, &[View], &[Event]); 43] = [
+pub const COMMANDS: [(&str, &str, &[View], &[Event]); 44] = [
     (
         "format",
         "lay the file out",
@@ -235,6 +235,12 @@ pub const COMMANDS: [(&str, &str, &[View], &[Event]); 43] = [
         &[Event::OpenSkills],
     ),
     (
+        "gone",
+        "list what was removed, over the diff",
+        &[View::Review],
+        &[Event::OpenGone],
+    ),
+    (
         "update",
         "update Varde itself",
         &[View::Edit, View::Review, View::Story, View::Knowledge],
@@ -278,7 +284,7 @@ pub const COMMANDS: [(&str, &str, &[View], &[Event]); 43] = [
     ),
 ];
 
-pub const CHEATSHEET: [(&str, &str, &[View]); 48] = [
+pub const CHEATSHEET: [(&str, &str, &[View]); 50] = [
     ("i a o O x", "edit", &[View::Edit]),
     ("w b e", "word", &[View::Edit, View::Knowledge]),
     ("gg G", "file ends", &[View::Edit, View::Knowledge]),
@@ -399,6 +405,12 @@ pub const CHEATSHEET: [(&str, &str, &[View]); 48] = [
         &[View::Edit, View::Review, View::Story, View::Knowledge],
     ),
     ("u", "tree: undo the last delete", &[View::Edit]),
+    ("C-space x :gone", "Gone list", &[View::Review]),
+    (
+        "j k Up Down Enter Esc",
+        "Gone list: row, go, close",
+        &[View::Review],
+    ),
 ];
 
 pub const CHORDS: [(&str, &str, &[View]); 4] = [
@@ -741,6 +753,13 @@ fn modal_key(state: &State, drafts: &mut Drafts, event: KeyEvent, at_ms: u64) ->
             KeyCode::Enter => vec![Event::PickSkill],
             _ => vec![],
         },
+        Modal::Gone { .. } => match (event.code, typed(event)) {
+            (KeyCode::Esc, _) => vec![Event::Cancel],
+            (KeyCode::Up, _) | (_, Some('k')) => vec![Event::MoveGoneRow(Direction::Up)],
+            (KeyCode::Down, _) | (_, Some('j')) => vec![Event::MoveGoneRow(Direction::Down)],
+            (KeyCode::Enter, _) => vec![Event::JumpToGoneRow],
+            _ => vec![],
+        },
         Modal::Branches { filter, .. } => match event.code {
             KeyCode::Esc => vec![Event::Cancel],
             KeyCode::Up => vec![Event::MoveBranchRow(Direction::Up)],
@@ -840,6 +859,7 @@ fn answered(modal: &Modal, event: KeyEvent) -> Vec<Event> {
         | Modal::NewLaunch(_)
         | Modal::Branches { .. }
         | Modal::Skills { .. }
+        | Modal::Gone { .. }
         | Modal::SkillQuestion { .. }
         | Modal::Inquiry { .. }
         | Modal::Comment

@@ -107,6 +107,8 @@ pub struct VardeWorld {
     probes: BTreeSet<String>,
     resolved_oids: BTreeMap<String, (String, String)>,
     analyses: Vec<Analysis>,
+    unmeasured: Vec<varde::gone::Unmeasured>,
+    before_gone_list: Option<String>,
     head: Option<String>,
     last_authored_range: Option<(String, String)>,
     branch_refs: Vec<story::BranchRef>,
@@ -421,6 +423,11 @@ impl VardeWorld {
 
     fn send(&mut self, event: Event) {
         let (state, effects) = update(&self.state, event);
+        if matches!(state.modal, Modal::Gone { .. })
+            && !matches!(self.state.modal, Modal::Gone { .. })
+        {
+            self.before_gone_list = Some(where_the_diff_is(&self.state));
+        }
         self.state = state;
         self.apply(effects);
         self.tell_core();
@@ -1030,14 +1037,17 @@ impl VardeWorld {
                     .unwrap_or(&path)
                     .to_string_lossy()
                     .into_owned();
-                let lines = (1..=3)
-                    .map(|number| varde::DiffLine {
-                        new_line: Some(number),
-                        old_line: None,
-                        removed: false,
-                        text: format!("line {number}"),
-                    })
-                    .collect();
+                let lines = match (self.held.get(&path), self.files.get(&path)) {
+                    (Some(held), Some(now)) if held != now => unified(&file, held, now),
+                    _ => (1..=3)
+                        .map(|number| varde::DiffLine {
+                            new_line: Some(number),
+                            old_line: None,
+                            removed: false,
+                            text: format!("line {number}"),
+                        })
+                        .collect(),
+                };
                 let (state, effects) = update(
                     &self.state,
                     Event::ShowDiff {
@@ -3320,6 +3330,7 @@ fn parse_view(name: &str) -> View {
         "Edit" => View::Edit,
         "Review" => View::Review,
         "Story" => View::Story,
+        "Knowledge" => View::Knowledge,
         other => panic!("unknown view {other:?}"),
     }
 }
@@ -9740,6 +9751,7 @@ fn modal_is(world: &mut VardeWorld, expected: String) {
         Modal::RunMark { .. } => "run-mark",
         Modal::ConfirmRevertWalkthrough => "confirm-revert-walkthrough",
         Modal::ReplaceWalkthrough => "replace-walkthrough",
+        Modal::Gone { .. } => "gone",
     };
     assert_eq!(actual, expected);
 }
@@ -10549,6 +10561,8 @@ fn figures_from(step: &Step, unparsed: usize, prefix: &str) -> Figures {
             name: (!name.is_empty()).then(|| name.clone()),
             line: column(row, "line").parse().unwrap_or_default(),
             kind: Kind::Function,
+            signature: String::new(),
+            body_hash: 0,
             metrics: Metrics {
                 cyclomatic: figure("cyclomatic"),
                 cognitive: figure("cognitive"),
@@ -10563,6 +10577,8 @@ fn figures_from(step: &Step, unparsed: usize, prefix: &str) -> Figures {
                 name: Some(file),
                 line: 1,
                 kind: Kind::Unit,
+                signature: String::new(),
+                body_hash: 0,
                 metrics: Metrics::default(),
                 children: vec![space],
             }),
@@ -10839,6 +10855,22 @@ fn palette_offers_entry(world: &mut VardeWorld, entry: String, group: String, ke
         .map(|(_, label)| *label)
         .expect("the entry");
     assert_eq!(drawn, entry, "the entry is indented under another");
+    assert_eq!(
+        varde::palette_entry(&world.state, parse_char(&key)),
+        Some(entry.as_str()),
+        "not offered in this view"
+    );
+}
+
+#[then(expr = "the view palette does not offer {string}")]
+fn palette_does_not_offer(world: &mut VardeWorld, entry: String) {
+    assert_eq!(world.state.modal, Modal::Palette);
+    let offered: Vec<&str> = PALETTE
+        .iter()
+        .flat_map(|(_, entries)| entries.iter())
+        .filter_map(|(key, _)| varde::palette_entry(&world.state, *key))
+        .collect();
+    assert!(!offered.contains(&entry.as_str()), "{entry:?} is offered");
 }
 
 #[given(expr = "the Risk list is shown")]
@@ -11888,6 +11920,261 @@ fn contributes_no_figure(world: &mut VardeWorld, path: String) {
         .filter(|file| **file == path)
         .collect();
     assert!(named.is_empty(), "{path} is in the figure");
+}
+
+#[then(expr = "{int} analysis was asked for")]
+fn analyses_asked_for(world: &mut VardeWorld, expected: usize) {
+    assert_eq!(world.analyses.len(), expected, "{:?}", world.analyses);
+}
+
+#[then(expr = "the analysis covers Gone")]
+fn analysis_covers_gone(world: &mut VardeWorld) {
+    let asked = last_analysis(world);
+    assert_eq!(asked.scope, Scope::Review);
+    assert!(asked.base.is_some(), "no revision to compare against");
+    assert_eq!(varde::gone::view_state(&world.state), "computing");
+}
+
+fn gone_items(step: &Step) -> (Vec<varde::gone::Item>, Vec<varde::gone::Item>) {
+    let table = step.table().expect("a table");
+    let header = &table.rows[0];
+    let column = |row: &Vec<String>, name: &str| {
+        let at = header
+            .iter()
+            .position(|cell| cell == name)
+            .unwrap_or_else(|| panic!("no column {name:?}"));
+        row[at].clone()
+    };
+    let mut was = Vec::new();
+    let mut now = Vec::new();
+    for row in &table.rows[1..] {
+        let item = varde::gone::Item {
+            file: column(row, "file"),
+            container: column(row, "container"),
+            name: column(row, "name"),
+            kind: match column(row, "kind").as_str() {
+                "function" => varde::gone::Kind::Function,
+                "method" => varde::gone::Kind::Method,
+                "struct" => varde::gone::Kind::Struct,
+                "class" => varde::gone::Kind::Class,
+                "trait" => varde::gone::Kind::Trait,
+                "interface" => varde::gone::Kind::Interface,
+                other => panic!("unknown kind {other:?}"),
+            },
+            signature: column(row, "signature"),
+            body_hash: u64::from_str_radix(&column(row, "body hash"), 16).expect("a hex body hash"),
+            line: column(row, "line").parse().expect("a line"),
+        };
+        match column(row, "revision").as_str() {
+            "HEAD" => was.push(item),
+            "working tree" => now.push(item),
+            other => panic!("unknown revision {other:?}"),
+        }
+    }
+    (was, now)
+}
+
+#[given(expr = "the Gone items arrive:")]
+#[when(expr = "the Gone items arrive:")]
+fn gone_items_arrive(world: &mut VardeWorld, step: &Step) {
+    let (was, now) = gone_items(step);
+    world.send(Event::GoneItems {
+        generation: world.state.risk.asked,
+        was,
+        now,
+        unmeasured: world.unmeasured.clone(),
+    });
+}
+
+#[given(expr = "Gone could not measure:")]
+fn gone_could_not_measure(world: &mut VardeWorld, step: &Step) {
+    let table = step.table().expect("a table");
+    world.unmeasured = table.rows[1..]
+        .iter()
+        .map(|row| varde::gone::Unmeasured {
+            file: row[0].clone(),
+            language: row[1].clone(),
+            uncovered: match row[2].as_str() {
+                "file" => varde::gone::Uncovered::File,
+                "prototypes-and-macros" => varde::gone::Uncovered::PrototypesAndMacros,
+                other => panic!("unknown uncovered {other:?}"),
+            },
+        })
+        .collect();
+}
+
+#[when(expr = "the Gone items for the earlier analysis arrive:")]
+fn earlier_gone_items_arrive(world: &mut VardeWorld, step: &Step) {
+    let (was, now) = gone_items(step);
+    let generation = world
+        .analyses
+        .first()
+        .expect("an analysis was asked for")
+        .generation;
+    assert!(generation < world.state.risk.asked, "nothing superseded it");
+    world.send(Event::GoneItems {
+        generation,
+        was,
+        now,
+        unmeasured: Vec::new(),
+    });
+}
+
+#[then(expr = "the Gone Chip shows {int}")]
+fn gone_chip_shows(world: &mut VardeWorld, expected: usize) {
+    assert_eq!(varde::gone::shown(&world.state), Some((expected, 0)));
+    assert!(
+        varde::gone::chip(&world.state, 80).is_some(),
+        "no Chip drawn"
+    );
+}
+
+#[then(expr = "the Gone Chip shows {int} gone and {int} not measured")]
+fn gone_chip_shows_not_measured(world: &mut VardeWorld, gone: usize, unmeasured: usize) {
+    assert_eq!(varde::gone::shown(&world.state), Some((gone, unmeasured)));
+    assert!(
+        varde::gone::chip(&world.state, 80).is_some(),
+        "no Chip drawn"
+    );
+}
+
+#[then(expr = "no Gone Chip is shown")]
+fn no_gone_chip(world: &mut VardeWorld) {
+    assert_eq!(varde::gone::shown(&world.state), None);
+    assert_eq!(varde::gone::chip(&world.state, 80), None);
+}
+
+#[then(expr = "the Gone state is {string}")]
+fn gone_state_is(world: &mut VardeWorld, expected: String) {
+    assert_eq!(varde::gone::view_state(&world.state), expected);
+}
+
+fn where_the_diff_is(state: &State) -> String {
+    format!(
+        "{:?}",
+        (
+            state.view,
+            state.focus,
+            &state.diff_file,
+            state.diff_line,
+            &state.diff,
+            state.editor_scroll,
+            &state.current_buffer,
+        )
+    )
+}
+
+#[when(expr = "I click the Gone Chip")]
+fn click_gone_chip(world: &mut VardeWorld) {
+    let tree = world.panes().tree;
+    let column = tree.x + 1 + tree::title(&world.state).width() as u16 + 1;
+    world.report(mouse::Kind::LeftDown, column, tree.y);
+    world.report(mouse::Kind::LeftUp, column, tree.y);
+}
+
+#[then(expr = "the diff cursor is on the removed line {string}")]
+fn diff_cursor_on_removed_line(world: &mut VardeWorld, text: String) {
+    let diff = world.state.diff.as_ref().expect("a diff on screen");
+    let line = &diff[world.state.diff_line - 1];
+    assert_eq!((line.removed, line.text.as_str()), (true, text.as_str()));
+}
+
+#[then(expr = "the diff cursor is on screen")]
+fn diff_cursor_on_screen(world: &mut VardeWorld) {
+    let line = world.state.diff_line;
+    line_on_screen(world, line);
+}
+
+#[then(expr = "the Gone list is open")]
+fn gone_list_is_open(world: &mut VardeWorld) {
+    assert!(
+        matches!(world.state.modal, Modal::Gone { .. }),
+        "{:?}",
+        world.state.modal
+    );
+}
+
+#[then(expr = "the Gone list is closed")]
+fn gone_list_is_closed(world: &mut VardeWorld) {
+    assert_eq!(world.state.modal, Modal::None);
+}
+
+#[then(expr = "the Review diff is as it was before the Gone list opened")]
+fn diff_as_before_gone_list(world: &mut VardeWorld) {
+    let before = world
+        .before_gone_list
+        .clone()
+        .expect("the Gone list was opened");
+    assert_eq!(where_the_diff_is(&world.state), before);
+}
+
+#[then(expr = "the selected Gone row is {int}")]
+fn selected_gone_row(world: &mut VardeWorld, row: usize) {
+    assert_eq!(world.state.modal, Modal::Gone { row: row - 1 });
+}
+
+#[then(expr = "the Gone list is {string}")]
+fn gone_list_is(world: &mut VardeWorld, expected: String) {
+    gone_list_is_open(world);
+    assert_eq!(varde::gone::view_state(&world.state), expected);
+}
+
+#[then(expr = "the Gone list shows the labels:")]
+fn gone_list_labels(world: &mut VardeWorld, step: &Step) {
+    gone_list_is_open(world);
+    let expected: Vec<Vec<String>> = step.table().expect("a table").rows[1..].to_vec();
+    let shown: Vec<Vec<String>> = varde::gone::rows(&world.state)
+        .iter()
+        .map(|row| vec![row.label.as_str().replace(' ', "-"), row.item.name.clone()])
+        .collect();
+    assert_eq!(shown, expected);
+}
+
+#[then(expr = "the Gone list header names:")]
+fn gone_list_header_names(world: &mut VardeWorld, step: &Step) {
+    gone_list_is_open(world);
+    let Modal::Gone { row } = world.state.modal else {
+        unreachable!()
+    };
+    let header: Vec<String> = varde::gone::list_lines(&world.state, row, 200, 200)
+        .into_iter()
+        .take_while(|(tone, _)| *tone == varde::Tone::Dimmed)
+        .map(|(_, line)| line)
+        .collect();
+    for file in &step.table().expect("a table").rows[1..] {
+        assert!(
+            header.iter().any(|line| line.contains(&file[0])),
+            "{:?} not named in {header:#?}",
+            file[0]
+        );
+    }
+}
+
+#[then(expr = "the Gone rows are:")]
+fn gone_rows_are(world: &mut VardeWorld, step: &Step) {
+    let expected: Vec<Vec<String>> = step.table().expect("a table").rows[1..].to_vec();
+    let rows: Vec<Vec<String>> = varde::gone::rows(&world.state)
+        .iter()
+        .map(|row| {
+            vec![
+                row.label.as_str().to_string(),
+                row.item.file.clone(),
+                row.item.name.clone(),
+            ]
+        })
+        .collect();
+    assert_eq!(rows, expected);
+}
+
+#[then(expr = "the git status is unchanged")]
+fn git_status_unchanged(world: &mut VardeWorld) {
+    assert!(world.wrote.is_empty(), "written: {:?}", world.wrote);
+    assert!(world.executed.is_empty(), "executed: {:?}", world.executed);
+    assert!(
+        world.snapshots.is_empty(),
+        "snapshots: {:?}",
+        world.snapshots.keys().collect::<Vec<_>>()
+    );
 }
 
 fn shipped() -> State {

@@ -9,6 +9,7 @@ pub mod editor;
 pub mod filter;
 pub mod fold;
 pub mod format;
+pub mod gone;
 pub mod highlight;
 pub mod history;
 pub mod keys;
@@ -162,6 +163,7 @@ pub const PALETTE: [(&str, &[(char, &str)]); 5] = [
             ('r', "Review"),
             ('s', "Story"),
             ('w', "Knowledge"),
+            ('x', "Gone"),
         ],
     ),
     (
@@ -180,6 +182,8 @@ pub const PALETTE: [(&str, &[(char, &str)]); 5] = [
 
 const SINGLE_FILE_PALETTE: [char; 3] = ['h', 'v', 'q'];
 
+const REVIEW_PALETTE: [char; 1] = ['x'];
+
 fn palette(
     state: &State,
 ) -> impl Iterator<Item = (&'static str, Vec<&'static (char, &'static str)>)> + '_ {
@@ -191,6 +195,7 @@ fn palette(
                 .filter(|(key, _)| {
                     state.opened == Opened::Workspace || SINGLE_FILE_PALETTE.contains(key)
                 })
+                .filter(|(key, _)| state.view == View::Review || !REVIEW_PALETTE.contains(key))
                 .collect::<Vec<_>>();
             (*heading, offered)
         })
@@ -323,6 +328,9 @@ pub enum Modal {
     Diverged,
     Skills {
         skills: Vec<skills::Skill>,
+        row: usize,
+    },
+    Gone {
         row: usize,
     },
     SkillQuestion {
@@ -657,6 +665,15 @@ pub enum Event {
         figures: risk::Figures,
         before: Option<risk::Figures>,
     },
+    GoneItems {
+        generation: u64,
+        was: Vec<gone::Item>,
+        now: Vec<gone::Item>,
+        unmeasured: Vec<gone::Unmeasured>,
+    },
+    OpenGone,
+    MoveGoneRow(Direction),
+    JumpToGoneRow,
     StartRefactorLoop(risk::Scope),
     StopRefactorLoop,
     TestsFinished {
@@ -1273,6 +1290,7 @@ pub struct State {
     pub file_hunks: std::sync::Arc<[story::FileHunks]>,
     pub story_sets: Vec<String>,
     pub risk: risk::Risk,
+    pub gone: gone::Gone,
     pub corner: layout::Corner,
     pub risk_all: bool,
     pub risk_selection: usize,
@@ -1540,6 +1558,7 @@ impl Default for State {
             story_sets: Vec::new(),
             predictions_put: BTreeSet::new(),
             risk: risk::Risk::default(),
+            gone: gone::Gone::default(),
             tick: 0,
             clock_ms: 0,
             watcher: wait::Watcher::Trusted,
@@ -3223,6 +3242,7 @@ fn palette_command(next: State, entry: &str) -> Result<(State, Vec<Effect>), Sta
         "Keys" => Event::ToggleCheatsheet,
         "Knowledge" => Event::ToggleKnowledge,
         "Skills" => Event::OpenSkills,
+        "Gone" => Event::OpenGone,
         "Update" => Event::Rebuild,
         "Quit" => Event::Quit,
         _ => return Err(next),
@@ -5153,6 +5173,7 @@ fn on_editor_escape(state: &State, mut next: State, event: Event, wheeled: bool)
             (Some(path), Some(buffer)) => {
                 let contents = buffer.write();
                 risk::went_stale(&mut next.risk);
+                gone::went_stale(&mut next.gone);
                 let evaluate = walkthrough::current_code(state)
                     .filter(|waypoint| state.root.join(&waypoint.file) == path)
                     .map(|waypoint| walkthrough::Request {
@@ -6381,6 +6402,7 @@ fn on_drag_row(state: &State, mut next: State, event: Event, wheeled: bool) -> A
             next.diff = Some(lines);
             next.diff_file = Some(file);
             next.diff_revision = Some(revision);
+            gone::land(&mut next);
             vec![]
         }
 
@@ -7174,6 +7196,37 @@ fn on_story_file_written(state: &State, mut next: State, event: Event, wheeled: 
             before,
         } => risk::figures_arrived(&mut next, generation, figures, before),
 
+        Event::GoneItems {
+            generation,
+            was,
+            now,
+            unmeasured,
+        } => {
+            gone::arrived(&mut next, generation, was, now, unmeasured);
+            Vec::new()
+        }
+
+        Event::OpenGone => {
+            if next.view == View::Review {
+                next.modal = Modal::Gone { row: 0 };
+            }
+            Vec::new()
+        }
+
+        Event::MoveGoneRow(direction) => {
+            let last = gone::rows(&next).len().saturating_sub(1);
+            if let Modal::Gone { row } = &mut next.modal {
+                *row = match direction {
+                    Direction::Up => row.saturating_sub(1),
+                    Direction::Down => (*row + 1).min(last),
+                    Direction::Left | Direction::Right => *row,
+                };
+            }
+            Vec::new()
+        }
+
+        Event::JumpToGoneRow => gone::jump(&mut next),
+
         Event::RecomputeRisk => {
             if next.refactor.running.is_none() {
                 next.refactor = risk::Refactor::default();
@@ -7199,6 +7252,7 @@ fn on_pane_action(state: &State, mut next: State, event: Event, wheeled: bool) -
         Event::PaneAction(WIDEN_PREVIEW) => return Ok(update(state, Event::TogglePreviewWidth)),
         Event::PaneAction(SKILLS) => return Ok(update(state, Event::OpenSkills)),
         Event::PaneAction(GUIDE) => return Ok(update(state, Event::OpenGuide)),
+        Event::PaneAction(gone::OPEN) => return Ok(update(state, Event::OpenGone)),
         Event::PaneAction(risk::RECOMPUTE) => return Ok(update(state, Event::RecomputeRisk)),
         Event::PaneAction(risk::START_LOOP) => {
             return Ok(update(
@@ -12806,8 +12860,12 @@ mod tests {
 
     #[test]
     fn the_palette_fits_the_screen_it_is_drawn_on() {
+        let reviewing = State {
+            view: View::Review,
+            ..State::default()
+        };
         for screen in [24u16, 26, 30, 40] {
-            let rows = palette_rows(&State::default(), screen);
+            let rows = palette_rows(&reviewing, screen);
             assert!(
                 rows.len() <= (screen - 2) as usize,
                 "{} rows in a box that draws {} at {screen}",

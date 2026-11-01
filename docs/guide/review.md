@@ -197,6 +197,14 @@ figure must fall, and no other metric may rise. Varde restores a failed pass fro
 commits nothing, and touches no file outside the review. The same action in the same place stops it.
 [Risk](risk.md#the-refactor-loop) has the details.
 
+## What was removed
+
+Entering Review view also lists the named items the change removed. When a function, method, class,
+trait, interface or C/C++ struct that was in `HEAD` is missing from the working tree, a
+` ◌ gone 2 · x :gone ` Chip appears on the tree pane's top border beside the Risk delta. Palette `x`
+or `:gone` opens the list over the diff, and `Enter` on a row jumps to the item's removed lines.
+[Gone](gone.md) has the details, including what it does not cover.
+
 ## What Review view does not do
 
 - It does not let you edit a diff. `e` opens the real file.
@@ -212,5 +220,6 @@ commits nothing, and touches no file outside the review. The same action in the 
 - [Stories](stories.md): ask the AI to narrate the change you are reviewing, and comment from inside
   a Story.
 - [Risk](risk.md): the figure on the border and the loop that lowers it.
+- [Gone](gone.md): the named items a change removed, and the Chip beside the delta.
 - [AI pane](ai-pane.md): the session a submitted review goes to.
 - [Getting around](getting-around.md): the palette, panes and focus.

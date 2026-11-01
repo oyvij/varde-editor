@@ -13,16 +13,17 @@ use crossterm::event::{
 use crossterm::style::Print;
 use crossterm::{execute, terminal};
 use notify::{RecursiveMode, Watcher};
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::os::fd::{AsFd, AsRawFd, OwnedFd};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use terminput_crossterm::{to_terminput_key, to_terminput_mouse};
 use varde::authorship;
 use varde::editor;
 use varde::format;
+use varde::gone;
 use varde::keys::{self, Drafts};
 use varde::layout;
 use varde::mouse;
@@ -590,7 +591,8 @@ struct Edge {
     hover_due: Option<Instant>,
     notice_due: Option<Instant>,
     hand: bool,
-    analysed: Sender<(u64, Figures, Option<Figures>)>,
+    analysed: Sender<Analysed>,
+    parses: Arc<Parses>,
     tested: Sender<(bool, String)>,
     ran: Sender<Option<i32>>,
     formatted: Sender<(String, PathBuf, u64, format::Answer)>,
@@ -753,6 +755,7 @@ fn run(
         asked: BTreeSet::new(),
         area: ratatui::layout::Rect::new(0, 0, size.width, size.height),
         analysed: analysed_tx,
+        parses: Arc::default(),
         tested: tested_tx,
         ran: ran_tx,
         formatted: formatted_tx,
@@ -1082,7 +1085,7 @@ fn leave_terminal(enhanced: bool, stderr: OwnedFd) {
 }
 
 fn collect_job_events(
-    analysed: &Receiver<(u64, Figures, Option<Figures>)>,
+    analysed: &Receiver<Analysed>,
     tested: &Receiver<(bool, String)>,
     formatted: &Receiver<(String, PathBuf, u64, format::Answer)>,
     released: &Receiver<Option<String>>,
@@ -1099,11 +1102,18 @@ fn collect_job_events(
     while let Ok(outcome) = replaced.try_recv() {
         queue.push_back(Event::BinaryReplaced(outcome));
     }
-    while let Ok((generation, figures, before)) = analysed.try_recv() {
+    while let Ok((generation, figures, before, items)) = analysed.try_recv() {
         queue.push_back(Event::RiskFigures {
             generation,
             figures,
             before,
+        });
+        let (was, now, unmeasured) = items;
+        queue.push_back(Event::GoneItems {
+            generation,
+            was,
+            now,
+            unmeasured,
         });
     }
     while let Ok((passed, output)) = tested.try_recv() {
@@ -2901,8 +2911,9 @@ fn perform_jobs(effect: Effect, edge: &mut Edge, queue: &mut VecDeque<Event>) {
         } => {
             let answer = edge.analysed.clone();
             let root = edge.root.clone();
+            let parses = edge.parses.clone();
             std::thread::spawn(move || {
-                answer_figures(generation, files, base, &root, &answer);
+                answer_figures(generation, files, base, &root, &parses, &answer);
             });
         }
         Effect::ResolveStory {
@@ -3230,17 +3241,35 @@ fn answer_formatter(command: &str, args: &[String], root: &Path, text: &str) -> 
     }
 }
 
+type Analysed = (
+    u64,
+    Figures,
+    Option<Figures>,
+    (Vec<gone::Item>, Vec<gone::Item>, Vec<gone::Unmeasured>),
+);
+
 fn answer_figures(
     generation: u64,
     files: Option<Vec<String>>,
     base: Option<String>,
     root: &Path,
-    answer: &Sender<(u64, Figures, Option<Figures>)>,
+    parses: &Parses,
+    answer: &Sender<Analysed>,
 ) {
     let files = files.unwrap_or_else(|| walk(root));
-    let figures = measure(root, &files);
-    let before = base.map(|base| measured_at(root, &files, &base));
-    let _ = answer.send((generation, figures, before));
+    let now = measure(root, &files, parses);
+    let was = base.map(|base| measured_at(root, &files, &base, parses));
+    let items = (
+        gone::items(was.as_deref().unwrap_or_default()),
+        gone::items(&now),
+        unmeasured(&files),
+    );
+    let _ = answer.send((
+        generation,
+        risk::figures(now),
+        was.map(risk::figures),
+        items,
+    ));
 }
 
 fn snapshot_dir(root: &Path, sidecar: Option<&Path>, iteration: u32) -> PathBuf {
@@ -3621,33 +3650,50 @@ fn head_branch(root: &Path) -> Option<String> {
         .flatten()
 }
 
-fn measure(root: &Path, files: &[String]) -> Figures {
-    let analysed = files
+type Parses = Mutex<HashMap<(&'static str, git2::Oid), Option<Space>>>;
+
+fn measure(root: &Path, files: &[String], parses: &Parses) -> Vec<(String, Option<Space>)> {
+    files
         .iter()
         .filter_map(|name| {
             let path = root.join(name);
             language(&path)?;
-            let space = std::fs::read(&path)
-                .ok()
-                .and_then(|source| spaces(&path, source));
+            let space = std::fs::read(&path).ok().and_then(|source| {
+                let id = git2::Oid::hash_object(git2::ObjectType::Blob, &source).ok()?;
+                parse_once(parses, &path, id, source)
+            });
             Some((name.clone(), space))
         })
-        .collect();
-    risk::figures(analysed)
+        .collect()
 }
 
-fn measured_at(root: &Path, files: &[String], base: &str) -> Figures {
+fn parse_once(parses: &Parses, path: &Path, id: git2::Oid, source: Vec<u8>) -> Option<Space> {
+    let key = (language(path)?.get_name(), id);
+    parses
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .entry(key)
+        .or_insert_with(|| spaces(path, source))
+        .clone()
+}
+
+fn measured_at(
+    root: &Path,
+    files: &[String],
+    base: &str,
+    parses: &Parses,
+) -> Vec<(String, Option<Space>)> {
     let Ok(repository) = git2::Repository::open(root) else {
-        return Figures::default();
+        return Vec::new();
     };
     let tree = git2::Oid::from_str(base)
         .ok()
         .and_then(|oid| repository.find_commit(oid).ok())
         .and_then(|commit| commit.tree().ok());
     let Some(tree) = tree else {
-        return Figures::default();
+        return Vec::new();
     };
-    let analysed = files
+    files
         .iter()
         .filter_map(|name| {
             let path = root.join(name);
@@ -3656,10 +3702,37 @@ fn measured_at(root: &Path, files: &[String], base: &str) -> Figures {
                 .get_path(Path::new(name))
                 .ok()
                 .and_then(|entry| repository.find_blob(entry.id()).ok())?;
-            Some((name.clone(), spaces(&path, blob.content().to_vec())))
+            Some((
+                name.clone(),
+                parse_once(parses, &path, blob.id(), blob.content().to_vec()),
+            ))
         })
-        .collect();
-    risk::figures(analysed)
+        .collect()
+}
+
+fn unmeasured(files: &[String]) -> Vec<gone::Unmeasured> {
+    files
+        .iter()
+        .filter_map(|file| {
+            let path = Path::new(file);
+            let extension = path.extension()?.to_string_lossy().to_lowercase();
+            let (language, uncovered) = match language(path) {
+                Some(_) if matches!(extension.as_str(), "h" | "hh" | "hpp" | "hxx" | "h++") => {
+                    ("C/C++", gone::Uncovered::PrototypesAndMacros)
+                }
+                Some(_) => return None,
+                None => (
+                    varde::highlight::code_language(file)?,
+                    gone::Uncovered::File,
+                ),
+            };
+            Some(gone::Unmeasured {
+                file: file.clone(),
+                language: language.to_string(),
+                uncovered,
+            })
+        })
+        .collect()
 }
 
 fn language(path: &Path) -> Option<rust_code_analysis::LANG> {
@@ -3673,14 +3746,24 @@ fn language(path: &Path) -> Option<rust_code_analysis::LANG> {
 
 fn spaces(path: &Path, source: Vec<u8>) -> Option<Space> {
     let language = language(path)?;
+    let text = String::from_utf8_lossy(&source).into_owned();
+    let lines: Vec<&str> = text.lines().collect();
     rust_code_analysis::get_function_spaces(&language, source, path, None)
-        .map(|analysed| space(&analysed))
+        .map(|analysed| space(&analysed, &lines))
 }
 
-fn space(analysed: &rust_code_analysis::FuncSpace) -> Space {
+fn space(analysed: &rust_code_analysis::FuncSpace, lines: &[&str]) -> Space {
+    let text = lines
+        .get(analysed.start_line.saturating_sub(1)..analysed.end_line.min(lines.len()))
+        .unwrap_or_default()
+        .join("\n");
+    let (signature, body_hash) =
+        gone::signature_and_body_hash(&text, analysed.name.as_deref().unwrap_or_default());
     Space {
         name: analysed.name.clone(),
         line: analysed.start_line,
+        signature,
+        body_hash,
         kind: match analysed.kind {
             rust_code_analysis::SpaceKind::Unknown => risk::Kind::Unknown,
             rust_code_analysis::SpaceKind::Function => risk::Kind::Function,
@@ -3698,7 +3781,11 @@ fn space(analysed: &rust_code_analysis::FuncSpace) -> Space {
             maintainability: analysed.metrics.mi.mi_visual_studio().max(0.0) as u32,
             lines: analysed.metrics.loc.sloc() as u32,
         },
-        children: analysed.spaces.iter().map(space).collect(),
+        children: analysed
+            .spaces
+            .iter()
+            .map(|child| space(child, lines))
+            .collect(),
     }
 }
 
@@ -4855,7 +4942,10 @@ mod tests {
             None,
         )
         .expect("the fixture parses");
-        let (functions, unparsed) = risk::functions("fixture.rs", &space(&analysed));
+        let (functions, unparsed) = risk::functions(
+            "fixture.rs",
+            &space(&analysed, &FIXTURE.lines().collect::<Vec<_>>()),
+        );
 
         assert_eq!(unparsed, 0);
         assert_eq!(
@@ -4878,6 +4968,217 @@ mod tests {
             "the parent's figure is more than its own space's"
         );
     }
+
+    const ITEMS: &str = "pub struct Point {\n    x: i32,\n}\n\npub trait Shape {\n    fn area(&self) -> f64;\n    fn name(&self) -> String { String::new() }\n}\n\nimpl Shape for Point {\n    fn area(&self) -> f64 {\n        0.0\n    }\n}\n\nimpl Point {\n    pub fn new(x: i32) -> Self {\n        Point { x }\n    }\n}\n\nfn top(a: u8,\n       b: u8) -> u8 { a + b }\n\nfn zero() -> f64 { 0.0 }\n";
+
+    #[test]
+    fn the_named_items_carry_their_container_kind_signature_and_body() {
+        let analysed = super::spaces(Path::new("fixture.rs"), ITEMS.as_bytes().to_vec());
+        let items = super::gone::items(&[("fixture.rs".to_string(), analysed)]);
+
+        let named: Vec<(&str, &str, varde::gone::Kind, &str, usize)> = items
+            .iter()
+            .map(|item| {
+                (
+                    item.container.as_str(),
+                    item.name.as_str(),
+                    item.kind,
+                    item.signature.as_str(),
+                    item.line,
+                )
+            })
+            .collect();
+        use varde::gone::Kind::{Function, Method, Trait};
+        assert_eq!(
+            named,
+            [
+                ("", "Shape", Trait, "", 5),
+                ("Shape", "name", Method, "(&self) -> String", 7),
+                ("Point", "area", Method, "(&self) -> f64", 11),
+                ("Point", "new", Method, "(x: i32) -> Self", 17),
+                ("", "top", Function, "(a: u8, b: u8) -> u8", 22),
+                ("", "zero", Function, "() -> f64", 25),
+            ],
+            "a struct with no methods and a bodiless trait method are no space of their own"
+        );
+        assert!(items.iter().all(|item| item.file == "fixture.rs"));
+        let body = |name: &str| {
+            items
+                .iter()
+                .find(|item| item.name == name)
+                .expect("the item")
+                .body_hash
+        };
+        assert_eq!(body("area"), body("zero"), "the same body, laid out apart");
+        assert_ne!(body("area"), body("new"));
+        assert_ne!(body("top"), body("zero"));
+    }
+
+    const HEADER: &str = "#ifndef SHAPE_H\n#define SHAPE_H\n#define AREA(w, h) ((w) * (h))\nint area(int w, int h);\nstatic inline int square(int side) {\n    return side * side;\n}\n#endif\n";
+
+    #[test]
+    fn a_bodied_function_in_a_c_header_is_an_item() {
+        let analysed = super::spaces(Path::new("src/shape.h"), HEADER.as_bytes().to_vec());
+        let items = super::gone::items(&[("src/shape.h".to_string(), analysed)]);
+
+        let named: Vec<(&str, &str, &str, usize)> = items
+            .iter()
+            .map(|item| {
+                (
+                    item.container.as_str(),
+                    item.name.as_str(),
+                    item.signature.as_str(),
+                    item.line,
+                )
+            })
+            .collect();
+        assert_eq!(named, [("", "square", "(int side)", 5)]);
+        let source = "#include \"shape.h\"\n\nint square(int side) {\n    return side * side;\n}\n";
+        let moved = super::gone::items(&[(
+            "src/shape.c".to_string(),
+            super::spaces(Path::new("src/shape.c"), source.as_bytes().to_vec()),
+        )]);
+        assert_eq!(
+            moved.iter().map(|item| item.body_hash).collect::<Vec<_>>(),
+            [items[0].body_hash],
+            "the body moved from the header to the source file hashes the same"
+        );
+    }
+
+    #[test]
+    fn a_changed_header_and_a_file_in_a_language_the_analyser_cannot_parse_are_not_measured() {
+        use varde::gone::{Uncovered, Unmeasured};
+        let files = [
+            "src/shape.h",
+            "src/shape.c",
+            "scripts/build.go",
+            "src/keys.rs",
+            "README.md",
+            "Cargo.toml",
+        ]
+        .map(str::to_string);
+
+        assert_eq!(
+            super::unmeasured(&files),
+            [
+                Unmeasured {
+                    file: "src/shape.h".to_string(),
+                    language: "C/C++".to_string(),
+                    uncovered: Uncovered::PrototypesAndMacros,
+                },
+                Unmeasured {
+                    file: "scripts/build.go".to_string(),
+                    language: "Go".to_string(),
+                    uncovered: Uncovered::File,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn an_unchanged_blob_is_parsed_once_and_a_changed_one_again() {
+        let dir = tempfile::tempdir().expect("a temp directory");
+        let root = std::fs::canonicalize(dir.path()).expect("a canonical root");
+        let repository = git2::Repository::init(&root).expect("a repository");
+        let who = git2::Signature::now("t", "t@example.com").expect("a signature");
+        fs::write(root.join("fixture.rs"), ITEMS).expect("the file");
+        fs::write(root.join("shape.h"), HEADER).expect("the header");
+        fs::write(root.join("build.go"), "package main\n").expect("the go file");
+        let mut index = repository.index().expect("the index");
+        for name in ["fixture.rs", "shape.h", "build.go"] {
+            index.add_path(Path::new(name)).expect("staged");
+        }
+        let tree = repository
+            .find_tree(index.write_tree().expect("a tree"))
+            .expect("the tree");
+        let base = repository
+            .commit(Some("HEAD"), &who, &who, "init", &tree, &[])
+            .expect("a commit")
+            .to_string();
+        let files = ["fixture.rs", "shape.h", "build.go"].map(str::to_string);
+        let parses = super::Parses::default();
+
+        let parsed = super::measure(&root, &files, &parses);
+        assert_eq!(
+            super::gone::items(&parsed),
+            super::gone::items(&[
+                (
+                    "fixture.rs".to_string(),
+                    super::spaces(Path::new("fixture.rs"), ITEMS.as_bytes().to_vec())
+                ),
+                (
+                    "shape.h".to_string(),
+                    super::spaces(Path::new("shape.h"), HEADER.as_bytes().to_vec())
+                ),
+            ])
+        );
+        assert_eq!(
+            parses.lock().expect("the parses").len(),
+            2,
+            "a language the analyser cannot parse is never cached"
+        );
+
+        parses
+            .lock()
+            .expect("the parses")
+            .values_mut()
+            .for_each(|space| *space = None);
+        let unparsed = [
+            ("fixture.rs".to_string(), None),
+            ("shape.h".to_string(), None),
+        ];
+        assert_eq!(super::measure(&root, &files, &parses), unparsed);
+        assert_eq!(
+            super::measured_at(&root, &files, &base, &parses),
+            unparsed,
+            "HEAD holds the same blobs as the working tree"
+        );
+
+        let changed = format!("{ITEMS}\nfn more() {{}}\n");
+        fs::write(root.join("fixture.rs"), &changed).expect("the change");
+        let reparsed = super::measure(&root, &files, &parses);
+        assert_eq!(
+            super::gone::items(&reparsed[..1])
+                .iter()
+                .map(|item| item.name.as_str())
+                .collect::<Vec<_>>(),
+            ["Shape", "name", "area", "new", "top", "zero", "more"]
+        );
+        assert_eq!(parses.lock().expect("the parses").len(), 3);
+        let written = git2::Oid::hash_object(
+            git2::ObjectType::Blob,
+            &fs::read(root.join("fixture.rs")).expect("the file"),
+        )
+        .expect("an id");
+        assert!(
+            repository.find_blob(written).is_err(),
+            "the working-tree blob is not written to the object database"
+        );
+        assert!(repository
+            .statuses(None)
+            .expect("the status")
+            .iter()
+            .all(|entry| entry.path() == Ok("fixture.rs")));
+    }
+
+    #[test]
+    fn a_cache_left_poisoned_by_a_panicked_analysis_still_parses() {
+        let dir = tempfile::tempdir().expect("a temp directory");
+        fs::write(dir.path().join("fixture.rs"), ITEMS).expect("the file");
+        let parses = super::Parses::default();
+        let _ = std::thread::scope(|scope| {
+            scope
+                .spawn(|| {
+                    let _held = parses.lock();
+                    panic!("an analysis panicked");
+                })
+                .join()
+        });
+
+        let parsed = super::measure(dir.path(), &["fixture.rs".to_string()], &parses);
+        assert_eq!(super::gone::items(&parsed).len(), 6);
+    }
+
     #[test]
     fn a_path_that_is_gone_is_a_removal_whatever_the_kind_says() {
         let root = tempfile::tempdir().expect("a temp directory");
