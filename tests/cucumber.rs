@@ -12520,7 +12520,7 @@ fn handshake(world: &VardeWorld, language: &str) -> Value {
 #[then(expr = "the language server for {string} was given the root {string}")]
 fn server_given_root(world: &mut VardeWorld, language: String, root: String) {
     assert_eq!(
-        handshake(world, &language)["rootUri"],
+        handshake(world, &language)["workspaceFolders"][0]["uri"],
         Value::String(format!("file://{root}"))
     );
 }
