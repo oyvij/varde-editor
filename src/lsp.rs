@@ -14,14 +14,18 @@ use lsp_types::{
     SignatureHelp as ServerSignature, SignatureHelpClientCapabilities, SignatureHelpContext,
     SignatureHelpParams, SignatureHelpTriggerKind, SignatureInformationSettings,
     TextDocumentClientCapabilities, TextDocumentContentChangeEvent, TextDocumentIdentifier,
-    TextDocumentItem, TextDocumentPositionParams, TextEdit, Url, VersionedTextDocumentIdentifier,
+    TextDocumentItem, TextDocumentPositionParams, TextEdit, Uri, VersionedTextDocumentIdentifier,
+    WorkspaceFolder,
 };
+use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use url::Url;
 
 const INITIALIZE: i64 = 1;
+const OUTSIDE_RFC_3986: &AsciiSet = &CONTROLS.add(b'[').add(b']').add(b'\\').add(b'^').add(b'|');
 
 pub const DEBOUNCE_MS: u64 = 120;
 
@@ -1721,7 +1725,7 @@ fn definitions(state: &State, result: &Value) -> Vec<(PathBuf, Place)> {
     let Ok(response) = serde_json::from_value::<GotoDefinitionResponse>(result.clone()) else {
         return Vec::new();
     };
-    let located: Vec<(Url, Range)> = match response {
+    let located: Vec<(Uri, Range)> = match response {
         GotoDefinitionResponse::Scalar(location) => vec![(location.uri, location.range)],
         GotoDefinitionResponse::Array(locations) => locations
             .into_iter()
@@ -1735,7 +1739,7 @@ fn definitions(state: &State, result: &Value) -> Vec<(PathBuf, Place)> {
     located
         .into_iter()
         .filter_map(|(uri, range)| {
-            let path = uri.to_file_path().ok()?;
+            let path = file_path(&uri)?;
             let text = state.buffers.get(&path).map(|buffer| buffer.shown());
             Some((path, place(text, range.start)))
         })
@@ -2012,7 +2016,7 @@ fn published(state: &mut State, language: &str, params: Value) {
     let Ok(params) = serde_json::from_value::<PublishDiagnosticsParams>(params) else {
         return;
     };
-    let Ok(path) = params.uri.to_file_path() else {
+    let Some(path) = file_path(&params.uri) else {
         return;
     };
     if let (Some(version), Some(buffer)) = (params.version, state.buffers.get(&path)) {
@@ -2304,7 +2308,12 @@ fn joined(into: &mut Value, from: Value) {
 fn initialize(root: &Path, options: Option<Value>) -> InitializeParams {
     InitializeParams {
         process_id: None,
-        root_uri: uri(root),
+        workspace_folders: uri(root).map(|uri| {
+            vec![WorkspaceFolder {
+                uri,
+                name: root.display().to_string(),
+            }]
+        }),
         // typescript-language-server withholds diagnostics unless publishDiagnostics is declared
         capabilities: ClientCapabilities {
             text_document: Some(TextDocumentClientCapabilities {
@@ -2348,8 +2357,15 @@ fn document_version(revision: u64) -> i32 {
     i32::try_from(revision).unwrap_or(i32::MAX)
 }
 
-fn uri(path: &Path) -> Option<Url> {
-    Url::from_file_path(path).ok()
+fn uri(path: &Path) -> Option<Uri> {
+    utf8_percent_encode(Url::from_file_path(path).ok()?.as_str(), OUTSIDE_RFC_3986)
+        .to_string()
+        .parse()
+        .ok()
+}
+
+fn file_path(uri: &Uri) -> Option<PathBuf> {
+    Url::parse(uri.as_str()).ok()?.to_file_path().ok()
 }
 
 pub(crate) fn execute(state: &mut State, language: &str, command: &str) -> Option<(i64, Effect)> {
@@ -3269,9 +3285,17 @@ mod tests {
     fn location(path: &Path, line: u32) -> Value {
         let at = json!({"line": line - 1, "character": 0});
         json!({
-            "uri": Url::from_file_path(path).expect("a file url"),
+            "uri": uri(path).expect("a file url"),
             "range": {"start": at, "end": at},
         })
+    }
+
+    #[test]
+    fn a_path_with_brackets_and_spaces_survives_the_round_trip_through_a_uri() {
+        let path = Path::new("/w/app/[id] page|^\\.tsx");
+        let sent = uri(path).expect("a uri");
+        assert_eq!(sent.as_str(), "file:///w/app/%5Bid%5D%20page%7C%5E%5C.tsx");
+        assert_eq!(file_path(&sent), Some(path.to_path_buf()));
     }
 
     #[test]
