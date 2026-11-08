@@ -689,15 +689,15 @@ impl Buffer {
         let mut order: Vec<usize> = (0..places.len()).collect();
         order.sort_by_key(|&index| (places[index].line, places[index].column));
         let mut landed = places.to_vec();
-        let pasted: Vec<&str> = text.split('\n').collect();
-        let added = pasted.len() - 1;
-        let (mut previous, mut row, mut shift, mut grown) = (0usize, 0usize, 0isize, 0usize);
+        let pasted: Vec<String> = text.split('\n').map(str::to_string).collect();
+        let breaks = pasted.len() - 1;
+        let (mut previous, mut row, mut shift, mut rows_added) = (0usize, 0usize, 0isize, 0usize);
         self.remember(Step::Other);
         for index in order {
             let place = places[index];
             if place.line != previous {
                 previous = place.line;
-                row = place.line - 1 + grown;
+                row = place.line - 1 + rows_added;
                 shift = 0;
             }
             let Some(line) = lines.get(row) else {
@@ -706,17 +706,17 @@ impl Buffer {
             let chars: Vec<char> = line.chars().collect();
             let from = (place.column.saturating_add_signed(shift).max(1) - 1).min(chars.len());
             let to = (from + width).min(chars.len());
-            let mut replaced: Vec<String> = pasted.iter().map(|part| part.to_string()).collect();
+            let mut replaced = pasted.clone();
             replaced[0].insert_str(0, &chars[..from].iter().collect::<String>());
-            let end = replaced[added].chars().count();
-            replaced[added].extend(&chars[to..]);
+            let end_column = replaced[breaks].chars().count();
+            replaced[breaks].extend(&chars[to..]);
             lines.splice(row..=row, replaced);
-            shift += end as isize - to as isize;
-            row += added;
-            grown += added;
+            shift += end_column as isize - to as isize;
+            row += breaks;
+            rows_added += breaks;
             landed[index] = crate::Place {
                 line: row + 1,
-                column: end + 1,
+                column: end_column + 1,
             };
         }
         self.set(&lines);
