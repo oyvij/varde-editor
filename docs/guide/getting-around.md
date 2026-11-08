@@ -327,7 +327,7 @@ selected, and copying with nothing selected does nothing.
 | Key | Effect |
 |---|---|
 | `Ctrl+C` or `Cmd+C` | copy the Selection to the system clipboard |
-| `Ctrl+V` or `Cmd+V` | paste the clipboard into the Buffer as one edit, in whatever mode it is in |
+| `Ctrl+V` or `Cmd+V` | paste the clipboard into the Buffer as one edit, over the Selection and every occurrence picked, if any |
 
 Ctrl and Command are aliases on both. Over SSH, with no system clipboard to reach, copying falls
 back to the terminal's clipboard protocol (OSC 52), so the text still reaches the machine you are
