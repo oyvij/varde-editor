@@ -734,6 +734,7 @@ impl Buffer {
 
     pub fn paste_in(&mut self, from: crate::Place, to: crate::Place, text: &str) {
         self.delete_in(from, to);
+        self.column = from.column;
         let remembered = self.undo.len();
         self.paste(text);
         self.undo.truncate(remembered);

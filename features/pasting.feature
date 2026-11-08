@@ -126,3 +126,16 @@ Feature: Pasting from the clipboard
       """
       one two
       """
+
+  Scenario: A paste replaces a selection that ends the line
+    Given the clipboard holds "four"
+    And "src/tree.js" is open in the editor holding:
+      """
+      one two
+      """
+    And I drag across "two" in the editor pane
+    When I press "Ctrl+v" in the editor
+    Then the buffer holds:
+      """
+      one four
+      """
