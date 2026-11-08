@@ -4999,9 +4999,10 @@ fn on_editor_key_6(state: &State, mut next: State, event: Event, wheeled: bool) 
             Ok(settle(next, vec![], wheeled))
         }
         Event::EditorPaste(text) if matches!(state.selection, Some(Selection::Lines { .. })) => {
-            if let (Some(Selection::Lines { from, to }), Some(buffer)) =
-                (state.selection.clone(), edited_mut(&mut next))
-            {
+            let Some(&Selection::Lines { from, to }) = state.selection.as_ref() else {
+                unreachable!("matched above");
+            };
+            if let Some(buffer) = edited_mut(&mut next) {
                 buffer.paste_over_lines(from, to, &text);
             }
             Ok(settle(next, vec![], wheeled))

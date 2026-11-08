@@ -571,6 +571,7 @@ Feature: Selecting and copying
       """
     And I press "Vjj" in the editor
     And I copy the selection
+    And I press "Escape" in the editor
     And I press "gg" in the editor
     When I paste what was copied into the editor
     Then the buffer holds:

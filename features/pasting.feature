@@ -162,6 +162,7 @@ Feature: Pasting from the clipboard
       """
     And the selection holds nothing
     And the editor mode is normal
+    And the cursor is at line 1 column 1
 
   Scenario: A paste over linewise selected last lines leaves no empty line
     Given the clipboard holds the lines:
@@ -197,5 +198,19 @@ Feature: Pasting from the clipboard
     Then the buffer holds:
       """
       one
+      two
+      """
+
+  Scenario: A paste of text with no final line break over a linewise selection stays on its own line
+    Given "src/tree.js" is open in the editor holding:
+      """
+      one
+      two
+      """
+    And I press "V" in the editor
+    When I paste "three" into the editor
+    Then the buffer holds:
+      """
+      three
       two
       """
