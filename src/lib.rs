@@ -4808,25 +4808,10 @@ fn on_editor_key_3(state: &State, mut next: State, event: Event, wheeled: bool) 
         }
 
         Event::EditorKey(key) if !state.occurrences.is_empty() => {
-            let picked = state.selection.as_ref().and_then(Selection::buffer_span);
-            next.selection = None;
             if let Some(buffer) = edited_mut(&mut next) {
                 buffer.mode = editor::Mode::Insert;
-                let primary = picked.map_or(
-                    Place {
-                        line: buffer.line,
-                        column: buffer.column,
-                    },
-                    |(from, _)| from,
-                );
-                let width = picked.map_or(0, |(from, to)| to.column + 1 - from.column);
-                let places: Vec<Place> = std::iter::once(primary)
-                    .chain(state.occurrences.iter().copied())
-                    .collect();
-                let landed = buffer.replace_at(&places, width, &key.to_string());
-                buffer.go_to_place(landed[0]);
-                next.occurrences = landed[1..].to_vec();
             }
+            replace_occurrences(state, &mut next, &key.to_string());
             vec![]
         }
 
@@ -4997,6 +4982,10 @@ fn on_editor_key_6(state: &State, mut next: State, event: Event, wheeled: bool) 
             };
             Ok(settle(next, effects, wheeled))
         }
+        Event::EditorPaste(text) if !state.occurrences.is_empty() => {
+            replace_occurrences(state, &mut next, &text);
+            Ok(settle(next, vec![], wheeled))
+        }
         Event::EditorPaste(text) => {
             if let Some(buffer) = edited_mut(&mut next) {
                 buffer.paste(&text);
@@ -5004,6 +4993,27 @@ fn on_editor_key_6(state: &State, mut next: State, event: Event, wheeled: bool) 
             Ok(settle(next, vec![], wheeled))
         }
         other => Err((next, other)),
+    }
+}
+
+fn replace_occurrences(state: &State, next: &mut State, text: &str) {
+    let picked = state.selection.as_ref().and_then(Selection::buffer_span);
+    next.selection = None;
+    if let Some(buffer) = edited_mut(next) {
+        let primary = picked.map_or(
+            Place {
+                line: buffer.line,
+                column: buffer.column,
+            },
+            |(from, _)| from,
+        );
+        let width = picked.map_or(0, |(from, to)| to.column + 1 - from.column);
+        let places: Vec<Place> = std::iter::once(primary)
+            .chain(state.occurrences.iter().copied())
+            .collect();
+        let landed = buffer.replace_at(&places, width, text);
+        buffer.go_to_place(landed[0]);
+        next.occurrences = landed[1..].to_vec();
     }
 }
 
