@@ -121,9 +121,9 @@ To have a Selection read aloud, see [Reading aloud](reading-aloud.md).
 
 A paste into the buffer is **one edit, in whatever mode the buffer is in**, unless it replaces a `V`
 Selection. Varde never replays it as keystrokes, so pasted code containing an `i` or a `dd` goes in
-as text rather than running as commands. Every line-ending style becomes a line break, pasted brackets do not auto-close, and the
-whole paste undoes in one `u`. A Preview refuses a paste with a message, rather than editing a file
-whose characters you cannot see.
+as text rather than running as commands. Every line-ending style becomes a line break, pasted
+brackets do not auto-close, and the whole paste undoes in one `u`. A Preview refuses a paste with a
+message, rather than editing a file whose characters you cannot see.
 
 What a paste does depends on the Selection:
 
