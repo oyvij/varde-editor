@@ -962,7 +962,8 @@ character.
 machine the user is sitting at when Varde runs over SSH.
 **R16.3** Copying with nothing selected does nothing.
 **R16.4** **What was copied pastes back as it was**, into the buffer it came from or another one:
-a paste that reaches the open buffer is **one edit, in whatever mode the buffer is in**, and its
+a paste that reaches the open buffer is **one edit, in whatever mode the buffer is in** (bar R16.6a's
+`V` Selection), and its
 line endings are line breaks however the source spelled them. Insert mode used to be the condition,
 which left a paste in normal mode replayed as keystrokes — read as commands until an `i`, `a` or `o`
 turned the rest into typing, one auto-indenting Enter per line, so three indented lines came back as

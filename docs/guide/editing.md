@@ -119,9 +119,9 @@ To have a Selection read aloud, see [Reading aloud](reading-aloud.md).
 
 ### Pasting
 
-A paste into the buffer is **one edit, in whatever mode the buffer is in**. Varde never replays it
-as keystrokes, so pasted code containing an `i` or a `dd` goes in as text rather than running as
-commands. Every line-ending style becomes a line break, pasted brackets do not auto-close, and the
+A paste into the buffer is **one edit, in whatever mode the buffer is in**, unless it replaces a `V`
+Selection. Varde never replays it as keystrokes, so pasted code containing an `i` or a `dd` goes in
+as text rather than running as commands. Every line-ending style becomes a line break, pasted brackets do not auto-close, and the
 whole paste undoes in one `u`. A Preview refuses a paste with a message, rather than editing a file
 whose characters you cannot see.
 
@@ -135,7 +135,7 @@ What a paste does depends on the Selection:
   swap in with no empty or joined line. The Selection is cleared and the buffer returns to normal
   mode.
 
-Either way the replaced text comes back with one `u`. `p` is not a paste and is unchanged: it puts
+In each case the replaced text comes back with one `u`. `p` is not a paste and is unchanged: it puts
 the register, not the clipboard.
 
 When one of Varde's own input lines has the keyboard (the `/` search line, the `:` command line, the
@@ -151,9 +151,9 @@ them. Typing then replaces all of them at once (in normal mode the first charact
 inserting), and every further keystroke lands at each one. A paste (`Ctrl+V`/`Cmd+V`) replaces every
 one of them with the same text, line breaks included, without changing the mode, and leaves a cursor
 after the pasted text at each, so what you type next lands at all of them. `p` is not a paste: in
-normal mode it starts inserting like any other first character and types `p` at each. `Esc`, a motion or a click drops the
-extra occurrences along with the Selection. A Selection spanning a line break names no word to take.
-The whole multi-occurrence edit undoes in one `u`.
+normal mode it starts inserting like any other first character and types `p` at each. `Esc`, a
+motion or a click drops the extra occurrences along with the Selection. A Selection spanning a line
+break names no word to take. The whole multi-occurrence edit undoes in one `u`.
 
 ## Finding
 
