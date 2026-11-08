@@ -740,6 +740,30 @@ impl Buffer {
         self.undo.truncate(remembered);
     }
 
+    pub fn paste_over_lines(&mut self, from: usize, to: usize, text: &str) {
+        let mut lines = self.lines();
+        self.remember(Step::Other);
+        let mut pasted: Vec<String> = text.split('\n').map(str::to_string).collect();
+        match lines.get(to) {
+            Some(after) => {
+                let last = pasted.len() - 1;
+                pasted[last].push_str(after);
+                lines.splice(from - 1..=to, pasted);
+            }
+            None => {
+                if pasted.len() > 1 && pasted.last().is_some_and(String::is_empty) {
+                    pasted.pop();
+                }
+                lines.splice(from - 1..to, pasted);
+            }
+        }
+        self.line = from;
+        self.column = 1;
+        self.mode = Mode::Normal;
+        self.set(&lines);
+        self.clamp();
+    }
+
     fn insert(&mut self, key: char) {
         let (left, right) = self.either_side();
         if right == Some(key) && PAIRS.iter().any(|(_, close)| *close == key) {

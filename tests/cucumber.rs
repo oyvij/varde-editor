@@ -5790,6 +5790,14 @@ fn clipboard_seeded(world: &mut VardeWorld, text: String) {
     world.clipboard = Some(text);
 }
 
+#[given("the clipboard holds the lines:")]
+fn clipboard_seeded_with_lines(world: &mut VardeWorld, step: &Step) {
+    world.clipboard = Some(format!(
+        "{}\n",
+        step.docstring().expect("docstring").trim_matches('\n')
+    ));
+}
+
 #[then(expr = "the clipboard holds {string}")]
 fn clipboard_holds(world: &mut VardeWorld, text: String) {
     assert_eq!(world.clipboard.as_deref(), Some(text.as_str()));

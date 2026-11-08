@@ -139,3 +139,63 @@ Feature: Pasting from the clipboard
       """
       one four
       """
+
+  Scenario: A paste over a linewise selection swaps in the copied lines
+    Given the clipboard holds the lines:
+      """
+      three
+      four
+      """
+    And "src/tree.js" is open in the editor holding:
+      """
+      one
+      two
+      five
+      """
+    And I press "Vj" in the editor
+    When I press "Ctrl+v" in the editor
+    Then the buffer holds:
+      """
+      three
+      four
+      five
+      """
+    And the selection holds nothing
+    And the editor mode is normal
+
+  Scenario: A paste over linewise selected last lines leaves no empty line
+    Given the clipboard holds the lines:
+      """
+      three
+      """
+    And "src/tree.js" is open in the editor holding:
+      """
+      one
+      two
+      """
+    And I press "jV" in the editor
+    When I press "Ctrl+v" in the editor
+    Then the buffer holds:
+      """
+      one
+      three
+      """
+
+  Scenario: One undo brings back the lines a paste replaced
+    Given the clipboard holds the lines:
+      """
+      three
+      """
+    And "src/tree.js" is open in the editor holding:
+      """
+      one
+      two
+      """
+    And I press "V" in the editor
+    And I press "Ctrl+v" in the editor
+    When I press "u" in the editor
+    Then the buffer holds:
+      """
+      one
+      two
+      """
