@@ -732,6 +732,13 @@ impl Buffer {
         self.clamp();
     }
 
+    pub fn paste_in(&mut self, from: crate::Place, to: crate::Place, text: &str) {
+        self.delete_in(from, to);
+        let remembered = self.undo.len();
+        self.paste(text);
+        self.undo.truncate(remembered);
+    }
+
     fn insert(&mut self, key: char) {
         let (left, right) = self.either_side();
         if right == Some(key) && PAIRS.iter().any(|(_, close)| *close == key) {

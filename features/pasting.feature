@@ -54,6 +54,7 @@ Feature: Pasting from the clipboard
       """
     And I drag across "one" in the editor pane
     And I press "Ctrl+c" in the editor
+    And I press "Escape" in the editor
     When I press "Ctrl+v" in the editor
     Then the buffer holds:
       """
@@ -70,3 +71,58 @@ Feature: Pasting from the clipboard
     When I press "Ctrl+v" in the editor
     Then the buffer is unchanged
     And the editor refuses with "read-only-preview"
+
+  Scenario: A paste replaces a selection made in normal mode
+    Given the clipboard holds "four"
+    And "src/tree.js" is open in the editor holding:
+      """
+      one two
+      """
+    And I press "W" in the editor
+    When I press "Ctrl+v" in the editor
+    Then the buffer holds:
+      """
+      four two
+      """
+    And the selection holds nothing
+    And the editor mode is normal
+
+  Scenario: A paste replaces a selection made in insert mode
+    Given "src/tree.js" is open in the editor holding:
+      """
+      one two
+      """
+    And the editor mode is insert
+    And I hold shift and press the Right arrow in the editor 2 times
+    When I paste "four" into the editor
+    Then the buffer holds:
+      """
+      four two
+      """
+    And the selection holds nothing
+    And the editor mode is insert
+
+  Scenario: A paste after a single Ctrl+D with no other match replaces the word
+    Given "src/tree.js" is open in the editor holding:
+      """
+      one two
+      """
+    And I press "Ctrl+d" in the editor
+    When I paste "four" into the editor
+    Then the buffer holds:
+      """
+      four two
+      """
+
+  Scenario: One undo brings back the text a paste replaced
+    Given "src/tree.js" is open in the editor holding:
+      """
+      one two
+      """
+    And I press "W" in the editor
+    And I paste "four" into the editor
+    When I press "u" in the editor
+    Then the buffer holds:
+      """
+      one two
+      """

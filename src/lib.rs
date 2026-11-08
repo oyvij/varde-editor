@@ -4986,6 +4986,18 @@ fn on_editor_key_6(state: &State, mut next: State, event: Event, wheeled: bool) 
             replace_occurrences(state, &mut next, &text);
             Ok(settle(next, vec![], wheeled))
         }
+        Event::EditorPaste(text) if matches!(state.selection, Some(Selection::Buffer { .. })) => {
+            let (from, to) = state
+                .selection
+                .as_ref()
+                .and_then(Selection::buffer_span)
+                .expect("matched above");
+            next.selection = None;
+            if let Some(buffer) = edited_mut(&mut next) {
+                buffer.paste_in(from, to, &text);
+            }
+            Ok(settle(next, vec![], wheeled))
+        }
         Event::EditorPaste(text) => {
             if let Some(buffer) = edited_mut(&mut next) {
                 buffer.paste(&text);
