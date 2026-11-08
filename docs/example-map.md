@@ -962,7 +962,8 @@ character.
 machine the user is sitting at when Varde runs over SSH.
 **R16.3** Copying with nothing selected does nothing.
 **R16.4** **What was copied pastes back as it was**, into the buffer it came from or another one:
-a paste that reaches the open buffer is **one edit, in whatever mode the buffer is in**, and its
+a paste that reaches the open buffer is **one edit, in whatever mode the buffer is in** (bar R16.6a's
+`V` Selection), and its
 line endings are line breaks however the source spelled them. Insert mode used to be the condition,
 which left a paste in normal mode replayed as keystrokes — read as commands until an `i`, `a` or `o`
 turned the rest into typing, one auto-indenting Enter per line, so three indented lines came back as
@@ -975,6 +976,16 @@ gesture look like two unrelated features.
 would reach it: a preview refuses out loud, and a diff or a walked Site — which answer the editor's
 keys ahead of the buffer — paste nothing rather than editing a file nobody is looking at. `y` and
 `p` keep the **register**, which stays a separate world (R16.2's clipboard is not it).
+**R16.6a** **A paste replaces the Selection** rather than landing beside it. With none it goes in at
+the cursor. Over a charwise Selection it replaces the selected characters, clears the Selection and
+keeps the mode. Over a `V` Selection it replaces the whole lines, final line break included, so
+copied lines swap in with no empty or joined line, and the buffer returns to normal mode, since the
+line Selection it was in no longer exists. With occurrences picked by `Ctrl+D` the same text,
+line breaks included, replaces the Selection and every occurrence, two on one line included, and a
+cursor stays after the pasted text at each so typing goes on at all of them; the mode is kept and
+`Esc` drops the cursors as it does after typing. Every one of these is still one edit, undone by one
+`u`, and pasted brackets still do not auto-close. `p` is unchanged: it puts the register, and with
+occurrences picked it is the first key that starts inserting, typed at each.
 **R16.7** **Double-clicking picks the word** under the pointer, as it does in every other editor —
 the run of one character class, so an operator is picked like a name and whitespace is no word at
 all. The second click counts as one only inside F6's double-tap window and on the same cell.

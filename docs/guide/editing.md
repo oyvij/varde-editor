@@ -119,11 +119,24 @@ To have a Selection read aloud, see [Reading aloud](reading-aloud.md).
 
 ### Pasting
 
-A paste into the buffer is **one edit, in whatever mode the buffer is in**. Varde never replays it
-as keystrokes, so pasted code containing an `i` or a `dd` goes in as text rather than running as
-commands. Every line-ending style becomes a line break, pasted brackets do not auto-close, and the
-whole paste undoes in one `u`. A Preview refuses a paste with a message, rather than editing a file
-whose characters you cannot see.
+A paste into the buffer is **one edit, in whatever mode the buffer is in**, unless it replaces a `V`
+Selection. Varde never replays it as keystrokes, so pasted code containing an `i` or a `dd` goes in
+as text rather than running as commands. Every line-ending style becomes a line break, pasted
+brackets do not auto-close, and the whole paste undoes in one `u`. A Preview refuses a paste with a
+message, rather than editing a file whose characters you cannot see.
+
+What a paste does depends on the Selection:
+
+- **No Selection**: the text goes in at the cursor.
+- **A charwise Selection** (a drag, `Shift+arrow`, `W`/`B`, a double-click, `Ctrl+D`): the text
+  replaces the selected characters, in normal or insert mode. The Selection is cleared and the mode
+  stays as it was.
+- **A `V` Selection**: the text replaces the whole lines, final line break included, so copied lines
+  swap in with no empty or joined line. The Selection is cleared and the buffer returns to normal
+  mode.
+
+In each case the replaced text comes back with one `u`. `p` is not a paste and is unchanged: it puts
+the register, not the clipboard.
 
 When one of Varde's own input lines has the keyboard (the `/` search line, the `:` command line, the
 tree filter), Varde types a paste into that line character by character, and a newline in it is
@@ -135,9 +148,12 @@ tree filter), Varde types a paste into that line character by character, and a n
 With nothing selected, it takes the word under the cursor first, so it also works while inserting.
 It takes occurrences in order, wrapping from the bottom of the file to the top, until it has all of
 them. Typing then replaces all of them at once (in normal mode the first character starts
-inserting), and every further keystroke lands at each one. `Esc`, a motion or a click drops the
-extra occurrences along with the Selection. A Selection spanning a line break names no word to take.
-The whole multi-occurrence edit undoes in one `u`.
+inserting), and every further keystroke lands at each one. A paste (`Ctrl+V`/`Cmd+V`) replaces every
+one of them with the same text, line breaks included, without changing the mode, and leaves a cursor
+after the pasted text at each, so what you type next lands at all of them. `p` is not a paste: in
+normal mode it starts inserting like any other first character and types `p` at each. `Esc`, a
+motion or a click drops the extra occurrences along with the Selection. A Selection spanning a line
+break names no word to take. The whole multi-occurrence edit undoes in one `u`.
 
 ## Finding
 

@@ -689,29 +689,34 @@ impl Buffer {
         let mut order: Vec<usize> = (0..places.len()).collect();
         order.sort_by_key(|&index| (places[index].line, places[index].column));
         let mut landed = places.to_vec();
-        let typed = text.chars().count();
-        let (mut previous, mut shift) = (0usize, 0isize);
+        let pasted: Vec<String> = text.split('\n').map(str::to_string).collect();
+        let breaks = pasted.len() - 1;
+        let (mut previous, mut row, mut shift, mut rows_added) = (0usize, 0usize, 0isize, 0usize);
         self.remember(Step::Other);
         for index in order {
             let place = places[index];
             if place.line != previous {
                 previous = place.line;
+                row = place.line - 1 + rows_added;
                 shift = 0;
             }
-            let Some(line) = lines.get_mut(place.line - 1) else {
+            let Some(line) = lines.get(row) else {
                 continue;
             };
             let chars: Vec<char> = line.chars().collect();
             let from = (place.column.saturating_add_signed(shift).max(1) - 1).min(chars.len());
             let to = (from + width).min(chars.len());
-            let mut replaced: String = chars[..from].iter().collect();
-            replaced.push_str(text);
-            replaced.extend(&chars[to..]);
-            *line = replaced;
-            shift += typed as isize - (to - from) as isize;
+            let mut replaced = pasted.clone();
+            replaced[0].insert_str(0, &chars[..from].iter().collect::<String>());
+            let end_column = replaced[breaks].chars().count();
+            replaced[breaks].extend(&chars[to..]);
+            lines.splice(row..=row, replaced);
+            shift += end_column as isize - to as isize;
+            row += breaks;
+            rows_added += breaks;
             landed[index] = crate::Place {
-                line: place.line,
-                column: from + 1 + typed,
+                line: row + 1,
+                column: end_column + 1,
             };
         }
         self.set(&lines);
@@ -724,6 +729,25 @@ impl Buffer {
         let remembered = self.undo.len();
         self.insert(key);
         self.undo.truncate(remembered);
+        self.clamp();
+    }
+
+    pub fn paste_in(&mut self, from: crate::Place, to: crate::Place, text: &str) {
+        self.delete_in(from, to);
+        self.column = from.column;
+        let remembered = self.undo.len();
+        self.paste(text);
+        self.undo.truncate(remembered);
+    }
+
+    pub fn paste_over_lines(&mut self, from: usize, to: usize, text: &str) {
+        let mut lines = self.lines();
+        self.remember(Step::Other);
+        let pasted = text.strip_suffix('\n').unwrap_or(text).split('\n');
+        lines.splice(from - 1..to, pasted.map(str::to_string));
+        self.line = from;
+        self.mode = Mode::Normal;
+        self.set(&lines);
         self.clamp();
     }
 

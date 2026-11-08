@@ -287,3 +287,262 @@ Feature: Editing every occurrence of a word at once
       one two
       three one
       """
+
+  Scenario: A paste from the clipboard replaces every occurrence picked
+    Given "src/tree.js" is open in the editor holding:
+      """
+      one two
+      three one
+      """
+    And the clipboard holds "four"
+    And I press "W" in the editor
+    And I press "Ctrl+d" in the editor
+    When I press "Ctrl+v" in the editor
+    Then the buffer holds:
+      """
+      four two
+      three four
+      """
+    And the selection holds nothing
+
+  Scenario: The terminal's paste replaces every occurrence picked
+    Given "src/tree.js" is open in the editor holding:
+      """
+      one two
+      three one
+      """
+    And I press "W" in the editor
+    And I press "Ctrl+d" in the editor
+    When I paste "four" into the editor
+    Then the buffer holds:
+      """
+      four two
+      three four
+      """
+
+  Scenario: Two occurrences on one line both take what is pasted
+    Given "src/tree.js" is open in the editor holding:
+      """
+      one and one
+      """
+    And I press "W" in the editor
+    And I press "Ctrl+d" in the editor
+    When I paste "four" into the editor
+    Then the buffer holds:
+      """
+      four and four
+      """
+
+  Scenario: A cursor stays after the pasted text at every occurrence
+    Given "src/tree.js" is open in the editor holding:
+      """
+      one and one
+      x one
+      """
+    And I press "W" in the editor
+    And I press "Ctrl+d" in the editor 2 times
+    When I paste "four" into the editor
+    Then the other occurrences picked are:
+      | line | column |
+      | 1    | 14     |
+      | 2    | 7      |
+    And the cursor is at line 1 column 5
+
+  Scenario: Typing after a paste lands after the pasted text at every occurrence
+    Given "src/tree.js" is open in the editor holding:
+      """
+      one and one
+      """
+    And I press "W" in the editor
+    And I press "Ctrl+d" in the editor
+    And I paste "four" into the editor
+    When I type "s" in the editor
+    Then the buffer holds:
+      """
+      fours and fours
+      """
+
+  Scenario: A paste over the occurrences leaves normal mode as it was
+    Given "src/tree.js" is open in the editor holding:
+      """
+      one two
+      three one
+      """
+    And I press "W" in the editor
+    And I press "Ctrl+d" in the editor
+    When I paste "four" into the editor
+    Then the editor mode is normal
+
+  Scenario: A paste over the occurrences leaves insert mode as it was
+    Given "src/tree.js" is open in the editor holding:
+      """
+      one two
+      three one
+      """
+    And I press "i" in the editor
+    And I press "Ctrl+d" in the editor 2 times
+    When I paste "four" into the editor
+    Then the editor mode is insert
+    And the buffer holds:
+      """
+      four two
+      three four
+      """
+
+  Scenario: One undo takes a paste over the occurrences back
+    Given "src/tree.js" is open in the editor holding:
+      """
+      one two
+      three one
+      """
+    And I press "W" in the editor
+    And I press "Ctrl+d" in the editor
+    And I paste "four" into the editor
+    And I press "Escape" in the editor
+    When I press "u" in the editor
+    Then the buffer holds:
+      """
+      one two
+      three one
+      """
+
+  Scenario: Escape after a paste drops the cursors
+    Given "src/tree.js" is open in the editor holding:
+      """
+      one two
+      three one
+      """
+    And I press "W" in the editor
+    And I press "Ctrl+d" in the editor
+    And I paste "four" into the editor
+    When I press "Escape" in the editor
+    Then no other occurrence is picked
+
+  Scenario: A pasted bracket goes in without its closing partner
+    Given "src/tree.js" is open in the editor holding:
+      """
+      one two
+      three one
+      """
+    And I press "W" in the editor
+    And I press "Ctrl+d" in the editor
+    When I paste "(" into the editor
+    Then the buffer holds:
+      """
+      ( two
+      three (
+      """
+
+  Scenario: A pasted quote goes in without its closing partner
+    Given "src/tree.js" is open in the editor holding:
+      """
+      one two
+      three one
+      """
+    And I press "W" in the editor
+    And I press "Ctrl+d" in the editor
+    When I paste '"' into the editor
+    Then the buffer holds:
+      """
+      " two
+      three "
+      """
+
+  Scenario: p with occurrences picked still types p at each
+    Given "src/tree.js" is open in the editor holding:
+      """
+      one two
+      three one
+      """
+    And the clipboard holds "four"
+    And I press "W" in the editor
+    And I press "Ctrl+d" in the editor
+    When I press "p" in the editor
+    Then the buffer holds:
+      """
+      p two
+      three p
+      """
+
+  Scenario: A multi-line paste puts the whole text at every occurrence
+    Given "src/tree.js" is open in the editor holding:
+      """
+      one two
+      three one
+      """
+    And I press "W" in the editor
+    And I press "Ctrl+d" in the editor
+    When I paste "four\nfive" into the editor
+    Then the buffer holds:
+      """
+      four
+      five two
+      three four
+      five
+      """
+
+  Scenario: Two occurrences on one line both take a multi-line paste
+    Given "src/tree.js" is open in the editor holding:
+      """
+      one and one
+      """
+    And I press "W" in the editor
+    And I press "Ctrl+d" in the editor
+    When I paste "four\nfive" into the editor
+    Then the buffer holds:
+      """
+      four
+      five and four
+      five
+      """
+
+  Scenario: A cursor stays after the multi-line text pasted at every occurrence
+    Given "src/tree.js" is open in the editor holding:
+      """
+      one and one
+      x one
+      """
+    And I press "W" in the editor
+    And I press "Ctrl+d" in the editor 2 times
+    When I paste "four\nfive" into the editor
+    Then the other occurrences picked are:
+      | line | column |
+      | 3    | 5      |
+      | 5    | 5      |
+    And the cursor is at line 2 column 5
+
+  Scenario: Typing after a multi-line paste lands after the pasted text at every occurrence
+    Given "src/tree.js" is open in the editor holding:
+      """
+      one and one
+      x one
+      """
+    And I press "W" in the editor
+    And I press "Ctrl+d" in the editor 2 times
+    And I paste "four\nfive" into the editor
+    When I type "s" in the editor
+    Then the buffer holds:
+      """
+      four
+      fives and four
+      fives
+      x four
+      fives
+      """
+
+  Scenario: One undo takes a multi-line paste over the occurrences back
+    Given "src/tree.js" is open in the editor holding:
+      """
+      one and one
+      x one
+      """
+    And I press "W" in the editor
+    And I press "Ctrl+d" in the editor 2 times
+    And I paste "four\nfive" into the editor
+    And I press "Escape" in the editor
+    When I press "u" in the editor
+    Then the buffer holds:
+      """
+      one and one
+      x one
+      """
