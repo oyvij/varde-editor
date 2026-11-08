@@ -398,8 +398,8 @@ Feature: Editing every occurrence of a word at once
     And I press "W" in the editor
     And I press "Ctrl+d" in the editor
     And I paste "four" into the editor
-    When I press "Escape" in the editor
-    And I press "u" in the editor
+    And I press "Escape" in the editor
+    When I press "u" in the editor
     Then the buffer holds:
       """
       one two
