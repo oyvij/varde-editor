@@ -463,3 +463,86 @@ Feature: Editing every occurrence of a word at once
       p two
       three p
       """
+
+  Scenario: A multi-line paste puts the whole text at every occurrence
+    Given "src/tree.js" is open in the editor holding:
+      """
+      one two
+      three one
+      """
+    And I press "W" in the editor
+    And I press "Ctrl+d" in the editor
+    When I paste "four\nfive" into the editor
+    Then the buffer holds:
+      """
+      four
+      five two
+      three four
+      five
+      """
+
+  Scenario: Two occurrences on one line both take a multi-line paste
+    Given "src/tree.js" is open in the editor holding:
+      """
+      one and one
+      """
+    And I press "W" in the editor
+    And I press "Ctrl+d" in the editor
+    When I paste "four\nfive" into the editor
+    Then the buffer holds:
+      """
+      four
+      five and four
+      five
+      """
+
+  Scenario: A cursor stays after the multi-line text pasted at every occurrence
+    Given "src/tree.js" is open in the editor holding:
+      """
+      one and one
+      x one
+      """
+    And I press "W" in the editor
+    And I press "Ctrl+d" in the editor 2 times
+    When I paste "four\nfive" into the editor
+    Then the other occurrences picked are:
+      | line | column |
+      | 3    | 5      |
+      | 5    | 5      |
+    And the cursor is at line 2 column 5
+
+  Scenario: Typing after a multi-line paste lands after the pasted text at every occurrence
+    Given "src/tree.js" is open in the editor holding:
+      """
+      one and one
+      x one
+      """
+    And I press "W" in the editor
+    And I press "Ctrl+d" in the editor 2 times
+    And I paste "four\nfive" into the editor
+    When I type "s" in the editor
+    Then the buffer holds:
+      """
+      four
+      fives and four
+      fives
+      x four
+      fives
+      """
+
+  Scenario: One undo takes a multi-line paste over the occurrences back
+    Given "src/tree.js" is open in the editor holding:
+      """
+      one and one
+      x one
+      """
+    And I press "W" in the editor
+    And I press "Ctrl+d" in the editor 2 times
+    And I paste "four\nfive" into the editor
+    And I press "Escape" in the editor
+    When I press "u" in the editor
+    Then the buffer holds:
+      """
+      one and one
+      x one
+      """
