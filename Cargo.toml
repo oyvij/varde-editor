@@ -32,7 +32,7 @@ terminput-crossterm = "0.4.11"
 toml = "1.1.4"
 vt100 = "0.18.1"
 pulldown-cmark = { version = "0.13.4", default-features = false }
-mermaid-text = "0.57.0"
+mermaid-text = "0.58.0"
 unicode-width = "0.2.2"
 anstream = { version = "1.0.0", default-features = false }
 rust-code-analysis = { package = "rust-code-analysis-code-split", version = "=0.0.26-cs.0" }
